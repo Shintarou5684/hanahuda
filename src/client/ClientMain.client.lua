@@ -1,10 +1,8 @@
--- ClientMain.client.lua
--- 司令塔：Remotes配線、ScreenRouter初期化、画面遷移の入口（自動開始はしない）
-
+-- ClientMain.client.lua  v0.8r (UIフォルダ有無どちらも対応 / 自動開始なし)
 print("[ClientMain] boot")
 
 --==================================================
--- Services / Folders / Remotes
+-- Services / Remotes
 --==================================================
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -18,7 +16,7 @@ local HandPush   = Remotes:WaitForChild("HandPush")
 local FieldPush  = Remotes:WaitForChild("FieldPush")
 local TakenPush  = Remotes:WaitForChild("TakenPush")
 local ScorePush  = Remotes:WaitForChild("ScorePush")
-local RoundReady = Remotes:WaitForChild("RoundReady")   -- 新ラウンド準備完了
+local RoundReady = Remotes:WaitForChild("RoundReady")
 
 -- C→S
 local ReqStartNewRun = Remotes:WaitForChild("ReqStartNewRun")
@@ -32,91 +30,76 @@ local ShopReroll     = Remotes:WaitForChild("ShopReroll")
 local ReqPick        = Remotes:WaitForChild("ReqPick")
 local ReqSyncUI      = Remotes:WaitForChild("ReqSyncUI")
 
--- 将来/オプション（存在しない環境でもOKにする）
-local StageResult = Remotes:FindFirstChild("StageResult")  -- S→C（冬クリア時など）
-local DecideNext  = Remotes:FindFirstChild("DecideNext")   -- C→S（冬後の選択）
-
--- DEV（Studio用）
+-- DEV（Studio）
 local DevGrantRyo  = Remotes:FindFirstChild("DevGrantRyo")
 local DevGrantRole = Remotes:FindFirstChild("DevGrantRole")
 
 --==================================================
--- Screen Router 初期化
+-- 画面モジュールの場所を解決（UI/ が無くてもOK）
 --==================================================
-local UI            = script.Parent:WaitForChild("UI")  -- このスクリプトの親フォルダに ScreenRouter/sreens がある想定
-local ScreensFolder = UI:WaitForChild("screens")
-local Router        = require(UI:WaitForChild("ScreenRouter"))
+local root = script:FindFirstAncestor("UI") or script.Parent          -- UI/ClientMain or StarterPlayerScripts
+local screensFolder = root:FindFirstChild("screens") or script.Parent:WaitForChild("screens")
+local ScreenRouter  = root:FindFirstChild("ScreenRouter") and require(root.ScreenRouter)
+                    or require(script.Parent:WaitForChild("ScreenRouter"))
 
 local Screens = {
-	home   = require(ScreensFolder:WaitForChild("HomeScreen")),
-	run    = require(ScreensFolder:WaitForChild("RunScreen")),
-	shop   = require(ScreensFolder:WaitForChild("ShopScreen")),
-	shrine = require(ScreensFolder:WaitForChild("ShrineScreen")),
+	home   = require(screensFolder:WaitForChild("HomeScreen")),
+	run    = require(screensFolder:WaitForChild("RunScreen")),
+	shop   = require(screensFolder:WaitForChild("ShopScreen")),
+	shrine = require(screensFolder:WaitForChild("ShrineScreen")),
 }
-Router.init(Screens)
 
-Router.setDeps({
+ScreenRouter.init(Screens)
+
+ScreenRouter.setDeps({
 	playerGui = Players.LocalPlayer:WaitForChild("PlayerGui"),
 
 	-- C→S
 	Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
 	ShopDone=ShopDone, BuyItem=BuyItem, ShopReroll=ShopReroll,
 	ReqStartNewRun=ReqStartNewRun, ReqContinueRun=ReqContinueRun, ReqSyncUI=ReqSyncUI,
-	DecideNext=DecideNext,
 
 	-- S→C
 	HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
-	StageResult=StageResult,
 
 	-- DEV
 	DevGrantRyo=DevGrantRyo, DevGrantRole=DevGrantRole,
 
 	-- 遷移ユーティリティ
-	showRun    = function(payload) Router.show("run", payload) end,
-	showHome   = function(payload) Router.show("home", payload) end,
-	showShop   = function(payload) Router.show("shop", payload) end,
-	showShrine = function(payload) Router.show("shrine", payload) end,
+	showRun    = function() ScreenRouter.show("run") end,
+	showHome   = function(payload) ScreenRouter.show("home", payload) end,
+	showShop   = function(payload) ScreenRouter.show("shop", payload) end,
+	showShrine = function() ScreenRouter.show("shrine") end,
 
-	-- 互換ネスト（旧コード呼び出し用）
+	-- 互換ネスト
 	remotes = {
 		Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
 		ShopDone=ShopDone, BuyItem=BuyItem, ShopReroll=ShopReroll,
 		ReqStartNewRun=ReqStartNewRun, ReqContinueRun=ReqContinueRun, ReqSyncUI=ReqSyncUI,
 		HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
-		StageResult=StageResult, DecideNext=DecideNext,
 		DevGrantRyo=DevGrantRyo, DevGrantRole=DevGrantRole,
 	},
 })
 
 --==================================================
--- Remote → 画面の表示/更新
+-- Remote → 画面の表示/更新（起動時は Home を見せる）
 --==================================================
+HomeOpen .OnClientEvent:Connect(function(payload) ScreenRouter.show("home", payload) end)
+ShopOpen .OnClientEvent:Connect(function(payload) ScreenRouter.show("shop", payload) end)
 
--- トップ（帰宅先）
-HomeOpen.OnClientEvent:Connect(function(payload)
-	Router.show("home", payload)
-end)
-
--- 屋台
-ShopOpen.OnClientEvent:Connect(function(payload)
-	Router.show("shop", payload)
-end)
-
--- 新ラウンド準備完了 → Run画面を開いて「1回だけ再同期」
 RoundReady.OnClientEvent:Connect(function()
-	Router.show("run")
-	Router.call("run", "requestSync")  -- RunScreen.requestSync()
+	ScreenRouter.show("run")
+	ScreenRouter.call("run", "requestSync")  -- RunScreen.requestSync()
 end)
 
--- プレイ画面（状態/手札/場/取り札/得点）→ run へ転送
-local function toRun(method, ...) Router.call("run", method, ...) end
-StatePush.OnClientEvent:Connect(function(st)                toRun("onState", st) end)
-HandPush .OnClientEvent:Connect(function(hand)              toRun("onHand", hand) end)
-FieldPush.OnClientEvent:Connect(function(field)             toRun("onField", field) end)
-TakenPush.OnClientEvent:Connect(function(taken)             toRun("onTaken", taken) end)
-ScorePush.OnClientEvent:Connect(function(total,roles,dtl)   toRun("onScore", total, roles, dtl) end)
+local function toRun(method, ...) ScreenRouter.call("run", method, ...) end
+StatePush.OnClientEvent:Connect(function(st)              toRun("onState", st) end)
+HandPush .OnClientEvent:Connect(function(hand)            toRun("onHand", hand) end)
+FieldPush.OnClientEvent:Connect(function(field)           toRun("onField", field) end)
+TakenPush.OnClientEvent:Connect(function(taken)           toRun("onTaken", taken) end)
+ScorePush.OnClientEvent:Connect(function(total,roles,dtl) toRun("onScore", total, roles, dtl) end)
 
--- 起動時はHOMEを表示（自動開始はしない）
-Router.show("home")
+-- ★ 起動時は Home を表示（自動 NewRun はしない）
+ScreenRouter.show("home")
 
 print("[ClientMain] ready")

@@ -1,58 +1,27 @@
--- ShrineScreen.lua
--- 神社（スタブ）：戻るボタンのみ
-
-local Shrine = {}
-Shrine.__index = Shrine
-
-function Shrine.new(deps)
-	local self = setmetatable({}, Shrine)
-	self.deps = deps
-
+-- ShrineScreen.lua  v0.8 minimal
+return function(deps)
+	local self = {}
 	local g = Instance.new("ScreenGui")
 	g.Name = "ShrineScreen"; g.ResetOnSpawn = false; g.IgnoreGuiInset = true; g.DisplayOrder = 6; g.Enabled = true
 	self.gui = g
 
-	local frame = Instance.new("Frame")
-	frame.Name = "Root"; frame.Parent = g
-	frame.Size = UDim2.fromScale(1,1)
-	frame.BackgroundColor3 = Color3.fromRGB(250,245,235)
-	frame.Visible = false
-	self.frame = frame
+	local root = Instance.new("Frame")
+	root.Name = "Root"; root.Parent = g; root.Size = UDim2.fromScale(1,1)
+	root.BackgroundColor3 = Color3.fromRGB(245,245,252)
 
 	local title = Instance.new("TextLabel")
-	title.Parent = frame
-	title.Size = UDim2.new(1,0,0,60)
-	title.Position = UDim2.new(0,0,0,20)
-	title.BackgroundTransparency = 1
+	title.Parent = root; title.Size = UDim2.new(1, -20, 0, 48); title.Position = UDim2.new(0,10,0,20)
+	title.BackgroundTransparency = 1; title.TextXAlignment = Enum.TextXAlignment.Left; title.TextScaled = true
 	title.Text = "神社（準備中）"
-	title.TextScaled = true
-	title.Font = Enum.Font.GothamBold
 
 	local back = Instance.new("TextButton")
-	back.Parent = frame
-	back.Size = UDim2.new(0, 200, 0, 44)
-	back.Position = UDim2.new(0, 20, 0, 100)
-	back.Text = "HOMEへ戻る"
-	back.TextScaled = true
+	back.Parent = root; back.Size = UDim2.new(0, 180, 0, 44); back.Position = UDim2.new(0,10,0,80)
+	back.Text = "← HOME へ"; back.AutoButtonColor = true
 	back.MouseButton1Click:Connect(function()
-		if self.deps and self.deps.showHome then
-			self.deps.showHome()
-		end
+		if deps and deps.showHome then deps.showHome() end
 	end)
 
+	function self:show() self.gui.Enabled = true; if self.gui.Parent ~= deps.playerGui then self.gui.Parent = deps.playerGui end end
+	function self:hide() self.gui.Enabled = false end
 	return self
 end
-
-function Shrine:show()
-	self.frame.Visible = true
-end
-
-function Shrine:hide()
-	self.frame.Visible = false
-end
-
-function Shrine:destroy()
-	if self.gui then self.gui:Destroy() end
-end
-
-return Shrine
