@@ -2,15 +2,23 @@
   "name": "hanahuda",
   "tree": {
     "$className": "DataModel",
+
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
-      "Shared": { "$path": "src/shared" },
-      "Remotes": { "$path": "src/remotes" }
+
+      "SharedModules": {
+        "$className": "Folder",
+        "FromSrc": { "$path": "src/shared" }
+      },
+
+      "RemotesFromSrc": { "$path": "src/remotes" }
     },
+
     "ServerScriptService": {
       "$className": "ServerScriptService",
       "FromSrc": { "$path": "src/server" }
     },
+
     "StarterPlayer": {
       "$className": "StarterPlayer",
       "StarterPlayerScripts": {
