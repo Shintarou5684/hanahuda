@@ -14,25 +14,35 @@ local function getRemote(name: string)
 	return Remotes:FindFirstChild(name) or RS:FindFirstChild(name) or Remotes:WaitForChild(name)
 end
 
--- 受信
-local HandPush   = Remotes:WaitForChild("HandPush")
-local FieldPush  = Remotes:WaitForChild("FieldPush")
-local TakenPush  = Remotes:WaitForChild("TakenPush")
-local ScorePush  = Remotes:WaitForChild("ScorePush")
-local StatePush  = Remotes:WaitForChild("StatePush")
-local ShopOpen   = Remotes:WaitForChild("ShopOpen")
+-- 受信（互換ヘルパで取得）
+local HandPush   = getRemote("HandPush")
+local FieldPush  = getRemote("FieldPush")
+local TakenPush  = getRemote("TakenPush")
+local ScorePush  = getRemote("ScorePush")
+local StatePush  = getRemote("StatePush")
+local ShopOpen   = getRemote("ShopOpen")
 
--- 送信
-local Confirm        = Remotes:WaitForChild("Confirm")
-local ReqPick        = Remotes:WaitForChild("ReqPick")
-local ReqRerollAll   = Remotes:WaitForChild("ReqRerollAll")
-local ReqRerollHand  = Remotes:WaitForChild("ReqRerollHand")
-local ShopDone       = Remotes:WaitForChild("ShopDone")
-local BuyItem        = Remotes:WaitForChild("BuyItem")       -- ★ 購入
-local ShopReroll     = Remotes:WaitForChild("ShopReroll")    -- ★ リロール
+-- 送信（互換ヘルパで取得）
+local Confirm        = getRemote("Confirm")
+local ReqPick        = getRemote("ReqPick")
+local ReqRerollAll   = getRemote("ReqRerollAll")
+local ReqRerollHand  = getRemote("ReqRerollHand")
+local ShopDone       = getRemote("ShopDone")
+local BuyItem        = getRemote("BuyItem")       -- ★ 購入
+local ShopReroll     = getRemote("ShopReroll")    -- ★ リロール
 
 local player = Players.LocalPlayer
-local gui    = player:WaitForChild("PlayerGui"):WaitForChild("Main")
+
+-- PlayerGui/Main が無い環境でも動くようにフォールバック作成
+local pg = player:WaitForChild("PlayerGui")
+local gui = pg:FindFirstChild("Main")
+if not gui then
+	gui = Instance.new("ScreenGui")
+	gui.Name = "Main"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+	gui.Parent = pg
+end
 
 --==================================================
 -- カラー/ユーティリティ
@@ -302,8 +312,8 @@ StatePush.OnClientEvent:Connect(function(st)
 	local seasonDisp = st.seasonStr or ("季節"..tostring(st.season or 0))
 	info.Text = ("季節:%s  目標:%d  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d")
 		:format(seasonDisp, st.target or 0, st.sum or 0,
-			st.hands or 0, st.rerolls or 0, st.mult or 1,
-			st.bank or 0, st.deckLeft or 0, st.handLeft or 0)
+			st.hands or st.handsLeft or 0, st.rerolls or 0, st.mult or 1,
+			st.bank or 0, st.deckLeft or 0, st.handLeft or st.hands or st.handsLeft or 0)
 
 	local canReroll = (st.rerolls or 0) > 0
 	for _,b in ipairs({btnRerollAll, btnRerollHand}) do
@@ -465,7 +475,6 @@ if DEV_VISIBLE then
 	local DevGrantRole = getRemote("DevGrantRole")
 	local DevGrantRyo  = getRemote("DevGrantRyo")
 
-	local pg = Players.LocalPlayer:WaitForChild("PlayerGui")
 	local sg = Instance.new("ScreenGui")
 	sg.Name = "DevRowGui"
 	sg.IgnoreGuiInset = true

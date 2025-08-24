@@ -9,7 +9,7 @@ local SSS     = game:GetService("ServerScriptService")
 --==================================================
 -- SaveService（bank/year の永続化）
 --==================================================
-local SaveService = require(SSS:WaitForChild("SaveService"))
+local SaveService = require(SSS.FromSrc.SaveService)
 
 --==================================================
 -- Remotes を用意（全てここで先に生やす）
@@ -74,7 +74,7 @@ Remotes.RoundReady     = RoundReady
 --==================================================
 -- DEV Remotes（Server / +役 は 3枚注入）
 --==================================================
-local StateHub = require(RS.SharedModules.StateHub)
+local StateHub = require(RS.SharedModules.FromSrc.StateHub)
 local Scoring  = require(RS.SharedModules.Scoring)
 
 local DevGrantRyo  = ensureRemote("DevGrantRyo")

@@ -29,7 +29,7 @@ local ScorePush  = ensureRemote("ScorePush")
 -- StatePush は自前で送らず、StateHub.pushState(plr) に任せる
 
 -- 状態/採点
-local StateHub = require(RS.SharedModules.StateHub)
+local StateHub = require(RS.SharedModules.FromSrc.StateHub)
 local Scoring  = require(RS.SharedModules.Scoring)
 
 -- 準備できたかどうかの判定（季節が進んだ直後は数フレーム待つことがある）
