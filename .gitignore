@@ -1,0 +1,10 @@
+# Roblox / build artifacts
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+/build/
+out/
+
+# Node (使っていれば)
+node_modules/
