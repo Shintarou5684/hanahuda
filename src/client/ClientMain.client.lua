@@ -39,7 +39,10 @@ local DevGrantRole = Remotes:FindFirstChild("DevGrantRole")
 --==================================================
 -- Screen Router 初期化
 --==================================================
-local UI            = script.Parent:WaitForChild("UI")
+local UI = script.Parent:FindFirstChild("UI")
+if not UI then
+    warn("[ClientMain] optional UI module not found under PlayerScripts; skipping")
+end
 local ScreensFolder = UI:WaitForChild("screens")
 local Router        = require(UI:WaitForChild("ScreenRouter"))
 
