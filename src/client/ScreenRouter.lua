@@ -1,4 +1,4 @@
--- StarterPlayerScripts/UI/ScreenRouter.lua
+-- ScreenRouter.lua
 -- シンプルな画面ルーター：同じ画面への show は再実行しない（ちらつき対策）
 -- モジュールは table.new(deps) でも function(deps) でも受け付ける
 

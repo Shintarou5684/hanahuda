@@ -1,5 +1,5 @@
--- StarterPlayerScripts/UI/screens/RunScreen.lua
--- プレイ画面：手札/場/取り札/ボタン と Remotes の受信描画（new(deps) + 初回同期オーバーレイ）
+-- RunScreen.lua
+-- プレイ画面：手札/場/取り札/ボタン と Remotes の受信描画（初回同期オーバーレイ付き）
 
 local Run = {}
 Run.__index = Run
@@ -105,7 +105,7 @@ function Run.new(deps)
 	local btnRerollHand = makeBtn("手札だけリロール");      btnRerollHand.Position = UDim2.new(0.52,0,0,0)
 	local btnClearSel   = makeBtn("選択解除");              btnClearSel.Position   = UDim2.new(0.78,0,0,0)
 
-	-- ★ 初回同期オーバーレイ
+	-- 初回同期オーバーレイ
 	local overlay = Instance.new("Frame")
 	overlay.Name = "LoadingOverlay"; overlay.Parent = frame
 	overlay.Size = UDim2.fromScale(1,1)
@@ -116,7 +116,7 @@ function Run.new(deps)
 	local msg = makeLabel(overlay, "Msg", "次の季節を準備中...", UDim2.new(0,480,0,48), UDim2.new(0.5,0,0.5,0), Vector2.new(0.5,0.5))
 	msg.TextXAlignment = Enum.TextXAlignment.Center
 
-	-- ★ 冬クリア用の結果モーダル
+	-- 冬クリア用の結果モーダル（必要に応じてサーバがStageResultを送る）
 	local resultModal = Instance.new("Frame")
 	resultModal.Name = "ResultModal"; resultModal.Parent = frame
 	resultModal.Visible = false
@@ -130,7 +130,6 @@ function Run.new(deps)
 	rmTitle.TextXAlignment = Enum.TextXAlignment.Center; rmTitle.Font = Enum.Font.GothamBold
 	local rmDesc  = makeLabel(resultModal, "RmDesc", "次の行き先を選んでください。", UDim2.new(1,-40,0,32), UDim2.new(0.5,0,0,70), Vector2.new(0.5,0))
 	rmDesc.TextXAlignment = Enum.TextXAlignment.Center
-
 	local btnRow = Instance.new("Frame"); btnRow.Parent = resultModal
 	btnRow.Size = UDim2.new(1,-40,0,64); btnRow.Position = UDim2.new(0.5,0,0,120); btnRow.AnchorPoint = Vector2.new(0.5,0)
 	btnRow.BackgroundTransparency = 1; btnRow.ZIndex = 101
@@ -138,7 +137,6 @@ function Run.new(deps)
 	layout.FillDirection = Enum.FillDirection.Horizontal
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.Padding = UDim.new(0, 16)
-
 	local function makeChoice(text)
 		local b = Instance.new("TextButton")
 		b.Size = UDim2.new(0.31, 0, 1, 0)
@@ -177,7 +175,6 @@ function Run.new(deps)
 	local function clearButtons(container)
 		for _,c in ipairs(container:GetChildren()) do
 			if c:IsA("TextButton") or c:IsA("TextLabel") or c:IsA("Frame") or c:IsA("ImageLabel") then
-				-- ボタン行の子は消さない（ResultModalのUIは保持）
 				if container ~= btnRow then
 					c:Destroy()
 				end
@@ -208,7 +205,6 @@ function Run.new(deps)
 				highlightHandButtons()
 			end)
 		end
-		-- 初回データ到着 → オーバーレイOFF
 		if self._awaitingInitial then overlay.Visible=false; self._awaitingInitial=false end
 	end
 
@@ -245,82 +241,64 @@ function Run.new(deps)
 		end
 	end
 
-	-- ScorePush
+	-- ScorePush（rolesはtable想定。nil/数値にも安全化）
 	local function rolesToLines(roles)
+		if type(roles) ~= "table" then return "--" end
 		local names = {five_bright="五光", four_bright="四光", rain_four_bright="雨四光", three_bright="三光",
 			inoshikacho="猪鹿蝶", red_ribbon="赤短", blue_ribbon="青短", seeds="たね", ribbons="たん", chaffs="かす",
 			hanami="花見で一杯", tsukimi="月見で一杯"}
 		local list = {}
-		for k,_ in pairs(roles or {}) do table.insert(list, names[k] or k) end
+		for k,_ in pairs(roles) do table.insert(list, names[k] or k) end
 		table.sort(list)
 		return (#list>0) and table.concat(list, " / ") or "--"
 	end
 	local function onScore(total, roles, detail)
-		local mon = (detail and detail.mon) or 0
-		local pts = (detail and detail.pts) or 0
-		scoreBox.Text = ("得点：%d（文%d × 点%d）\n役：%s"):format(total or 0, mon, pts, rolesToLines(roles))
+		local mon = (type(detail)=="table" and tonumber(detail.mon)) or 0
+		local pts = (type(detail)=="table" and tonumber(detail.pts)) or 0
+		total = tonumber(total) or (mon*pts) or 0
+		scoreBox.Text = ("得点：%d（文%d × 点%d）\n役：%s"):format(total, mon, pts, rolesToLines(roles))
 	end
 
 	-- StatePush（年を先頭に表示）
 	local function onState(st)
 		local ytxt = (st and st.year and tonumber(st.year) and st.year > 0) and tostring(st.year) or "----"
-		info.Text = ("年:%s  季節:%s  目標:%d  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d")
-			:format(
-				ytxt,
-				st.seasonStr or ("季節"..tostring(st.season or 0)),
-				st.target or 0, st.sum or 0, st.hands or 0, st.rerolls or 0,
-				st.mult or 1, st.bank or 0, st.deckLeft or 0, st.handLeft or 0
-			)
-
-		-- 初回データ到着 → オーバーレイOFF
+		local seasonStr = (st and (st.seasonStr or ("季節"..tostring(st.season or 0)))) or "--"
+		local target = (st and tonumber(st.target)) or 0
+		local sum    = (st and tonumber(st.sum)) or 0
+		local hands  = (st and (tonumber(st.hands) or tonumber(st.handsLeft))) or 0
+		local reroll = (st and (tonumber(st.rerolls) or tonumber(st.rerollsLeft))) or 0
+		local mult   = (st and tonumber(st.mult)) or 1
+		local bank   = (st and tonumber(st.bank)) or 0
+		local deck   = (st and tonumber(st.deckLeft)) or 0
+		local handL  = (st and tonumber(st.handLeft)) or hands
+		self.info.Text = ("年:%s  季節:%s  目標:%d  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d")
+			:format(ytxt, seasonStr, target, sum, hands, reroll, mult, bank, deck, handL)
 		if self._awaitingInitial then overlay.Visible=false; self._awaitingInitial=false end
 	end
 
-	-- ★ StageResult（冬クリア時の3択表示）— 新旧 payload 形式どちらでも安全
-	local function onStageResult(a, b, c, d, e)
-		-- 形式A（新）：isClear:boolean, data:table
-		-- 形式B（旧失敗）：false, seasonSum, target, mult, bank
+	-- StageResult（冬クリア時の3択表示）— 新旧 payload 形式どちらでも安全
+	local function onStageResult(a, b)
 		if typeof(a) == "boolean" then
 			local isClear = a
 			local data = b
-			if not isClear then
-				-- 失敗リザルト（演出は将来）
-				return
-			end
-			-- クリア（冬）
+			if not isClear then return end
 			resultModal.Visible = true
 			actionBar.Visible = false
-
-			-- タイトル/説明更新
-			local add = (data and tonumber(data.rewardBank)) or 2
+			local add = (type(data)=="table" and tonumber(data.rewardBank)) or 2
 			rmTitle.Text = ("冬 クリア！ +%d両"):format(add)
-			rmDesc.Text  = (data and data.message) or "次の行き先を選んでください。"
+			rmDesc.Text  = (type(data)=="table" and data.message) or "次の行き先を選んでください。"
 
-			-- ロック状態：options 優先、無ければ canNext/canSave を明示的に評価
 			local canNext, canSave = false, false
-			if typeof(data) == "table" then
-				if typeof(data.options) == "table" then
-					if typeof(data.options.goNext) == "table" then
-						canNext = (data.options.goNext.enabled == true)
-					end
-					if typeof(data.options.saveQuit) == "table" then
-						canSave = (data.options.saveQuit.enabled == true)
-					end
-				end
-				if not canNext and data.canNext ~= nil then
-					canNext = (data.canNext == true)
-				end
-				if not canSave and data.canSave ~= nil then
-					canSave = (data.canSave == true)
-				end
+			if type(data)=="table" and type(data.options)=="table" then
+				if type(data.options.goNext)=="table" then canNext = (data.options.goNext.enabled == true) end
+				if type(data.options.saveQuit)=="table" then canSave = (data.options.saveQuit.enabled == true) end
+			else
+				-- 互換フィールド
+				if type(data)=="table" and data.canNext ~= nil then canNext = (data.canNext==true) end
+				if type(data)=="table" and data.canSave ~= nil then canSave = (data.canSave==true) end
 			end
-
-			setLocked(btnNext, not canNext,  "3回『帰宅』で解放")
-			setLocked(btnSave, not canSave,  "3回『帰宅』で解放")
-			return
-		else
-			-- 旧：a が seasonSum などの数値の場合。現状は冬クリアUI対象外なので無視。
-			return
+			setLocked(btnNext, not canNext,  "条件未達")
+			setLocked(btnSave, not canSave,  "条件未達")
 		end
 	end
 
@@ -335,7 +313,7 @@ function Run.new(deps)
 		end
 	end)
 
-	-- ★ 3択：クリックで DecideNext 送信
+	-- 3択：クリックで DecideNext 送信（ある場合のみ）
 	local function ifNotLocked(button, fn)
 		button.MouseButton1Click:Connect(function()
 			if button:GetAttribute("locked") then return end
@@ -345,23 +323,18 @@ function Run.new(deps)
 	ifNotLocked(btnHome, function()
 		resultModal.Visible = false
 		actionBar.Visible = true
-		if deps.DecideNext then
-			deps.DecideNext:FireServer("home")
-		end
+		if deps.DecideNext then deps.DecideNext:FireServer("home") end
+		if self.deps and self.deps.showHome then self.deps.showHome() end
 	end)
 	ifNotLocked(btnNext, function()
 		resultModal.Visible = false
 		actionBar.Visible = true
-		if deps.DecideNext then
-			deps.DecideNext:FireServer("next")
-		end
+		if deps.DecideNext then deps.DecideNext:FireServer("next") end
 	end)
 	ifNotLocked(btnSave, function()
 		resultModal.Visible = false
 		actionBar.Visible = true
-		if deps.DecideNext then
-			deps.DecideNext:FireServer("save")
-		end
+		if deps.DecideNext then deps.DecideNext:FireServer("save") end
 	end)
 
 	-- Remote接続（画面表示時だけ）
@@ -371,7 +344,6 @@ function Run.new(deps)
 		table.insert(self._conns, deps.TakenPush.OnClientEvent:Connect(renderTaken))
 		table.insert(self._conns, deps.ScorePush.OnClientEvent:Connect(onScore))
 		table.insert(self._conns, deps.StatePush.OnClientEvent:Connect(onState))
-		-- ★ 新規：冬クリア用の結果モーダル
 		if deps.StageResult then
 			table.insert(self._conns, deps.StageResult.OnClientEvent:Connect(function(...) onStageResult(...) end))
 		end
@@ -413,12 +385,7 @@ function Run.new(deps)
 		if deps.DevGrantRyo  then makeDevBtn("+両", function() deps.DevGrantRyo:FireServer(1000) end) end
 	end
 
-	-- 参照保持
-	self._takenBox = takenBox
-	self._scoreBox = scoreBox
-	self._overlay  = overlay
-
-	-- ★ Router.call で呼ばれる公開メソッドをバインド
+	-- 公開メソッド
 	self.onHand  = renderHand
 	self.onField = renderField
 	self.onTaken = renderTaken
@@ -433,7 +400,7 @@ function Run:show()
 	self:_disconnectRemotes(); self:_connectRemotes()
 end
 
--- ★ 外部呼び出し：新ラウンド等の直後に1回だけ再同期させる
+-- 新ラウンド直後に1回だけ再同期
 function Run:requestSync()
 	if not self.deps or not self.deps.ReqSyncUI then return end
 	self._awaitingInitial = true
@@ -441,7 +408,6 @@ function Run:requestSync()
 	self.deps.ReqSyncUI:FireServer()
 end
 
--- （以下 hide/destroy）
 function Run:hide()
 	self.frame.Visible = false
 	self:_disconnectRemotes()
