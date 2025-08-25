@@ -1,4 +1,4 @@
--- ServerScriptService/GameInit.server.lua (Script)
+-- ServerScriptService/GameInit.server.lua
 -- モジュール分割版のエントリポイント（Remotesの生成＆各Serviceの初期化）
 -- ★ DataStore最小実装対応：bank / year のロード＆保存（SaveService）
 
@@ -55,7 +55,7 @@ local Remotes = {
 	BuyItem       = ensureRemote("BuyItem"),
 	ShopReroll    = ensureRemote("ShopReroll"),
 
-	-- 同期（C→S 一回だけの再同期要求）
+	-- 同期（C→S 一回だけの再同期要求）※ ハンドリングは UiResync.server.lua 側
 	ReqSyncUI     = ensureRemote("ReqSyncUI"),
 }
 
@@ -198,31 +198,27 @@ game:BindToClose(function()
 end)
 
 --==================================================
--- C→S: UI再同期要求（RunScreen.requestSync）
+-- ラン開始/続き（RoundReady → RunScreen.requestSync → UiResync）
 --==================================================
-Remotes.ReqSyncUI.OnServerEvent:Connect(function(plr: Player)
-	local s = StateHub.get(plr)
-	if not s then
-		warn(("[ReqSyncUI] no state for %s"):format(plr.Name))
-		return
-	end
-	-- 現在のサーバ状態をクライアントへ一括反映（State/Score/Hand/Field/Taken）
-	StateHub.pushState(plr)
-end)
+local function startSeason(plr, opts)
+	-- ラン全体の初期化
+	Round.resetRun(plr, opts)
+	-- ★ ここで必ず今季の山/手/場を生成
+	Round.newRound(plr)
+	-- ★ 少し待ってから準備完了を通知（0残像対策）
+	task.delay(0.05, function()
+		RoundReady:FireClient(plr)
+	end)
+end
 
---==================================================
--- ラン開始/続き
---==================================================
 ReqStartNewRun.OnServerEvent:Connect(function(plr)
-	Round.resetRun(plr)
-	-- ★ 新ラウンド準備完了を通知（クライアント側で即座に再同期要求）
-	RoundReady:FireClient(plr)
+	startSeason(plr, { fresh = true })
 end)
 
 ReqContinueRun.OnServerEvent:Connect(function(plr)
-	warn(("[Home] ReqContinueRun by %s: not implemented yet, fallback NEW GAME."):format(plr.Name))
-	Round.resetRun(plr)
-	RoundReady:FireClient(plr)
+	-- まだCONTINUE実装がないので NEW GAME と同様に扱う
+	warn(("[Home] ReqContinueRun by %s: fallback NEW GAME."):format(plr.Name))
+	startSeason(plr, { fresh = true })
 end)
 
 --==================================================
@@ -234,18 +230,20 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 
 	-- 前季のスコア情報は破棄（画面再同期時の誤表示を防ぐ）
 	s.lastScore = nil
-
 	s.phase = "play"
+
 	local nextSeason = (s.season or 1) + 1
 	if nextSeason > 4 then
-		-- 冬の屋台は通常ここに来ない設計だが、将来の仕様で来た場合に備えてリセット
+		-- 冬→春はランリセットから
 		Round.resetRun(plr)
+		Round.newRound(plr)
 	else
 		Round.newRound(plr, nextSeason)
 	end
 
-	-- ★ 新ラウンド準備完了を通知
-	RoundReady:FireClient(plr)
+	task.delay(0.05, function()
+		RoundReady:FireClient(plr)
+	end)
 end)
 
 --==================================================
@@ -273,11 +271,9 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 	elseif op == "next" then
 		-- 25年進行＋屋台オープン（次ランの前準備）
 		s.year = (s.year or 0) + 25
-		-- 永続側にも反映（dirty化）
 		SaveService.setYear(plr, s.year)
 
 		s.phase = "shop"
-		-- 冬直後の屋台（中身は通常と同じでOK）
 		if ShopService and typeof(ShopService.open) == "function" then
 			ShopService.open(plr, s, { reason = "after_winter" })
 		end
