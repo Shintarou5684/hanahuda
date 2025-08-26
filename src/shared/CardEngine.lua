@@ -1,4 +1,4 @@
--- CardEngine.lua
+-- ReplicatedStorage/SharedModules/CardEngine.lua
 local M = {}
 
 -- 48枚の定義（month=1..12, kind=bright/seed/ribbon/chaff）
@@ -46,31 +46,25 @@ M.cardsByMonth = {
 
     [11] = { {kind="bright", name="柳に雨", tags={"rain"}},
              {kind="seed",   name="燕", tags={"animal"}},
-             {kind="ribbon", name="赤短(無地)", tags={"aka"}},
-             {kind="chaff"} },
+             {kind="chaff"}, {kind="chaff"} },
 
-    [12] = { {kind="bright", name="桐に鳳凰"},
+    [12] = { {kind="bright", name="桐に鳳凰", tags={"animal","phoenix"}},
              {kind="chaff"}, {kind="chaff"}, {kind="chaff"} },
 }
 
--- デッキ作成
+-- 全48枚のフラットリストを生成
 function M.buildDeck()
     local deck = {}
-    for month=1,12 do
-        for idx,info in ipairs(M.cardsByMonth[month]) do
-            table.insert(deck, {
-                id = string.format("%02d_%d", month, idx),
-                month = month,
-                kind = info.kind,
-                name = info.name or "",
-                tags = info.tags or {},
-            })
+    for m=1,12 do
+        for i,c in ipairs(M.cardsByMonth[m]) do
+            local card = {month=m, idx=i, kind=c.kind, name=c.name, tags=c.tags}
+            table.insert(deck, card)
         end
     end
     return deck
 end
 
--- シャッフル（seed指定可）
+-- Fisher-Yates シャッフル
 function M.shuffle(deck, seed)
     local rng = seed and Random.new(seed) or Random.new()
     for i = #deck, 2, -1 do
@@ -79,11 +73,11 @@ function M.shuffle(deck, seed)
     end
 end
 
--- n枚ドロー
+-- n枚引く（山の末尾から）
 function M.draw(deck, n)
     local hand = {}
-    for i=1, n do
-        hand[i] = table.remove(deck)  -- 末尾から取り出し
+    for i=1,n do
+        hand[i] = table.remove(deck)
     end
     return hand
 end

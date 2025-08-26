@@ -1,4 +1,4 @@
--- ReplicatedStorage/SharedModules/RoundService.lua (ModuleScript)
+-- ReplicatedStorage/SharedModules/RoundService.lua
 local RS = game:GetService("ReplicatedStorage")
 local CardEngine = require(RS.SharedModules.CardEngine)
 local StateHub   = require(RS.SharedModules.StateHub)
@@ -38,24 +38,28 @@ function Round.newRound(plr: Player, seasonNum: number)
 	s.phase       = "play"
 
 	StateHub.set(plr, s)
+	print(("[Round.newRound] season=%s deck=%d hand=%d board=%d")
+    :format(tostring(seasonNum), #deck, #hand, #board))
 	StateHub.pushState(plr)
 end
 
 -- ランをリセット（新規ラン開始：春=1から）
 function Round.resetRun(plr: Player)
 	local prev = StateHub.get(plr)
-	local keepBank      = (prev and prev.bank) or 0  -- 両は永続
-	local keepYear      = (prev and prev.year) or 0  -- 年数は保持
-	local keepHomeCount = (prev and prev.homeCount) or 0 -- ★ 帰宅回数を保持（アンロックに使用）
+	local keepBank   = (prev and prev.bank) or 0
+	local keepYear   = (prev and prev.year) or 0
+	local keepHome   = (prev and prev.homeCount) or 0
+	local keepClears = (prev and prev.totalClears) or 0
 
-	-- 文（mon）は「ランごとにリセット」仕様のため 0 に戻す
+	-- 文（mon）はランごとにリセットする
 	StateHub.set(plr, {
-		bank      = keepBank,
-		year      = keepYear,
-		homeCount = keepHomeCount, -- ★ ここで保持
-		mult      = 1.0,
-		mon       = 0,
-		phase     = "play",
+		bank = keepBank,
+		year = keepYear,
+		homeCount = keepHome,
+		totalClears = keepClears,
+		mult = 1.0,
+		mon  = 0,
+		phase = "play",
 	})
 	Round.newRound(plr, 1)
 end

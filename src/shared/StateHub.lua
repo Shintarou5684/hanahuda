@@ -155,8 +155,14 @@ function StateHub.pushState(plr: Player)
 		})
 	end
 
+
+
+
+
+
 	-- スコア（リスト/直近役表示）
 	if Remotes.ScorePush then
+		print("[StateHub] ScorePush types:", typeof(total), typeof(roles), typeof(detail))
 		Remotes.ScorePush:FireClient(plr, total, roles, detail) -- detail={mon,pts}
 	end
 

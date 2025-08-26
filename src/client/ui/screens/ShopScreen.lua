@@ -1,34 +1,70 @@
--- ShopScreen.lua  v0.8 minimal
-return function(deps)
-	local self = {}
+-- StarterPlayerScripts/UI/screens/ShopScreen.lua
+-- とりあえず「屋台を閉じる」だけ用意。
+
+local Shop = {}
+Shop.__index = Shop
+
+function Shop.new(deps)
+	local self = setmetatable({}, Shop)
+	self.deps = deps
+
 	local g = Instance.new("ScreenGui")
-	g.Name = "ShopScreen"; g.ResetOnSpawn = false; g.IgnoreGuiInset = true; g.DisplayOrder = 20; g.Enabled = true
+	g.Name = "ShopScreen"
+	g.ResetOnSpawn = false
+	g.IgnoreGuiInset = true
+	g.DisplayOrder = 50
+	g.Enabled = false
 	self.gui = g
 
-	local frame = Instance.new("Frame")
-	frame.Name = "Root"; frame.Parent = g; frame.Size = UDim2.fromScale(1,1)
-	frame.BackgroundColor3 = Color3.fromRGB(250,248,240)
+	local modal = Instance.new("Frame")
+	modal.Name = "Modal"
+	modal.AnchorPoint = Vector2.new(0.5,0.5)
+	modal.Position = UDim2.new(0.5,0,0.5,0)
+	modal.Size = UDim2.new(0.7,0,0.6,0)
+	modal.BackgroundColor3 = Color3.fromRGB(255,255,255)
+	modal.Parent = g
 
 	local title = Instance.new("TextLabel")
-	title.Parent = frame; title.BackgroundTransparency = 1
-	title.Size = UDim2.new(1, -20, 0, 40); title.Position = UDim2.new(0,10,0,10)
-	title.TextXAlignment = Enum.TextXAlignment.Left; title.TextScaled = true
-	title.Text = "屋台（WIP）"
+	title.BackgroundTransparency = 1
+	title.Size = UDim2.new(1,-20,0,40)
+	title.Position = UDim2.new(0,10,0,10)
+	title.TextXAlignment = Enum.TextXAlignment.Center
+	title.Text = "屋台（簡易版）"
+	title.Parent = modal
 
-	-- 閉じるボタン（次の季節へ）
-	local close = Instance.new("TextButton")
-	close.Parent = frame; close.Size = UDim2.new(0, 200, 0, 48); close.Position = UDim2.new(1,-210,1,-58)
-	close.Text = "屋台を閉じる →"; close.AutoButtonColor = true
-	close.BackgroundColor3 = Color3.fromRGB(255,255,255); close.BorderSizePixel = 1
+	local info = Instance.new("TextLabel")
+	info.Name = "Info"
+	info.BackgroundTransparency = 1
+	info.Size = UDim2.new(1,-20,0,60)
+	info.Position = UDim2.new(0,10,0,54)
+	info.TextXAlignment = Enum.TextXAlignment.Left
+	info.TextYAlignment = Enum.TextYAlignment.Top
+	info.Text = ""
+	info.Parent = modal
 
-	close.MouseButton1Click:Connect(function()
-		if deps and deps.ShopDone then deps.ShopDone:FireServer() end
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Size = UDim2.new(0,240,0,44)
+	closeBtn.Position = UDim2.new(0.5,-120,1,-56)
+	closeBtn.Text = "屋台を閉じて次の季節へ"
+	closeBtn.Parent = modal
+	closeBtn.Activated:Connect(function()
+		self:hide()
+		self.deps.remotes.ShopDone:FireServer()
 	end)
 
-	function self:show(payload)
-		self.gui.Enabled = true
-		if self.gui.Parent ~= deps.playerGui then self.gui.Parent = deps.playerGui end
-	end
-	function self:hide() self.gui.Enabled = false end
 	return self
 end
+
+function Shop:show(payload)
+	self.gui.Enabled = true
+	local info = self.gui.Modal.Info
+	info.Text = ("達成！ 合計:%d / 目標:%d\n報酬：%d 文（所持：%d 文）"):format(
+		payload.seasonSum or 0, payload.target or 0, payload.rewardMon or 0, payload.totalMon or 0
+	)
+end
+
+function Shop:hide()
+	self.gui.Enabled = false
+end
+
+return Shop

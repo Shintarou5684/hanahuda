@@ -1,36 +1,73 @@
 -- ServerScriptService/UiResync.server.lua
-local RS         = game:GetService("ReplicatedStorage")
-local Remotes    = RS:WaitForChild("Remotes")
-local SharedMods = RS:WaitForChild("SharedModules")
-local StateHub   = require(SharedMods:WaitForChild("StateHub"))
+-- 画面を開いた直後などに、手札/場/取り札/状態/得点をまとめて再送する
 
-local HandPush   = Remotes:WaitForChild("HandPush")
-local FieldPush  = Remotes:WaitForChild("FieldPush")
-local TakenPush  = Remotes:WaitForChild("TakenPush")
-local ScorePush  = Remotes:WaitForChild("ScorePush")
-local ReqSyncUI  = Remotes:WaitForChild("ReqSyncUI")
+local RS = game:GetService("ReplicatedStorage")
 
-local function pushAll(plr)
-	local s = StateHub.get(plr) or {}
+-- Remotes フォルダ
+local RemotesFolder = RS:FindFirstChild("Remotes") or (function()
+	local f = Instance.new("Folder")
+	f.Name = "Remotes"
+	f.Parent = RS
+	return f
+end)()
 
-	-- 初期データを各Pushで再送
-	HandPush:FireClient(plr,  s.hand   or {})
-	FieldPush:FireClient(plr, s.board  or {})
-	TakenPush:FireClient(plr, s.taken  or {})
+local function ensureRemote(name: string)
+	return RemotesFolder:FindFirstChild(name) or (function()
+		local e = Instance.new("RemoteEvent")
+		e.Name = name
+		e.Parent = RemotesFolder
+		return e
+	end)()
+end
 
-	-- ScorePush は（total, roles, detail）の3引数で送る
-	local last = s.lastScore or {}
-	local total  = tonumber(last.total)  or 0
-	local roles  = last.roles            or {}
-	local detail = last.detail           or { mon=0, pts=0 }
-	ScorePush:FireClient(plr, total, roles, detail)
+-- Remotes
+local ReqSyncUI  = ensureRemote("ReqSyncUI")  -- C->S: 全UI再送要求
+local HandPush   = ensureRemote("HandPush")
+local FieldPush  = ensureRemote("FieldPush")
+local TakenPush  = ensureRemote("TakenPush")
+local ScorePush  = ensureRemote("ScorePush")
+-- StatePush は自前で送らず、StateHub.pushState(plr) に任せる
 
-	-- 最後に State 正規ルート（季節・目標・合計など）
-	StateHub.pushState(plr)
+-- 状態/採点
+local StateHub = require(RS.SharedModules.StateHub)
+local Scoring  = require(RS.SharedModules.Scoring)
+
+-- 準備できたかどうかの判定（季節が進んだ直後は数フレーム待つことがある）
+local function isReadyState(s)
+	if not s then return false end
+	-- どれかが成立していれば「準備OK」
+	if (s.target or 0) > 0 then return true end
+	if s.board and #s.board > 0 then return true end
+	if s.hand  and #s.hand  > 0 then return true end
+	return false
 end
 
 ReqSyncUI.OnServerEvent:Connect(function(plr)
-	-- newRound直後の 0 残像を避けるため 1〜2フレーム待つ
-	task.wait(0.1)
-	pushAll(plr)
+	-- ラウンド準備完了を軽く待機（最大 ~0.5s 程度）
+	local s = StateHub.get(plr)
+	print(("[UiResync] lens deck=%d hand=%d board=%d taken=%d")
+    :format(#(s.deck or {}), #(s.hand or {}), #(s.board or {}), #(s.taken or {})))
+	local tries = 0
+	while not isReadyState(s) and tries < 30 do
+		tries += 1
+		task.wait(0.016) -- 1~2フレーム
+		s = StateHub.get(plr)
+	end
+	if not s then return end
+
+	-- 手札/場/取り札を再送
+	HandPush:FireClient(plr, s.hand or {})
+	FieldPush:FireClient(plr, s.board or {})
+	TakenPush:FireClient(plr, s.taken or {})
+
+
+
+
+	-- 得点は「現在の取り札」で再採点（季節跨ぎの残留を避ける）
+	local total, roles, detail = Scoring.evaluate(s.taken or {})
+	print("[UiResync] ScorePush types:", typeof(total), typeof(roles), typeof(detail))
+	ScorePush:FireClient(plr, total or 0, roles or {}, detail or {mon=0, pts=0})
+
+	-- ★ 状態は StateHub 側の正規ルートで送る（target/hands/rerolls/deckLeft などが埋まる）
+	StateHub.pushState(plr)
 end)

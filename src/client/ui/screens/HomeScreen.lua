@@ -1,50 +1,130 @@
--- HomeScreen.lua  v0.8
-return function(deps)
-	local self = {}
+-- StarterPlayerScripts/UI/screens/HomeScreen.lua
+-- NEW GAME / 神社 / 持ち物 / 設定 / CONTINUE
+
+local Home = {}
+Home.__index = Home
+
+local function setInteractable(btn: TextButton, on: boolean)
+	btn.AutoButtonColor = on
+	btn.Active = on
+	btn.BackgroundTransparency = on and 0 or 0.5
+	btn.TextTransparency = on and 0 or 0.4
+end
+
+function Home.new(deps)
+	local self = setmetatable({}, Home)
+	self.deps = deps
+
+	-- ルートGUI（親への取り付けは Router 側で行う）
 	local g = Instance.new("ScreenGui")
-	g.Name = "HomeScreen"; g.ResetOnSpawn = false; g.IgnoreGuiInset = true; g.DisplayOrder = 5; g.Enabled = true
+	g.Name = "HomeScreen"
+	g.ResetOnSpawn = false
+	g.IgnoreGuiInset = true
+	g.DisplayOrder = 100
+	g.Enabled = false
 	self.gui = g
 
-	local root = Instance.new("Frame")
-	root.Name = "Root"; root.Parent = g; root.Size = UDim2.fromScale(1,1)
-	root.BackgroundColor3 = Color3.fromRGB(245,249,255)
+	-- 背景
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.fromScale(1,1)
+	bg.BackgroundColor3 = Color3.fromRGB(10,12,16)
+	bg.BackgroundTransparency = 0.2
+	bg.Parent = g
 
+	-- タイトル
 	local title = Instance.new("TextLabel")
-	title.Parent = root; title.BackgroundTransparency = 1
-	title.Size = UDim2.new(1,0,0,60); title.Position = UDim2.new(0,0,0,40)
-	title.Text = "花札 × 倍率ローグ"; title.Font = Enum.Font.GothamBold; title.TextScaled = true
+	title.Size = UDim2.new(1,0,0,80)
+	title.Position = UDim2.new(0,0,0,40)
+	title.BackgroundTransparency = 1
+	title.Text = "花札 × 倍率ローグ"
+	title.Font = Enum.Font.GothamBold
+	title.TextScaled = true
+	title.TextColor3 = Color3.fromRGB(240,240,240)
+	title.Parent = bg
 
-	local menu = Instance.new("Frame")
-	menu.Parent = root; menu.Size = UDim2.new(0, 360, 0, 300); menu.Position = UDim2.new(0.5,0,0.5,0); menu.AnchorPoint = Vector2.new(0.5,0.5)
-	menu.BackgroundTransparency = 1
-	local layout = Instance.new("UIListLayout", menu)
-	layout.FillDirection = Enum.FillDirection.Vertical; layout.Padding = UDim.new(0, 12); layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-
-	local function makeBtn(t, onClick)
-		local b = Instance.new("TextButton"); b.Parent = menu
-		b.Size = UDim2.new(1, 0, 0, 48); b.Text = t; b.AutoButtonColor = true
-		b.BackgroundColor3 = Color3.fromRGB(255,255,255); b.BorderSizePixel = 1
-		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = b
-		if onClick then b.MouseButton1Click:Connect(onClick) end
+	-- ボタンFactory
+	local function makeBtn(text, y)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(0, 320, 0, 56)
+		b.Position = UDim2.new(0.5, -160, 0, 140 + (y * 66))
+		b.BackgroundColor3 = Color3.fromRGB(30,34,44)
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = true
+		b.Text = text
+		b.TextColor3 = Color3.fromRGB(235,235,235)
+		b.Font = Enum.Font.GothamMedium
+		b.TextSize = 22
+		b.Parent = bg
+		local uic = Instance.new("UICorner"); uic.CornerRadius = UDim.new(0, 12); uic.Parent = b
+		local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(70,75,90); stroke.Thickness = 1; stroke.Parent = b
 		return b
 	end
 
-	makeBtn("NEW GAME", function()
-		if deps and deps.ReqStartNewRun then deps.ReqStartNewRun:FireServer() end
-	end)
-	makeBtn("神社（SHRINE）", function()
-		if deps and deps.showShrine then deps.showShrine() end
-	end)
-	makeBtn("持ち物（STUB）", function() end)
-	makeBtn("設定（STUB）", function() end)
-	makeBtn("CONTINUE（未実装）", function()
-		if deps and deps.ReqContinueRun then deps.ReqContinueRun:FireServer() end
+	self.btnNew      = makeBtn("NEW GAME（新しく始める）", 0)
+	self.btnShrine   = makeBtn("神社（恒久強化）",        1)
+	self.btnItems    = makeBtn("持ち物（所持確認）",      2)
+	self.btnSettings = makeBtn("設定",                    3)
+	self.btnCont     = makeBtn("前回の続き（CONTINUE）",  4)
+
+	-- クリック
+	self.btnNew.Activated:Connect(function()
+		-- 先にRun画面を開く→サーバへ要求（初回のState/Hand push取りこぼし防止）
+		if self.deps.showRun then self.deps.showRun() end
+		if self.deps.remotes and self.deps.remotes.ReqStartNewRun then
+			self.deps.remotes.ReqStartNewRun:FireServer()
+		elseif self.deps.ReqStartNewRun then
+			self.deps.ReqStartNewRun:FireServer()
+		end
+		self:hide()
 	end)
 
-	function self:show()
-		self.gui.Enabled = true
-		if self.gui.Parent ~= deps.playerGui then self.gui.Parent = deps.playerGui end
-	end
-	function self:hide() self.gui.Enabled = false end
+	self.btnShrine.Activated:Connect(function()
+		-- 画面遷移があれば使う／なければトースト
+		if self.deps.showShrine then
+			self.deps.showShrine()
+			self:hide()
+		else
+			pcall(function()
+				game.StarterGui:SetCore("SendNotification", {Title="神社", Text="開発中：恒久強化ショップ", Duration=2})
+			end)
+		end
+	end)
+
+	self.btnItems.Activated:Connect(function()
+		pcall(function()
+			game.StarterGui:SetCore("SendNotification", {Title="持ち物", Text="開発中：所持品一覧", Duration=2})
+		end)
+	end)
+
+	self.btnSettings.Activated:Connect(function()
+		pcall(function()
+			game.StarterGui:SetCore("SendNotification", {Title="設定", Text="開発中：サウンド/UI/操作", Duration=2})
+		end)
+	end)
+
+	self.btnCont.Activated:Connect(function()
+		if not self.btnCont.Active then return end
+		if self.deps.showRun then self.deps.showRun() end
+		if self.deps.remotes and self.deps.remotes.ReqContinueRun then
+			self.deps.remotes.ReqContinueRun:FireServer()
+		elseif self.deps.ReqContinueRun then
+			self.deps.ReqContinueRun:FireServer()
+		end
+		self:hide()
+	end)
+
 	return self
 end
+
+function Home:show(payload)
+	-- payload = { hasSave = bool }
+	local hasSave = payload and payload.hasSave == true
+	setInteractable(self.btnCont, hasSave)
+	self.gui.Enabled = true
+end
+
+function Home:hide()
+	self.gui.Enabled = false
+end
+
+return Home

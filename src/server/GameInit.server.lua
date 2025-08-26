@@ -204,7 +204,7 @@ local function startSeason(plr, opts)
 	-- ラン全体の初期化
 	Round.resetRun(plr, opts)
 	-- ★ ここで必ず今季の山/手/場を生成
-	Round.newRound(plr)
+	-- Round.newRound(plr)
 	-- ★ 少し待ってから準備完了を通知（0残像対策）
 	task.delay(0.05, function()
 		RoundReady:FireClient(plr)
@@ -222,7 +222,7 @@ ReqContinueRun.OnServerEvent:Connect(function(plr)
 end)
 
 --==================================================
--- 屋台 → 次シーズン遷移
+-- 屋台 → 次シーズン遷移（修正版）
 --==================================================
 Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	local s = StateHub.get(plr); if not s then return end
@@ -234,13 +234,14 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 
 	local nextSeason = (s.season or 1) + 1
 	if nextSeason > 4 then
-		-- 冬→春はランリセットから
+		-- 冬→春はランリセット（※ resetRun 内で newRound(1) まで行う）
 		Round.resetRun(plr)
-		Round.newRound(plr)
 	else
+		-- 同一ラン内の季節遷移
 		Round.newRound(plr, nextSeason)
 	end
 
+	-- 0残像対策で少し待ってから準備完了を通知
 	task.delay(0.05, function()
 		RoundReady:FireClient(plr)
 	end)
