@@ -5,6 +5,9 @@ local Run = {}
 Run.__index = Run
 
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CardImageMap = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
 
 --========================
 -- 小物UIユーティリティ
@@ -39,6 +42,48 @@ local function makeCardButton(parent, w, h, label, bg)
 	b.AutoButtonColor = true
 	b.BorderSizePixel = 1
 	return b
+end
+
+-- 画像カード（クリック可）を作る
+local function makeCardNode(parent, code, w, h)
+	w, h = w or 180, h or 120
+
+	local btn = Instance.new("ImageButton")
+	btn.Parent = parent
+	btn.Name = "Card_"..tostring(code or "????")
+	btn.BackgroundTransparency = 1
+	btn.Size = UDim2.fromOffset(w, h)
+	btn.ScaleType = Enum.ScaleType.Fit
+	btn.AutoButtonColor = true
+
+	-- 角丸＆ハイライト用ストローク
+	local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = btn
+	local stroke = Instance.new("UIStroke"); stroke.Thickness = 1; stroke.Color = Color3.fromRGB(0,0,0); stroke.Parent = btn
+
+	-- 画像設定（取得できなければ空）
+	local ok, imgId = pcall(function() return CardImageMap.get(code) end)
+	btn.Image = (ok and imgId) or ""
+
+	-- 比率固定
+	local ar = Instance.new("UIAspectRatioConstraint")
+	ar.AspectRatio = w/h
+	ar.Parent = btn
+
+	-- ちょい拡大アニメ（押下時）
+	local function tweenSize(sz)
+		TweenService:Create(btn, TweenInfo.new(0.06), {Size = sz}):Play()
+	end
+	btn.MouseButton1Down:Connect(function()
+		tweenSize(UDim2.fromOffset(w * 1.04, h * 1.04))
+	end)
+	btn.MouseButton1Up:Connect(function()
+		tweenSize(UDim2.fromOffset(w, h))
+	end)
+	btn.MouseLeave:Connect(function()
+		btn.Size = UDim2.fromOffset(w, h)
+	end)
+
+	return btn
 end
 
 --========================
@@ -187,7 +232,7 @@ function Run.new(deps)
 
 	local function clearButtons(container)
 		for _,c in ipairs(container:GetChildren()) do
-			if c:IsA("TextButton") or c:IsA("TextLabel") or c:IsA("Frame") or c:IsA("ImageLabel") then
+			if c:IsA("TextButton") or c:IsA("ImageButton") or c:IsA("TextLabel") or c:IsA("Frame") or c:IsA("ImageLabel") then
 				-- ボタン行の子は消さない（ResultModalのUIは保持）
 				if container ~= btnRow then
 					c:Destroy()
@@ -197,12 +242,20 @@ function Run.new(deps)
 	end
 
 	local function highlightHandButtons()
-		for _,b in ipairs(handArea:GetChildren()) do
-			if b:IsA("TextButton") then
-				local myIdx = b:GetAttribute("index")
+		for _,node in ipairs(handArea:GetChildren()) do
+			if node:IsA("ImageButton") or node:IsA("TextButton") then
+				local myIdx = node:GetAttribute("index")
 				local on = (selectedHandIdx ~= nil and myIdx == selectedHandIdx)
-				b.BorderSizePixel = on and 4 or 1
-				b.BorderColor3 = on and Color3.fromRGB(255,180,0) or Color3.fromRGB(0,0,0)
+				local stroke = node:FindFirstChildOfClass("UIStroke")
+				if stroke then
+					stroke.Thickness = on and 4 or 1
+					stroke.Color = on and Color3.fromRGB(255,180,0) or Color3.fromRGB(0,0,0)
+					stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+				end
+				if node:IsA("TextButton") then
+					node.BorderSizePixel = on and 4 or 1
+					node.BorderColor3 = on and Color3.fromRGB(255,180,0) or Color3.fromRGB(0,0,0)
+				end
 			end
 		end
 	end
@@ -214,10 +267,10 @@ function Run.new(deps)
 		print("[RunScreen] renderHand #", #(hand or {}))
 		clearButtons(handArea); selectedHandIdx = nil
 		for i, card in ipairs(hand or {}) do
-			local txt = string.format("月%02d\n%s\n%s", card.month, card.kind, card.name or "")
-			local b = makeCardButton(handArea, 180, 120, txt, colorForKind(card.kind))
-			b:SetAttribute("index", i)
-			b.MouseButton1Click:Connect(function()
+			local code = card.code or string.format("%02d%02d", card.month, card.idx)
+			local node = makeCardNode(handArea, code, 180, 120)
+			node:SetAttribute("index", i)
+			node.MouseButton1Click:Connect(function()
 				if selectedHandIdx == i then selectedHandIdx = nil else selectedHandIdx = i end
 				highlightHandButtons()
 			end)
@@ -232,11 +285,11 @@ function Run.new(deps)
 		clearButtons(boardRowTop); clearButtons(boardRowBottom)
 		local n = #(field or {}); local split = math.ceil(n/2)
 		for i,card in ipairs(field or {}) do
-			local txt = string.format("場  月%02d\n%s", card.month, card.kind)
+			local code = card.code or string.format("%02d%02d", card.month, card.idx)
 			local parentRow = (i<=split) and boardRowTop or boardRowBottom
-			local b = makeCardButton(parentRow, 180, 96, txt, Color3.fromRGB(250,250,250))
-			b:SetAttribute("bindex", i)
-			b.MouseButton1Click:Connect(function()
+			local node = makeCardNode(parentRow, code, 180, 96)
+			node:SetAttribute("bindex", i)
+			node.MouseButton1Click:Connect(function()
 				if selectedHandIdx then
 					deps.ReqPick:FireServer(selectedHandIdx, i)
 					selectedHandIdx = nil
@@ -247,15 +300,23 @@ function Run.new(deps)
 	end
 
 	local function renderTaken(cards)
+		-- 既存の子要素とレイアウトをクリア
 		for _,c in ipairs(takenBox:GetChildren()) do
-			if c:IsA("TextLabel") then c:Destroy() end
+			c:Destroy()
 		end
-		for _,card in ipairs(cards or {}) do
-			local line = Instance.new("TextLabel")
-			line.Parent = takenBox; line.Size = UDim2.new(1,-8,0,26)
-			line.BackgroundTransparency = 1; line.TextScaled = true
-			line.TextXAlignment = Enum.TextXAlignment.Left
-			line.Text = string.format("月%02d  %s  %s", card.month, card.kind, card.name or "")
+		-- グリッドレイアウトを用意（サムネ表示）
+		local grid = Instance.new("UIGridLayout")
+		grid.CellSize = UDim2.new(0, 66, 0, 88)
+		grid.CellPadding = UDim2.new(0, 6, 0, 6)
+		grid.SortOrder = Enum.SortOrder.LayoutOrder
+		grid.Parent = takenBox
+
+		for i,card in ipairs(cards or {}) do
+			local code = card.code or string.format("%02d%02d", card.month, card.idx)
+			local node = makeCardNode(takenBox, code, 66, 88)
+			node.AutoButtonColor = false
+			node.LayoutOrder = i
+			node:SetAttribute("tip", string.format("月%02d %s %s", card.month, card.kind or "", card.name or ""))
 		end
 	end
 
@@ -351,7 +412,11 @@ function Run.new(deps)
 	btnClearSel.MouseButton1Click:Connect(function()
 		selectedHandIdx = nil
 		for _,b in ipairs(handArea:GetChildren()) do
-			if b:IsA("TextButton") then b.BorderSizePixel = 1 end
+			if b:IsA("TextButton") or b:IsA("ImageButton") then
+				local stroke = b:FindFirstChildOfClass("UIStroke")
+				if stroke then stroke.Thickness = 1; stroke.Color = Color3.fromRGB(0,0,0) end
+				if b:IsA("TextButton") then b.BorderSizePixel = 1 end
+			end
 		end
 	end)
 

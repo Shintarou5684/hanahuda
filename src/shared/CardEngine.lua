@@ -1,4 +1,5 @@
 -- ReplicatedStorage/SharedModules/CardEngine.lua
+-- v0.8 カードエンジン（画像コード対応版）
 local M = {}
 
 -- 48枚の定義（month=1..12, kind=bright/seed/ribbon/chaff）
@@ -57,7 +58,14 @@ function M.buildDeck()
     local deck = {}
     for m=1,12 do
         for i,c in ipairs(M.cardsByMonth[m]) do
-            local card = {month=m, idx=i, kind=c.kind, name=c.name, tags=c.tags}
+            local card = {
+                month = m,
+                idx   = i,
+                kind  = c.kind,
+                name  = c.name,
+                tags  = c.tags,
+                code  = string.format("%02d%02d", m, i), -- ★ 追加：画像コード
+            }
             table.insert(deck, card)
         end
     end
@@ -80,6 +88,17 @@ function M.draw(deck, n)
         hand[i] = table.remove(deck)
     end
     return hand
+end
+
+-- ユーティリティ
+function M.toCode(month, idx)
+    return string.format("%02d%02d", month, idx)
+end
+
+function M.fromCode(code)
+    local m = tonumber(code:sub(1,2))
+    local i = tonumber(code:sub(3,4))
+    return m, i
 end
 
 return M
