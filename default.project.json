@@ -5,10 +5,17 @@
 
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
+
+      "Config": {
+        "$className": "Folder",
+        "$path": "src/config"
+      },
+
       "SharedModules": {
         "$className": "Folder",
         "$path": "src/shared"
       },
+
       "Remotes": {
         "$className": "Folder",
         "$path": "src/remotes"
