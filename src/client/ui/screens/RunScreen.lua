@@ -172,6 +172,18 @@ function Run.new(deps)
 	local msg = makeLabel(overlay, "Msg", "次の季節を準備中...", UDim2.new(0,480,0,48), UDim2.new(0.5,0,0.5,0), Vector2.new(0.5,0.5))
 	msg.TextXAlignment = Enum.TextXAlignment.Center
 
+	-- ★ 結果モーダル用の暗幕（背面クリック無効）
+	local modalOverlay = Instance.new("TextButton")
+	modalOverlay.Name = "ResultBackdrop"; modalOverlay.Parent = frame
+	modalOverlay.Size = UDim2.fromScale(1,1)
+	modalOverlay.Position = UDim2.fromScale(0,0)
+	modalOverlay.BackgroundColor3 = Color3.fromRGB(0,0,0)
+	modalOverlay.BackgroundTransparency = 0.35
+	modalOverlay.AutoButtonColor = false
+	modalOverlay.Text = ""
+	modalOverlay.Visible = false
+	modalOverlay.ZIndex = 99
+
 	-- ★ 冬クリア用の結果モーダル
 	local resultModal = Instance.new("Frame")
 	resultModal.Name = "ResultModal"; resultModal.Parent = frame
@@ -299,26 +311,39 @@ function Run.new(deps)
 		end
 	end
 
-	local function renderTaken(cards)
-		-- 既存の子要素とレイアウトをクリア
-		for _,c in ipairs(takenBox:GetChildren()) do
-			c:Destroy()
-		end
-		-- グリッドレイアウトを用意（サムネ表示）
-		local grid = Instance.new("UIGridLayout")
-		grid.CellSize = UDim2.new(0, 66, 0, 88)
-		grid.CellPadding = UDim2.new(0, 6, 0, 6)
-		grid.SortOrder = Enum.SortOrder.LayoutOrder
-		grid.Parent = takenBox
-
-		for i,card in ipairs(cards or {}) do
-			local code = card.code or string.format("%02d%02d", card.month, card.idx)
-			local node = makeCardNode(takenBox, code, 66, 88)
-			node.AutoButtonColor = false
-			node.LayoutOrder = i
-			node:SetAttribute("tip", string.format("月%02d %s %s", card.month, card.kind or "", card.name or ""))
-		end
+-- RunScreen.lua: renderTaken を安全化版に置換
+local function renderTaken(cards)
+	-- 既存の子要素とレイアウトをクリア
+	for _,c in ipairs(takenBox:GetChildren()) do
+		c:Destroy()
 	end
+	-- グリッドレイアウト
+	local grid = Instance.new("UIGridLayout")
+	grid.CellSize   = UDim2.new(0, 66, 0, 88)
+	grid.CellPadding= UDim2.new(0, 6, 0, 6)
+	grid.SortOrder  = Enum.SortOrder.LayoutOrder
+	grid.Parent     = takenBox
+
+	for i,card in ipairs(cards or {}) do
+		-- month / idx は欠けることがある → 数値化して無ければ 0 に
+		local m   = tonumber(card and card.month) or 0
+		local idx = tonumber(card and card.idx)   or 0
+
+		-- code があれば優先、無ければ 00埋めで生成（m/idx が 0 でもOK）
+		local code = (type(card)=="table" and card.code and card.code ~= "") and card.code
+			or string.format("%02d%02d", m, idx)
+
+		local node = makeCardNode(takenBox, code, 66, 88)
+		node.AutoButtonColor = false
+		node.LayoutOrder = i
+
+		-- tipは %s に統一して tostring で nil を吸収（ここがクラッシュ原因の本丸）
+		local kind = (type(card)=="table" and card.kind) or ""
+		local name = (type(card)=="table" and card.name) or ""
+		node:SetAttribute("tip", string.format("月%s %s %s", tostring(m), tostring(kind), tostring(name)))
+	end
+end
+
 
 	--========================
 	-- ScorePush
@@ -365,43 +390,70 @@ function Run.new(deps)
 		end
 	end
 
-	--========================
-	-- StageResult（冬クリア）
-	--========================
-	local function onStageResult(a, b, c, d, e)
-		if typeof(a) == "boolean" then
-			local isClear = a
-			local data = b
-			if not isClear then return end
+--========================
+-- StageResult（冬クリア）
+--========================
+local function onStageResult(a, b, c, d, e)
+	-- ★ 形式チェック：true 以外は無視、payload(table)なしは無視
+	if typeof(a) ~= "boolean" or a ~= true then return end
+	if typeof(b) ~= "table" then
+		print("[Run] StageResult ignored (no payload)")
+		return
+	end
+	-- ★ 二重受信ガード
+	if self._resultShown then
+		print("[Run] StageResult ignored (duplicate)")
+		return
+	end
+	self._resultShown = true
 
-			resultModal.Visible = true
-			actionBar.Visible = false
+	local data = b
 
-			local add = (data and tonumber(data.rewardBank)) or 2
-			rmTitle.Text = ("冬 クリア！ +%d両"):format(add)
-			rmDesc.Text  = (data and data.message) or "次の行き先を選んでください。"
+	-- ★★ DEBUG: 受信ペイロードの要点を出力
+	local dbgClears  = tonumber(data.clears) or -1
+	local dbgCanNext = (data.canNext ~= nil) and tostring(data.canNext) or "nil"
+	local dbgCanSave = (data.canSave ~= nil) and tostring(data.canSave) or "nil"
+	print(("[Run] StageResult recv | clears=%d canNext=%s canSave=%s"):format(dbgClears, dbgCanNext, dbgCanSave))
 
-			local canNext, canSave = false, false
-			if typeof(data) == "table" then
-				if typeof(data.options) == "table" then
-					if typeof(data.options.goNext) == "table" then
-						canNext = (data.options.goNext.enabled == true)
-					end
-					if typeof(data.options.saveQuit) == "table" then
-						canSave = (data.options.saveQuit.enabled == true)
-					end
-				end
-				if not canNext and data.canNext ~= nil then canNext = (data.canNext == true) end
-				if not canSave and data.canSave ~= nil then canSave = (data.canSave == true) end
-			end
+	resultModal.Visible = true
+	modalOverlay.Visible = true
+	actionBar.Visible = false
+	playArea.Visible = false
 
-			setLocked(btnNext, not canNext,  "3回『帰宅』で解放")
-			setLocked(btnSave, not canSave,  "3回『帰宅』で解放")
-		else
-			-- 旧フォーマットは無視
-			return
+	local add = tonumber(data.rewardBank) or 2
+	rmTitle.Text = ("冬 クリア！ +%d両"):format(add)
+	rmDesc.Text  = data.message or "次の行き先を選んでください。"
+
+	-- 進捗（messageが無い場合は補助表示）
+	local clears = tonumber(data.clears) or 0
+	if not data.message then
+		rmDesc.Text = ("次の行き先を選んでください。（進捗: 通算 %d/3 クリア）"):format(clears)
+	end
+
+	-- === 解禁フラグの解釈（options優先 → 直フラグ → clears>=3 フォールバック）===
+	local canNext, canSave = false, false
+	if typeof(data.options) == "table" then
+		if typeof(data.options.goNext) == "table" then
+			canNext = (data.options.goNext.enabled == true)
+		end
+		if typeof(data.options.saveQuit) == "table" then
+			canSave = (data.options.saveQuit.enabled == true)
 		end
 	end
+	if not canNext and data.canNext ~= nil then canNext = (data.canNext == true) end
+	if not canSave and data.canSave ~= nil then canSave = (data.canSave == true) end
+	if clears >= 3 then canNext, canSave = true, true end
+
+	-- ★★ DEBUG: クライアント側の最終解釈
+	print(("[Run] interpreted | canNext=%s canSave=%s (clears=%d)")
+		:format(tostring(canNext), tostring(canSave), clears))
+
+	-- 文言を「通算3回クリア」に統一
+	setLocked(btnNext, not canNext, "通算3回クリアで解放")
+	setLocked(btnSave, not canSave, "通算3回クリアで解放")
+end
+
+
 
 	--========================
 	-- ボタン操作
@@ -420,6 +472,16 @@ function Run.new(deps)
 		end
 	end)
 
+	-- 多重送信防止
+	local function disableChoices()
+		for _,b in ipairs(btnRow:GetChildren()) do
+			if b:IsA("TextButton") then
+				b.Active = false
+				b.AutoButtonColor = false
+			end
+		end
+	end
+
 	local function ifNotLocked(button, fn)
 		button.MouseButton1Click:Connect(function()
 			if button:GetAttribute("locked") then return end
@@ -427,18 +489,27 @@ function Run.new(deps)
 		end)
 	end
 	ifNotLocked(btnHome, function()
+		disableChoices()
 		resultModal.Visible = false
+		modalOverlay.Visible = false
 		actionBar.Visible = true
+		playArea.Visible = true
 		if deps.DecideNext then deps.DecideNext:FireServer("home") end
 	end)
 	ifNotLocked(btnNext, function()
+		disableChoices()
 		resultModal.Visible = false
+		modalOverlay.Visible = false
 		actionBar.Visible = true
+		playArea.Visible = true
 		if deps.DecideNext then deps.DecideNext:FireServer("next") end
 	end)
 	ifNotLocked(btnSave, function()
+		disableChoices()
 		resultModal.Visible = false
+		modalOverlay.Visible = false
 		actionBar.Visible = true
+		playArea.Visible = true
 		if deps.DecideNext then deps.DecideNext:FireServer("save") end
 	end)
 

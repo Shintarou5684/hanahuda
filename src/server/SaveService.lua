@@ -1,36 +1,41 @@
 -- ServerScriptService/SaveService (ModuleScript)
--- 最小DataStore：bank / year / asc（アセンション）を永続化
+-- 最小DataStore：bank / year / asc / clears（通算クリア）を永続化
 -- 使い方：
 --   local SaveService = require(game.ServerScriptService.SaveService)
---   SaveService.load(player)                   -- PlayerAdded で呼ぶ（メモリに展開）
---   SaveService.addBank(player, 2)             -- 両の加算（dirty化）
---   SaveService.setYear(player, s.year)        -- 年数更新（dirty化）
---   SaveService.bumpYear(player, 25)           -- 年数を加算（例：冬クリアで +25）
---   SaveService.getAscension(player)           -- アセンション値を取得
---   SaveService.setAscension(player, 1)        -- アセンション値を設定（0以上）
---   SaveService.getBaseStartYear(player)       -- 1000 + 100*asc を返す
---   SaveService.ensureBaseYear(player)         -- 年が未設定/0なら基準年に補正
---   SaveService.flush(player)                  -- PlayerRemoving で呼ぶ（保存）
+--   SaveService.load(player)                    -- PlayerAdded で呼ぶ（メモリに展開）
+--   SaveService.addBank(player, 2)              -- 両の加算（dirty化）
+--   SaveService.setYear(player, s.year)         -- 年数更新（dirty化）
+--   SaveService.bumpYear(player, 25)            -- 年数を加算（例：冬クリアで +25）
+--   SaveService.getAscension(player)            -- アセンション値を取得
+--   SaveService.setAscension(player, 1)         -- アセンション値を設定（0以上）
+--   SaveService.getBaseStartYear(player)        -- 1000 + 100*asc を返す
+--   SaveService.ensureBaseYear(player)          -- 年が未設定/0なら基準年に補正
+--   SaveService.getClears(player)               -- ★ 追加：通算クリア回数を取得
+--   SaveService.setClears(player, n)            -- ★ 追加：通算クリア回数を設定
+--   SaveService.bumpClears(player, 1)           -- ★ 追加：通算クリア回数を加算
+--   SaveService.mergeIntoState(player, state)   -- state.totalClears にもマージ（UI向け）
+--   SaveService.flush(player)                   -- PlayerRemoving で呼ぶ（保存）
 
 local DataStoreService = game:GetService("DataStoreService")
 
 -- DataStore 名とキー生成
-local PROFILE_DS_NAME = "ProfileV1" -- 既存と同じ名前で互換維持（version フィールドで管理）
+local PROFILE_DS_NAME = "ProfileV1" -- 互換維持（version フィールドでマイグレーション）
 local profileDS = DataStoreService:GetDataStore(PROFILE_DS_NAME)
 local function keyForUserId(userId:number): string
 	return "u:" .. tostring(userId)
 end
 
--- デフォルト値（version 2：asc 追加・year を 1000 に）
+-- デフォルト値（version 3：clears 追加）
 local DEFAULT_PROFILE = {
-	version = 2,
-	bank = 0,     -- 両（永続通貨）
-	year = 1000,  -- 初期年（アセンション 0 なら 1000）
-	asc  = 0,     -- アセンション（0以上の整数）
+	version = 3,
+	bank = 0,      -- 両（永続通貨）
+	year = 1000,   -- 初期年（アセンション 0 なら 1000）
+	asc  = 0,      -- アセンション（0以上の整数）
+	clears = 0,    -- ★ 通算クリア回数
 }
 
 -- 内部メモリ（サーバ滞在中のキャッシュ）
-type Profile = {version:number, bank:number, year:number, asc:number}
+type Profile = {version:number, bank:number, year:number, asc:number, clears:number}
 local Save = {
 	_profiles = {} :: {[Player]: Profile},
 	_dirty    = {} :: {[Player]: boolean},
@@ -40,12 +45,16 @@ local Save = {
 local function normalizeProfile(p:any): Profile
 	local out:any = {}
 	local v = tonumber(p and p.version) or 1
-	out.version = (v < 2) and 2 or math.floor(v)
+	out.version = (v < 3) and 3 or math.floor(v)
+
 	out.bank    = math.max(0, math.floor(tonumber(p and p.bank) or 0))
+
 	-- year は 0 以下なら未初期化とみなし後で補正
 	local y = tonumber(p and p.year) or 0
 	out.year    = math.floor(y)
+
 	out.asc     = math.max(0, math.floor(tonumber(p and p.asc) or 0))
+	out.clears  = math.max(0, math.floor(tonumber(p and p.clears) or 0)) -- ★
 	return out :: Profile
 end
 
@@ -75,17 +84,23 @@ function Save.load(plr: Player): Profile
 	end
 
 	-- 簡易マイグレーション：
-	-- - version < 2 なら version=2 に引き上げ
+	-- - version < 3 なら version=3 に引き上げ
 	-- - year <= 0 の場合は、asc に応じた基準年に補正
+	-- - clears 欠損は 0 補完（normalize 済みだが念のため）
 	local migrated = false
-	if prof.version < 2 then
-		prof.version = 2
+	if prof.version < 3 then
+		prof.version = 3
 		migrated = true
 	end
 	if (prof.year or 0) <= 0 then
 		prof.year = baseStartYearForAsc(prof.asc)
 		migrated = true
 	end
+	if prof.clears == nil then
+		prof.clears = 0
+		migrated = true
+	end
+
 	Save._profiles[plr] = prof
 	Save._dirty[plr]    = migrated -- マイグレーションしたら保存対象に
 
@@ -138,6 +153,25 @@ function Save.setAscension(plr: Player, n:number)
 	Save._dirty[plr] = true
 end
 
+-- ★ 通算クリア：取得/設定/加算
+function Save.getClears(plr: Player): number
+	local p = Save._profiles[plr]; if not p then return 0 end
+	return math.max(0, math.floor(tonumber(p.clears) or 0))
+end
+
+function Save.setClears(plr: Player, n:number)
+	local p = Save._profiles[plr]; if not p then return end
+	p.clears = math.max(0, math.floor(tonumber(n) or 0))
+	Save._dirty[plr] = true
+end
+
+function Save.bumpClears(plr: Player, delta:number)
+	local p = Save._profiles[plr]; if not p then return end
+	local cur = tonumber(p.clears or 0) or 0
+	p.clears = math.max(0, math.floor(cur + (tonumber(delta) or 0)))
+	Save._dirty[plr] = true
+end
+
 -- 基準年を返す（1000 + 100*asc）
 function Save.getBaseStartYear(plr: Player): number
 	local p = Save._profiles[plr]
@@ -155,14 +189,17 @@ function Save.ensureBaseYear(plr: Player): number
 	return p.year
 end
 
--- 便利：StateHubの状態へ bank/year（必要なら asc も）をマージ
+-- 便利：StateHubの状態へ bank/year/asc/clears をマージ
+-- UI/状態整合のため、clears は state.totalClears にも反映
 function Save.mergeIntoState(plr: Player, state:any)
 	local p = Save._profiles[plr]
 	if not p then return state end
 	state = state or {}
-	state.bank = p.bank
-	state.year = p.year
-	state.asc  = p.asc
+	state.bank        = p.bank
+	state.year        = p.year
+	state.asc         = p.asc
+	state.clears      = p.clears
+	state.totalClears = p.clears   -- ★ StateHub 側の命名に合わせる
 	return state
 end
 
@@ -185,12 +222,13 @@ function Save.flush(plr: Player)
 		tries += 1
 		ok, err = pcall(function()
 			profileDS:UpdateAsync(key, function(old:any)
-				-- 古い値があっても bank/year/asc はメモリの最新値で上書き（最小実装）
+				-- 古い値があっても bank/year/asc/clears はメモリの最新値で上書き（最小実装）
 				local base = typeof(old) == "table" and old or {}
-				base.version = 2
-				base.bank    = p.bank or 0
-				base.year    = p.year or 0
-				base.asc     = p.asc or 0
+				base.version = 3
+				base.bank    = p.bank   or 0
+				base.year    = p.year   or 0
+				base.asc     = p.asc    or 0
+				base.clears  = p.clears or 0  -- ★
 				return base
 			end)
 		end)

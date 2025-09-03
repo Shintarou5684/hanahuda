@@ -48,14 +48,15 @@ function Round.resetRun(plr: Player)
 	local prev = StateHub.get(plr)
 	local keepBank   = (prev and prev.bank) or 0
 	local keepYear   = (prev and prev.year) or 0
-	local keepHome   = (prev and prev.homeCount) or 0
+	-- ★ homeCount は廃止（アンロックは totalClears で管理）
+	-- local keepHome   = (prev and prev.homeCount) or 0
 	local keepClears = (prev and prev.totalClears) or 0
 
 	-- 文（mon）はランごとにリセットする
 	StateHub.set(plr, {
 		bank = keepBank,
 		year = keepYear,
-		homeCount = keepHome,
+		-- homeCount = keepHome,  -- ★削除
 		totalClears = keepClears,
 		mult = 1.0,
 		mon  = 0,

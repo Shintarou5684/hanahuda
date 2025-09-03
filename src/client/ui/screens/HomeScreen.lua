@@ -42,6 +42,20 @@ function Home.new(deps)
 	title.TextColor3 = Color3.fromRGB(240,240,240)
 	title.Parent = bg
 
+	-- ステータス（年 / 両 / 進捗）
+	local status = Instance.new("TextLabel")
+	status.Name = "Status"
+	status.Size = UDim2.new(1,0,0,28)
+	status.Position = UDim2.new(0,0,0,110)
+	status.BackgroundTransparency = 1
+	status.Text = "年:----  両:0  進捗: 通算 0/3 クリア"
+	status.Font = Enum.Font.Gotham
+	status.TextSize = 20
+	status.TextColor3 = Color3.fromRGB(220,220,220)
+	status.TextXAlignment = Enum.TextXAlignment.Center
+	status.Parent = bg
+	self.statusLabel = status
+
 	-- ボタンFactory
 	local function makeBtn(text, y)
 		local b = Instance.new("TextButton")
@@ -65,6 +79,8 @@ function Home.new(deps)
 	self.btnItems    = makeBtn("持ち物（所持確認）",      2)
 	self.btnSettings = makeBtn("設定",                    3)
 	self.btnCont     = makeBtn("前回の続き（CONTINUE）",  4)
+	-- 初期は無効（HomeOpenで有効化）
+	setInteractable(self.btnCont, false)
 
 	-- クリック
 	self.btnNew.Activated:Connect(function()
@@ -117,9 +133,20 @@ function Home.new(deps)
 end
 
 function Home:show(payload)
-	-- payload = { hasSave = bool }
+	-- payload = { hasSave:bool, bank:number, year:number, clears:number }
 	local hasSave = payload and payload.hasSave == true
+	local bank    = (payload and tonumber(payload.bank))   or 0
+	local year    = (payload and tonumber(payload.year))   or 0
+	local clears  = (payload and tonumber(payload.clears)) or 0
+
 	setInteractable(self.btnCont, hasSave)
+
+	-- ステータス更新（年は0/未設定なら ---- 表示）
+	local yearTxt = (year > 0) and tostring(year) or "----"
+	if self.statusLabel then
+		self.statusLabel.Text = string.format("年:%s  両:%d  進捗: 通算 %d/3 クリア", yearTxt, bank, clears)
+	end
+
 	self.gui.Enabled = true
 end
 

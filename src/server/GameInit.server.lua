@@ -178,12 +178,17 @@ Players.PlayerAdded:Connect(function(plr)
 
 	-- 既存のStateに bank/year をマージ（他は触らない）
 	local s = StateHub.get(plr) or {}
-	s.bank = prof.bank or 0
-	s.year = prof.year or 0
+	s.bank        = prof.bank   or 0
+	s.year        = prof.year   or 0
+	s.totalClears = prof.clears or 0
 	StateHub.set(plr, s)
 
-	-- 初回はトップを開く（UIで使うなら bank/year を同梱）
-	HomeOpen:FireClient(plr, { hasSave = false, bank = s.bank, year = s.year })
+	HomeOpen:FireClient(plr, {
+		hasSave = false,
+		bank    = s.bank,
+		year    = s.year,
+		clears  = s.totalClears or 0,  -- ← ここも反映
+	})
 end)
 
 Players.PlayerRemoving:Connect(function(plr)
@@ -196,6 +201,7 @@ game:BindToClose(function()
 	-- なるべく保存を試みる
 	pcall(function() SaveService.flushAll() end)
 end)
+
 
 --==================================================
 -- ラン開始/続き（RoundReady → RunScreen.requestSync → UiResync）
@@ -255,41 +261,78 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 	local s = StateHub.get(plr); if not s then return end
 	if (s.season or 1) ~= 4 then return end
 
-	-- ★ 冬クリア時の精算は ScoreService 側で「+2両」を付与済み
-	--   ここでは倍率等を初期化するだけ
+	local clears = tonumber(s.totalClears or 0) or 0
+	local unlocked = clears >= 3
+	print(("[DecideNext] req by %s | op=%s clears=%d unlocked=%s bank=%d year=%d phase=%s")
+		:format(plr.Name, tostring(op), clears, tostring(unlocked), s.bank or 0, s.year or 0, tostring(s.phase)))
+
+	-- 冬クリア後の共通初期化
 	s.mult = 1.0
 
-	if op == "home" then
-		-- 帰宅カウントでアンロック管理（暫定：メモリのみ）
-		s.homeCount = (s.homeCount or 0) + 1
-		StateHub.pushState(plr) -- 表示更新用
+	-- ★ サーバ側ガード：未解禁なら "home" 以外は無効化（安全ネット）
+	if op ~= "home" and not unlocked then
+		warn(("[DecideNext] blocked: op=%s requires clears>=3 (now %d). Fallback to HOME."):format(tostring(op), clears))
+		op = "home"
+	end
 
-		-- トップへ
-		Round.resetRun(plr) -- 内部は初期化しておく
-		Remotes.HomeOpen:FireClient(plr, { hasSave = false, homeCount = s.homeCount })
+	if op == "home" then
+		print("[DecideNext] -> HOME")
+		-- （任意）最新表示反映したい場合は push してもOK
+		-- StateHub.pushState(plr)
+
+		-- トップへ戻す（新ランに初期化）
+		Round.resetRun(plr)
+		Remotes.HomeOpen:FireClient(plr, {
+			hasSave = false,
+			bank    = s.bank or 0,
+			year    = s.year or 0,
+			clears  = s.totalClears or 0,
+		})
 		return
 
 	elseif op == "next" then
+		print("[DecideNext] -> NEXT (add +25y & open shop)")
 		-- 25年進行＋屋台オープン（次ランの前準備）
 		s.year = (s.year or 0) + 25
-		SaveService.setYear(plr, s.year)
+		if typeof(SaveService.bumpYear) == "function" then
+			SaveService.bumpYear(plr, 25)
+		elseif typeof(SaveService.setYear) == "function" then
+			SaveService.setYear(plr, s.year)
+		end
 
 		s.phase = "shop"
 		if ShopService and typeof(ShopService.open) == "function" then
 			ShopService.open(plr, s, { reason = "after_winter" })
+			print("[DecideNext] shop opened (reason=after_winter)")
+		else
+			StateHub.pushState(plr)
+			warn("[DecideNext] ShopService.open not available; pushed state only.")
 		end
 		return
 
 	elseif op == "save" then
-		-- DataStore 未実装：将来対応（とりあえずホームへ戻す）
-		warn("[DecideNext] save is not implemented yet; go Home.")
+		print("[DecideNext] -> SAVE & QUIT (flush profile)")
+		-- DataStoreへ保存してからトップへ
+		local ok = true
+		if typeof(SaveService.flush) == "function" then
+			ok = SaveService.flush(plr) == true
+			if not ok then warn("[DecideNext] flush failed; going Home anyway") end
+		else
+			warn("[DecideNext] SaveService.flush not available; skipping flush.")
+		end
+
 		Round.resetRun(plr)
-		Remotes.HomeOpen:FireClient(plr, { hasSave = true })
+		Remotes.HomeOpen:FireClient(plr, {
+			hasSave = true,
+			bank    = s.bank or 0,
+			year    = s.year or 0,
+			clears  = s.totalClears or 0,
+			saved   = ok,
+		})
+		print(("[DecideNext] save sent (ok=%s)"):format(tostring(ok)))
 		return
 
 	else
 		warn(("[DecideNext] unknown op: %s"):format(tostring(op)))
 	end
 end)
-
-print("[Init] Game loaded (modularized, remotes-ready, save-ready)")
