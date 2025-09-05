@@ -27,6 +27,13 @@ local screensDir = script.Parent
 local UIBuilder  = require(screensDir:WaitForChild("RunScreenUI"))
 local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 
+local function extractGoalFromInfoText(text)
+	-- "目標:123" を抽出（半角スペース可）
+	if type(text) ~= "string" then return nil end
+	local num = string.match(text, "目標:%s*(%d+)")
+	return num
+end
+
 function Run.new(deps)
 	local self = setmetatable({}, Run)
 	self.deps = deps
@@ -34,17 +41,18 @@ function Run.new(deps)
 	self._resultShown = false
 
 	-- UI構築
-	local ui = UIBuilder.build(nil) -- ScreenGui込みで作る
+	local ui = UIBuilder.build(nil)
 	self.gui      = ui.gui
 	self.frame    = ui.root
 	self.info     = ui.info
+	self.goalText = ui.goalText       -- ★ 追加
+	self.notice   = ui.notice         -- ★ 追加
 	self.handArea = ui.handArea
 	self.boardRowTop    = ui.boardRowTop
 	self.boardRowBottom = ui.boardRowBottom
 	self.takenBox = ui.takenBox
 	self._scoreBox = ui.scoreBox
 	self.buttons  = ui.buttons
-	self.ROW_H    = ui.metrics.ROW_H
 
 	-- Overlay / ResultModal
 	self._overlay     = Overlay.create(self.frame, Theme.loadingText or "次の季節を準備中...")
@@ -66,31 +74,24 @@ function Run.new(deps)
 	-- レンダラー適用
 	local function renderHand(hand)
 		HandRenderer.render(self.handArea, hand, {
-			width = 90, height = 150,
 			selectedIndex = self._selectedHandIdx,
 			onSelect = function(i)
-				-- ★ MisleadingAndOr 対応（トグルを if-else で明示）
 				if self._selectedHandIdx == i then
 					self._selectedHandIdx = nil
 				else
 					self._selectedHandIdx = i
 				end
-
-				-- 再ハイライト（最小で済ませるため再呼び出し）
 				HandRenderer.render(self.handArea, hand, {
-					width = 90, height = 150,
 					selectedIndex = self._selectedHandIdx,
 					onSelect = function(ii)
-						-- ★ MisleadingAndOr 対応（こちらも if-else）
 						if self._selectedHandIdx == ii then
 							self._selectedHandIdx = nil
 						else
 							self._selectedHandIdx = ii
 						end
 						HandRenderer.render(self.handArea, hand, {
-							width = 90, height = 150,
 							selectedIndex = self._selectedHandIdx,
-							onSelect = function(...) end
+							onSelect = function(_) end
 						})
 					end
 				})
@@ -101,19 +102,18 @@ function Run.new(deps)
 
 	local function renderField(field)
 		FieldRenderer.render(self.boardRowTop, self.boardRowBottom, field, {
-			width = 80, height = (self.ROW_H - 16),
+			rowPaddingScale = 0.02,
 			onPick = function(bindex)
 				if self._selectedHandIdx then
 					self.deps.ReqPick:FireServer(self._selectedHandIdx, bindex)
 					self._selectedHandIdx = nil
-					-- 手札のハイライトも解除したいので、直近ハンドで再描画はScore/State/HandPushの次イベントに任せる
 				end
 			end
 		})
 	end
 
 	local function renderTaken(cards)
-		TakenRenderer.render(self.takenBox, cards, { cellW = 80, cellH = 112 })
+		TakenRenderer.renderTaken(self.takenBox, cards or {})
 	end
 
 	local function onScore(total, roles, detail)
@@ -129,7 +129,21 @@ function Run.new(deps)
 	end
 
 	local function onState(st)
-		self.info.Text = Format.stateLineText(st)
+		-- 情報パネル更新
+		local line = Format.stateLineText(st)
+		self.info.Text = line
+
+		-- 目標スコア（情報パネルの値をミラー）
+		if self.goalText then
+			local g = extractGoalFromInfoText(line)
+			self.goalText.Text = g and ("目標：" .. g) or "目標：—"
+		end
+
+		-- お知らせ（必要に応じて上書きする想定。初期は空）
+		if self.notice and self.notice.Text == "" then
+			self.notice.Text = "" -- 例: "役が確定しました" などを他のイベントで流す
+		end
+
 		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
 		self._resultShown = false
 	end
@@ -141,6 +155,28 @@ function Run.new(deps)
 		self._resultShown = true
 
 		local data = b
+		local isFinal = false
+		if data.isFinal == true or tonumber(data.season) == 4 or tostring(data.seasonStr or "") == "冬" then
+			isFinal = true
+		end
+
+		if isFinal then
+			self._resultModal:showFinal(
+				"クリアおめでとう！",
+				"このランは終了です。メニューに戻ります。",
+				"メニューに戻る",
+				function()
+					if self.deps.GoHome then
+						self.deps.GoHome:FireServer()
+					elseif self.deps.DecideNext then
+						self.deps.DecideNext:FireServer("home")
+					end
+					self._resultModal:hide()
+				end
+			)
+			return
+		end
+
 		self._resultModal:show(data)
 
 		local clears = tonumber(data.clears) or 0
@@ -157,15 +193,17 @@ function Run.new(deps)
 	end
 
 	-- ボタン
-	self.buttons.confirm.MouseButton1Click:Connect(function() self.deps.Confirm:FireServer() end)
-	self.buttons.rerollAll.MouseButton1Click:Connect(function() self.deps.ReqRerollAll:FireServer() end)
-	self.buttons.rerollHand.MouseButton1Click:Connect(function() self.deps.ReqRerollHand:FireServer() end)
-	self.buttons.clearSel.MouseButton1Click:Connect(function()
-		self._selectedHandIdx = nil
-		-- 実際のハイライト解除は、次の HandPush で再描画されると自然に消える
-	end)
+	self.buttons.confirm.MouseButton1Click:Connect(function() if self.deps.Confirm       then self.deps.Confirm:FireServer()       end end)
+	self.buttons.rerollAll.MouseButton1Click:Connect(function() if self.deps.ReqRerollAll then self.deps.ReqRerollAll:FireServer() end end)
+	self.buttons.rerollHand.MouseButton1Click:Connect(function() if self.deps.ReqRerollHand then self.deps.ReqRerollHand:FireServer() end end)
 
-	-- Remotes 接続管理
+	if self.buttons.clearSel then
+		self.buttons.clearSel.MouseButton1Click:Connect(function()
+			self._selectedHandIdx = nil
+		end)
+	end
+
+	-- Remotes 接続
 	self._remotes = RemotesCtl.create(self.deps, {
 		onHand = renderHand,
 		onField = renderField,

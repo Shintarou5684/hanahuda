@@ -37,4 +37,28 @@ function UiKit.button(parent: Instance, txt: string, size: UDim2, pos: UDim2)
 	return b
 end
 
+local UiKit = {}
+
+function UiKit.makeAspectContainer(parent, aspect) -- aspect 例: 16/9
+	local frame = Instance.new("Frame")
+	frame.Name = "PlayArea"
+	frame.BackgroundTransparency = 1
+	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.Position = UDim2.fromScale(0.5, 0.5)
+	frame.Size = UDim2.fromScale(1, 1)
+	frame.Parent = parent
+
+	local ar = Instance.new("UIAspectRatioConstraint")
+	ar.AspectRatio = aspect
+	ar.DominantAxis = Enum.DominantAxis.Width -- 横幅を基準に高さを決める
+	ar.Parent = frame
+
+	local uis = Instance.new("UISizeConstraint")
+	uis.MinSize = Vector2.new(960, 540) -- 小さすぎ防止（任意）
+	-- uis.MaxSize = Vector2.new(3840, 2160) -- 必要なら上限も
+	uis.Parent = frame
+
+	return frame
+end
+
 return UiKit

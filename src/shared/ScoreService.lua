@@ -14,7 +14,7 @@ local Score = {}
 
 -- GameInit から注入される：openShop(plr, s, opts)
 --   opts = { reward:number?, notice:string?, target:number? }
-local openShopFn : ((Player, any, {reward:number?, notice:string?, target:number?}?) -> ())? = nil
+local openShopFn ---@type fun(plr: Player, s: any, opts: {reward:number?, notice:string?, target:number?}?)|nil = nil
 
 local function calcMonReward(sum:number, target:number, season:number)
 	local factor = 0.20 + ((season or 1) - 1) * 0.05
@@ -62,6 +62,7 @@ function Score.bind(Remotes, deps)
 		if (s.seasonSum or 0) < tgt then
 			if (s.handsLeft or 0) <= 0 then
 				if Remotes.StageResult then
+					-- 失敗パス（UI側は true & table のみ表示する想定）
 					Remotes.StageResult:FireClient(plr, false, s.seasonSum or 0, tgt, s.mult or 1, s.bank or 0)
 				end
 				local Round = require(RS.SharedModules.RoundService)
@@ -85,72 +86,70 @@ function Score.bind(Remotes, deps)
 			return
 		end
 
--- ===== 冬：クリア分岐 =====
-s.phase = "result"
+		-- ===== 冬：クリア分岐 =====
+		s.phase = "result"
 
--- クリア回数（メモリ）
-s.totalClears = (s.totalClears or 0) + 1
--- ★ 永続にも反映（存在すれば）
-if typeof(SaveService.bumpClears) == "function" then
-	SaveService.bumpClears(plr, 1)
-end
+		-- クリア回数（メモリ）
+		s.totalClears = (s.totalClears or 0) + 1
+		-- ★ 永続にも反映（存在すれば）
+		if typeof(SaveService.bumpClears) == "function" then
+			SaveService.bumpClears(plr, 1)
+		end
 
--- 2両ボーナス（メモリ＋永続）
-local rewardBank = 2
-s.bank = (s.bank or 0) + rewardBank
-SaveService.addBank(plr, rewardBank)
+		-- 2両ボーナス（メモリ＋永続）
+		local rewardBank = 2
+		s.bank = (s.bank or 0) + rewardBank
+		SaveService.addBank(plr, rewardBank)
 
-s.lastScore = { total = total or 0, roles = roles, detail = detail }
-StateHub.pushState(plr)
+		s.lastScore = { total = total or 0, roles = roles, detail = detail }
+		StateHub.pushState(plr)
 
--- ★ アンロック判定：通算クリア回数 >= 3
-local clears   = tonumber(s.totalClears or 0) or 0
-local unlocked = clears >= 3
+		-- ★ アンロック判定：通算クリア回数 >= 3
+		local clears   = tonumber(s.totalClears or 0) or 0
+		local unlocked = clears >= 3
 
--- ★★ DEBUG: 冬クリア時点のサマリ（解禁判定を可視化）
-print(("[Score] winter clear by %s | clears=%d unlocked=%s season=%s sum=%d target=%d bank=%d")
-	:format(
-		plr.Name,
-		clears,
-		tostring(unlocked),
-		tostring(season),
-		s.seasonSum or 0,
-		tgt or 0,
-		s.bank or 0
-	)
-)
+		-- ★★ DEBUG: 冬クリア時点のサマリ（解禁判定を可視化）
+		print(("[Score] winter clear by %s | clears=%d unlocked=%s season=%s sum=%d target=%d bank=%d")
+			:format(
+				plr.Name,
+				clears,
+				tostring(unlocked),
+				tostring(season),
+				s.seasonSum or 0,
+				tgt or 0,
+				s.bank or 0
+			))
 
-if Remotes.StageResult then
-	-- 送信ペイロードを組み立て（ログのため一度変数へ）
-	local payload = {
-		season      = season,
-		seasonSum   = s.seasonSum or 0,
-		target      = tgt,
-		mult        = s.mult or 1,
-		bank        = s.bank or 0,
-		rewardBank  = rewardBank,
-		bankAdded   = rewardBank,
-		canNext     = unlocked,
-		canSave     = unlocked,
-		clears      = clears,  -- UI表示用（「通算◯回クリア」）
-		message     = unlocked and
-			("冬をクリア！ 2両を獲得。『次のステージ／セーブ』が解禁済み（通算"..clears.."回クリア）") or
-			("冬をクリア！ 2両を獲得。『次のステージ／セーブ』は通算3回クリアで解禁（現在"..clears.."回）"),
-		options = {
-			goHome   = { enabled = true,     label = "トップへ戻る" },
-			goNext   = { enabled = unlocked, label = unlocked and "次のステージへ" or "次のステージへ（ロック中）" },
-			saveQuit = { enabled = unlocked, label = unlocked and "セーブして終了" or "セーブして終了（ロック中）" },
-		}
-	}
+		if Remotes.StageResult then
+			-- 送信ペイロードを組み立て（ログのため一度変数へ）
+			local payload = {
+				season      = season,
+				seasonSum   = s.seasonSum or 0,
+				target      = tgt,
+				mult        = s.mult or 1,
+				bank        = s.bank or 0,
+				rewardBank  = rewardBank,
+				bankAdded   = rewardBank,
+				canNext     = unlocked,
+				canSave     = unlocked,
+				clears      = clears,  -- UI表示用（「通算◯回クリア」）
+				message     = unlocked and
+					("冬をクリア！ 2両を獲得。『次のステージ／セーブ』が解禁済み（通算"..clears.."回クリア）") or
+					("冬をクリア！ 2両を獲得。『次のステージ／セーブ』は通算3回クリアで解禁（現在"..clears.."回）"),
+				options = {
+					goHome   = { enabled = true,     label = "トップへ戻る" },
+					goNext   = { enabled = unlocked, label = unlocked and "次のステージへ" or "次のステージへ（ロック中）" },
+					saveQuit = { enabled = unlocked, label = unlocked and "セーブして終了" or "セーブして終了（ロック中）" },
+				}
+			}
 
-	-- ★★ DEBUG: 実際に送る解禁フラグ
-	print(("[Score] StageResult payload: canNext=%s canSave=%s")
-		:format(tostring(payload.canNext), tostring(payload.canSave)))
+			-- ★★ DEBUG: 実際に送る解禁フラグ
+			print(("[Score] StageResult payload: canNext=%s canSave=%s")
+				:format(tostring(payload.canNext), tostring(payload.canSave)))
 
-	Remotes.StageResult:FireClient(plr, true, payload)
-end
--- 以降の遷移は C→S: Remotes.DecideNext("home"|"next"|"save")
-
+			Remotes.StageResult:FireClient(plr, true, payload)
+		end
+		-- 以降の遷移は C→S: Remotes.DecideNext("home"|"next"|"save")
 	end)
 end
 

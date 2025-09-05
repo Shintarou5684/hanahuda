@@ -9,7 +9,7 @@ local RS = game:GetService("ReplicatedStorage")
 local CardImageMap = require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
 
 -- Theme（任意）。存在しない環境でも動くように安全に参照。
--- ★ ここを「: any」に修正（以前は :: でパースエラー）
+-- ★ Luau型は any にしてパースエラー回避
 local Theme: any = nil
 do
 	local ok, cfg = pcall(function() return RS:FindFirstChild("Config") end)
@@ -23,11 +23,13 @@ local M = {}
 
 export type Info = {
 	month: number?,  -- 1..12
-	kind: string?,   -- "bright" | "seed" | "ribbon" | ...（任意）
-	name: string?,   -- 札の日本語名など（任意）
+	kind: string?,   -- "bright" | "seed" | "ribbon" | ...
+	name: string?,   -- 札の日本語名など
 }
 
--- フォールバック色
+--========================
+-- Themeヘルパ
+--========================
 local function kindColorFallback(kind: string?)
 	if kind == "bright" then return Color3.fromRGB(255,230,140)
 	elseif kind == "seed" then return Color3.fromRGB(200,240,255)
@@ -35,7 +37,6 @@ local function kindColorFallback(kind: string?)
 	else return Color3.fromRGB(235,235,235) end
 end
 
--- 役色は Theme 優先
 local function colorForKind(kind: string?)
 	if Theme and Theme.colorForKind then
 		local ok, c = pcall(function() return Theme.colorForKind(kind) end)
@@ -44,7 +45,6 @@ local function colorForKind(kind: string?)
 	return kindColorFallback(kind)
 end
 
--- 安全な Theme 参照ヘルパ
 local function themeColor(path: string, fallback: Color3)
 	local c = fallback
 	if Theme and Theme.COLORS and Theme.COLORS[path] then
@@ -63,24 +63,89 @@ local function themeImage(path: string, fallback: string)
 	return id
 end
 
--- カード画像ボタン + （任意）右側の補助ラベル
-function M.create(parent: Instance, code: string, w: number?, h: number?, info: Info?, showInfoRight: boolean?)
-	w, h = w or 180, h or 120
+--========================
+-- 本体API
+--========================
+-- 後方互換 API:
+--   create(parent, code, w?, h?, info?, showInfoRight?)
+-- 新API（推奨）:
+--   create(parent, code, opts)
+--     opts = {
+--       size: UDim2,           -- 明示サイズ（ある場合は最優先）
+--       pos: UDim2,            -- 配置
+--       anchor: Vector2,       -- アンカー
+--       zindex: number,        -- ZIndexの明示指定
+--       info: Info,            -- バッジ/右ラベル用
+--       showInfoRight: boolean,
+--       cornerRadius: number?, -- 角丸(ピクセル)
+--     }
+function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: any?)
+	-- 画像ID
+	local okImg, imgId = pcall(function() return CardImageMap.get(code) end)
+	local imageId = (okImg and imgId) or ""
+
+	-- 引数解釈
+	local opts: any = nil
+	local legacyW: number? = nil
+	local legacyH: number? = nil
+	local legacyInfo: Info? = nil
+	local legacyShowRight: boolean? = nil
+
+	if typeof(a) == "table" and (a.size or a.pos or a.anchor or a.info or a.showInfoRight) then
+		opts = a
+	else
+		legacyW, legacyH, legacyInfo, legacyShowRight = a, b, c, d
+	end
+
+	-- レイアウト方針
+	local useScale = (opts == nil and legacyW == nil and legacyH == nil)
+	local W_SCALE = 0.12
+	local H_SCALE = 0.90
 
 	local btn = Instance.new("ImageButton")
-	btn.Parent = parent
 	btn.Name = "Card_" .. tostring(code or "????")
+	btn.Parent = parent
 	btn.BackgroundTransparency = 1
-	btn.Size = UDim2.fromOffset(w, h)
-	btn.ScaleType = Enum.ScaleType.Fit
-	btn.AutoButtonColor = true
 	btn.BorderSizePixel = 0
-	btn.ZIndex = (parent:IsA("GuiObject") and parent.ZIndex or 1) + 1
+	btn.AutoButtonColor = true
+	btn.Image = imageId
+	btn.ScaleType = Enum.ScaleType.Fit
+	btn.Active = true
+
+	-- ZIndex
+	do
+		local baseZ = (parent:IsA("GuiObject") and parent.ZIndex or 1) + 1
+		btn.ZIndex = (opts and tonumber(opts.zindex)) or baseZ
+	end
+
+	-- サイズ決定
+	if opts and opts.size then
+		btn.Size = opts.size
+		useScale = false
+	elseif useScale then
+		btn.Size = UDim2.fromScale(W_SCALE, H_SCALE)
+	else
+		local w = tonumber(legacyW) or 180
+		local h = tonumber(legacyH) or 120
+		btn.Size = UDim2.fromOffset(w, h)
+	end
+
+	-- 位置＆アンカー（指定があれば反映）
+	if opts and opts.anchor then btn.AnchorPoint = opts.anchor end
+	if opts and opts.pos    then btn.Position    = opts.pos    end
+
+	-- 最小サイズの安全弁（極端に薄くならない）
+	do
+		local min = Instance.new("UISizeConstraint")
+		min.MinSize = Vector2.new(56, 78) -- だいたい 63:88
+		min.Parent = btn
+	end
 
 	-- 角丸＋枠
 	do
 		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 8)
+		local rpx = (opts and tonumber(opts.cornerRadius)) or 8
+		corner.CornerRadius = UDim.new(0, rpx)
 		corner.Parent = btn
 
 		local stroke = Instance.new("UIStroke")
@@ -104,39 +169,58 @@ function M.create(parent: Instance, code: string, w: number?, h: number?, info: 
 		shadow.ZIndex = btn.ZIndex - 1
 	end
 
-	-- 画像本体
-	do
-		local ok, imgId = pcall(function() return CardImageMap.get(code) end)
-		btn.Image = (ok and imgId) or ""
-	end
-
-	-- 比率固定
+	-- ★ アスペクト固定（花札：横:縦=63:88）※高さ基準で幅を決定
 	do
 		local ar = Instance.new("UIAspectRatioConstraint")
-		ar.AspectRatio = w / h
+		ar.AspectRatio = 63/88
+		ar.DominantAxis = Enum.DominantAxis.Height
 		ar.Parent = btn
 	end
 
 	-- クリック感（軽い拡大アニメ）
-	local function tweenSize(sz) TweenService:Create(btn, TweenInfo.new(0.06), { Size = sz }):Play() end
-	btn.MouseButton1Down:Connect(function() tweenSize(UDim2.fromOffset(w*1.04, h*1.04)) end)
-	btn.MouseButton1Up:Connect(function() tweenSize(UDim2.fromOffset(w, h)) end)
-	btn.MouseLeave:Connect(function() btn.Size = UDim2.fromOffset(w, h) end)
+	do
+		local function tweenTo(sz) TweenService:Create(btn, TweenInfo.new(0.06), { Size = sz }):Play() end
+		local baseSize: UDim2 = btn.Size
+
+		btn.MouseEnter:Connect(function()
+			baseSize = btn.Size
+		end)
+
+		local function scaleMul(sz: UDim2, mul: number): UDim2
+			if sz.X.Scale > 0 or sz.Y.Scale > 0 then
+				return UDim2.new(sz.X.Scale * mul, sz.X.Offset, sz.Y.Scale * mul, sz.Y.Offset)
+			else
+				return UDim2.fromOffset(math.max(1, sz.X.Offset * mul), math.max(1, sz.Y.Offset * mul))
+			end
+		end
+
+		btn.MouseButton1Down:Connect(function()
+			baseSize = btn.Size
+			tweenTo(scaleMul(baseSize, 1.04))
+		end)
+
+		local function restore() tweenTo(baseSize) end
+		btn.MouseButton1Up:Connect(restore)
+		btn.MouseLeave:Connect(restore)
+	end
 
 	-- 右側の補助ラベル（「1月 短冊」など）※必要なときだけ
+	local showInfoRight = (opts and opts.showInfoRight) or legacyShowRight
+	local info: Info?    = (opts and opts.info) or legacyInfo
 	if showInfoRight then
+		local m  = tonumber(info and info.month) or 0
+		local role = tostring(info and info.kind or "")
+		local name = tostring(info and info.name or "")
+
 		local lab = Instance.new("TextLabel")
 		lab.Name = "SideInfo"
 		lab.Parent = btn
 		lab.BackgroundTransparency = 1
 		lab.TextScaled = true
-		lab.Size = UDim2.new(0, 72, 0, 22)
+		lab.Size = UDim2.new(0, 72, 0, 22) -- サイドはpxのほうが視認性安定
 		lab.Position = UDim2.new(1, 6, 0, 0)
 		lab.TextXAlignment = Enum.TextXAlignment.Left
 		lab.TextYAlignment = Enum.TextYAlignment.Center
-		local m = tonumber(info and info.month) or 0
-		local role = tostring(info and info.kind or "")
-		local name = tostring(info and info.name or "")
 		lab.Text = string.format("%d月 %s", m, (name ~= "" and name) or role)
 		lab.TextColor3 = colorForKind(info and info.kind)
 		lab.ZIndex = btn.ZIndex + 1
@@ -162,8 +246,8 @@ function M.addBadge(cardButton: Instance, info: Info?)
 	holder.Name = "Badge"
 	holder.Parent = cardButton
 	holder.AnchorPoint = Vector2.new(0, 1)
-	holder.Position = UDim2.new(0, 0, 1, -2)       -- 下に2pxマージン
-	holder.Size     = UDim2.new(1, 0, 0, 26)       -- カード幅いっぱい
+	holder.Position = UDim2.new(0, 0, 1, -2)              -- 下に2pxマージン
+	holder.Size     = UDim2.new(1, 0, 0, 26)              -- カード幅いっぱい
 	holder.BackgroundTransparency = 0.25
 	holder.BorderSizePixel = 0
 	holder.ZIndex = cardButton.ZIndex + 1
