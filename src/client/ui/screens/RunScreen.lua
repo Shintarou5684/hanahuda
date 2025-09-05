@@ -1,364 +1,119 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- プレイ画面：手札/場/取り札/ボタン と Remotes の受信描画（new(deps) + 初回同期オーバーレイ）
 
 local Run = {}
 Run.__index = Run
 
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
+local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CardImageMap = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
 
---========================
--- 小物UIユーティリティ
---========================
-local function colorForKind(kind:string)
-	if kind == "bright" then return Color3.fromRGB(255,230,140)
-	elseif kind == "seed"  then return Color3.fromRGB(200,240,255)
-	elseif kind == "ribbon"then return Color3.fromRGB(255,200,220)
-	else return Color3.fromRGB(235,235,235) end
-end
+-- Modules
+local Config = ReplicatedStorage:WaitForChild("Config")
+local Theme  = require(Config:WaitForChild("Theme"))
 
-local function makeLabel(parent, name, text, size, pos, anchor)
-	local l = Instance.new("TextLabel")
-	l.Name = name; l.Parent = parent
-	l.BackgroundTransparency = 1
-	l.Text = text or ""; l.TextScaled = true
-	l.Size = size or UDim2.new(0,100,0,24)
-	l.Position = pos or UDim2.new(0,0,0,0)
-	if anchor then l.AnchorPoint = anchor end
-	l.TextXAlignment = Enum.TextXAlignment.Left
-	l.TextYAlignment = Enum.TextYAlignment.Center
-	return l
-end
+-- 相対モジュール
+local components     = script.Parent.Parent:WaitForChild("components")
+local renderersDir   = components:WaitForChild("renderers")
+local HandRenderer   = require(renderersDir:WaitForChild("HandRenderer"))
+local FieldRenderer  = require(renderersDir:WaitForChild("FieldRenderer"))
+local TakenRenderer  = require(renderersDir:WaitForChild("TakenRenderer"))
+local ResultModal    = require(components:WaitForChild("ResultModal"))
+local Overlay        = require(components:WaitForChild("Overlay"))
+local DevTools       = require(components:WaitForChild("DevTools"))
 
-local function makeCardButton(parent, w, h, label, bg)
-	local b = Instance.new("TextButton")
-	b.Parent = parent
-	b.Size   = UDim2.new(0,w,0,h)
-	b.TextWrapped = true
-	b.Text = label
-	b.BackgroundColor3 = bg or Color3.fromRGB(230,230,230)
-	b.AutoButtonColor = true
-	b.BorderSizePixel = 1
-	return b
-end
+local lib        = script.Parent.Parent:WaitForChild("lib")
+local Format     = require(lib:WaitForChild("FormatUtil"))
 
--- 画像カード（クリック可）を作る
-local function makeCardNode(parent, code, w, h)
-	w, h = w or 180, h or 120
+local screensDir = script.Parent
+local UIBuilder  = require(screensDir:WaitForChild("RunScreenUI"))
+local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 
-	local btn = Instance.new("ImageButton")
-	btn.Parent = parent
-	btn.Name = "Card_"..tostring(code or "????")
-	btn.BackgroundTransparency = 1
-	btn.Size = UDim2.fromOffset(w, h)
-	btn.ScaleType = Enum.ScaleType.Fit
-	btn.AutoButtonColor = true
-
-	-- 角丸＆ハイライト用ストローク
-	local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 8); corner.Parent = btn
-	local stroke = Instance.new("UIStroke"); stroke.Thickness = 1; stroke.Color = Color3.fromRGB(0,0,0); stroke.Parent = btn
-
-	-- 画像設定（取得できなければ空）
-	local ok, imgId = pcall(function() return CardImageMap.get(code) end)
-	btn.Image = (ok and imgId) or ""
-
-	-- 比率固定
-	local ar = Instance.new("UIAspectRatioConstraint")
-	ar.AspectRatio = w/h
-	ar.Parent = btn
-
-	-- ちょい拡大アニメ（押下時）
-	local function tweenSize(sz)
-		TweenService:Create(btn, TweenInfo.new(0.06), {Size = sz}):Play()
-	end
-	btn.MouseButton1Down:Connect(function()
-		tweenSize(UDim2.fromOffset(w * 1.04, h * 1.04))
-	end)
-	btn.MouseButton1Up:Connect(function()
-		tweenSize(UDim2.fromOffset(w, h))
-	end)
-	btn.MouseLeave:Connect(function()
-		btn.Size = UDim2.fromOffset(w, h)
-	end)
-
-	return btn
-end
-
---========================
--- 画面本体
---========================
 function Run.new(deps)
 	local self = setmetatable({}, Run)
 	self.deps = deps
-	self._conns = {}
 	self._awaitingInitial = false
+	self._resultShown = false
 
-	-- ルート
-	local g = Instance.new("ScreenGui")
-	g.Name = "RunScreen"; g.ResetOnSpawn = false; g.IgnoreGuiInset = true; g.DisplayOrder = 10; g.Enabled = true
-	self.gui = g
+	-- UI構築
+	local ui = UIBuilder.build(nil) -- ScreenGui込みで作る
+	self.gui      = ui.gui
+	self.frame    = ui.root
+	self.info     = ui.info
+	self.handArea = ui.handArea
+	self.boardRowTop    = ui.boardRowTop
+	self.boardRowBottom = ui.boardRowBottom
+	self.takenBox = ui.takenBox
+	self._scoreBox = ui.scoreBox
+	self.buttons  = ui.buttons
+	self.ROW_H    = ui.metrics.ROW_H
 
-	local frame = Instance.new("Frame")
-	frame.Name = "Root"; frame.Parent = g
-	frame.Size = UDim2.fromScale(1,1)
-	frame.BackgroundTransparency = 1
-	frame.Visible = false
-	self.frame = frame
+	-- Overlay / ResultModal
+	self._overlay     = Overlay.create(self.frame, Theme.loadingText or "次の季節を準備中...")
+	self._resultModal = ResultModal.create(self.frame)
+	self._resultModal:on({
+		home = function() if self.deps.GoHome  then self.deps.GoHome :FireServer() end end,
+		next = function() if self.deps.GoNext  then self.deps.GoNext :FireServer() end end,
+		save = function() if self.deps.SaveQuit then self.deps.SaveQuit:FireServer() end end,
+	})
 
-	-- 上部情報（年を先頭に）
-	local info = makeLabel(frame, "Info",
-		"年:----  季節:--  目標:--  合計:--  残ハンド:--  残リロール:--  倍率:--  Bank:--",
-		UDim2.new(1,-20,0,32), UDim2.new(1,-10,0,6), Vector2.new(1,0))
-	info.TextXAlignment = Enum.TextXAlignment.Right
-	self.info = info
-
-	-- 左：プレイエリア
-	local playArea = Instance.new("Frame"); playArea.Name="PlayArea"; playArea.Parent=frame
-	playArea.BackgroundTransparency = 1; playArea.Position=UDim2.new(0,10,0,44); playArea.Size=UDim2.new(1,-360,1,-140)
-
-	local boardArea = Instance.new("Frame"); boardArea.Name="BoardArea"; boardArea.Parent=playArea
-	boardArea.BackgroundTransparency = 1; boardArea.Size=UDim2.new(1,0,0,220); boardArea.Position=UDim2.new(0,0,0,0)
-
-	local boardRowTop = Instance.new("Frame"); boardRowTop.Name="BoardRowTop"; boardRowTop.Parent=boardArea
-	boardRowTop.BackgroundTransparency = 1; boardRowTop.Size=UDim2.new(1,0,0,104); boardRowTop.Position=UDim2.new(0,0,0,0)
-	local layoutTop = Instance.new("UIListLayout"); layoutTop.Parent = boardRowTop
-	layoutTop.FillDirection=Enum.FillDirection.Horizontal; layoutTop.Padding=UDim.new(0,8)
-
-	local boardRowBottom = Instance.new("Frame"); boardRowBottom.Name="BoardRowBottom"; boardRowBottom.Parent=boardArea
-	boardRowBottom.BackgroundTransparency = 1; boardRowBottom.Size=UDim2.new(1,0,0,104); boardRowBottom.Position=UDim2.new(0,0,0,112)
-	local layoutBottom = Instance.new("UIListLayout"); layoutBottom.Parent = boardRowBottom
-	layoutBottom.FillDirection=Enum.FillDirection.Horizontal; layoutBottom.Padding=UDim.new(0,8)
-
-	local handArea = Instance.new("Frame"); handArea.Name="HandArea"; handArea.Parent=playArea
-	handArea.BackgroundTransparency = 1; handArea.Size=UDim2.new(1,0,0,136); handArea.Position=UDim2.new(0,0,0,232)
-	local handLayout = Instance.new("UIListLayout"); handLayout.Parent = handArea
-	handLayout.FillDirection=Enum.FillDirection.Horizontal; handLayout.Padding=UDim.new(0,8)
-
-	-- 右：取り札+得点
-	local rightPane = Instance.new("Frame"); rightPane.Name="RightPane"; rightPane.Parent=frame
-	rightPane.BackgroundTransparency = 0.15; rightPane.BackgroundColor3 = Color3.fromRGB(235,240,248)
-	rightPane.Size=UDim2.new(0,330,1,-140); rightPane.Position=UDim2.new(1,-340,0,44)
-
-	local _title = makeLabel(rightPane, "TakenTitle", "取り札", UDim2.new(1,-20,0,28), UDim2.new(0,10,0,6))
-	local takenBox = Instance.new("ScrollingFrame"); takenBox.Name="TakenBox"; takenBox.Parent=rightPane
-	takenBox.Size=UDim2.new(1,-20,0,220); takenBox.Position=UDim2.new(0,10,0,40)
-	takenBox.AutomaticCanvasSize = Enum.AutomaticSize.Y; takenBox.CanvasSize = UDim2.new(0,0,0,0); takenBox.ScrollBarThickness = 8
-	takenBox.BackgroundColor3 = Color3.fromRGB(248,252,255); takenBox.BackgroundTransparency = 0.2
-	local takenLayout = Instance.new("UIListLayout"); takenLayout.Parent = takenBox
-	takenLayout.FillDirection=Enum.FillDirection.Vertical; takenLayout.Padding=UDim.new(0,4)
-
-	local scoreBox = makeLabel(rightPane, "ScoreBox", "得点：0\n役：--", UDim2.new(1,-20,0,90), UDim2.new(0,10,0,270))
-	scoreBox.TextYAlignment = Enum.TextYAlignment.Top
-
-	-- 下：アクションバー
-	local actionBar = Instance.new("Frame"); actionBar.Name="ActionBar"; actionBar.Parent=frame
-	actionBar.BackgroundTransparency = 1; actionBar.Size=UDim2.new(1,-20,0,64); actionBar.Position=UDim2.new(0,10,1,-70); actionBar.ZIndex=5
-	local function makeBtn(txt) local b=Instance.new("TextButton"); b.Text=txt; b.TextScaled=true; b.Size=UDim2.new(0.24,0,1,0); b.AutoButtonColor=true; b.BackgroundColor3=Color3.fromRGB(255,255,255); b.BorderSizePixel=1; b.ZIndex=6; b.Parent=actionBar; return b end
-	local btnConfirm    = makeBtn("確定（この手で勝負）");  btnConfirm.Position    = UDim2.new(0.00,0,0,0)
-	local btnRerollAll  = makeBtn("全体リロール");          btnRerollAll.Position  = UDim2.new(0.26,0,0,0)
-	local btnRerollHand = makeBtn("手札だけリロール");      btnRerollHand.Position = UDim2.new(0.52,0,0,0)
-	local btnClearSel   = makeBtn("選択解除");              btnClearSel.Position   = UDim2.new(0.78,0,0,0)
-
-	-- ★ 初回同期オーバーレイ
-	local overlay = Instance.new("Frame")
-	overlay.Name = "LoadingOverlay"; overlay.Parent = frame
-	overlay.Size = UDim2.fromScale(1,1)
-	overlay.BackgroundColor3 = Color3.fromRGB(0,0,0)
-	overlay.BackgroundTransparency = 0.35
-	overlay.Visible = false
-	overlay.ZIndex = 50
-	local msg = makeLabel(overlay, "Msg", "次の季節を準備中...", UDim2.new(0,480,0,48), UDim2.new(0.5,0,0.5,0), Vector2.new(0.5,0.5))
-	msg.TextXAlignment = Enum.TextXAlignment.Center
-
-	-- ★ 結果モーダル用の暗幕（背面クリック無効）
-	local modalOverlay = Instance.new("TextButton")
-	modalOverlay.Name = "ResultBackdrop"; modalOverlay.Parent = frame
-	modalOverlay.Size = UDim2.fromScale(1,1)
-	modalOverlay.Position = UDim2.fromScale(0,0)
-	modalOverlay.BackgroundColor3 = Color3.fromRGB(0,0,0)
-	modalOverlay.BackgroundTransparency = 0.35
-	modalOverlay.AutoButtonColor = false
-	modalOverlay.Text = ""
-	modalOverlay.Visible = false
-	modalOverlay.ZIndex = 99
-
-	-- ★ 冬クリア用の結果モーダル
-	local resultModal = Instance.new("Frame")
-	resultModal.Name = "ResultModal"; resultModal.Parent = frame
-	resultModal.Visible = false
-	resultModal.Size = UDim2.new(0, 520, 0, 260)
-	resultModal.Position = UDim2.new(0.5, 0, 0.5, 0)
-	resultModal.AnchorPoint = Vector2.new(0.5, 0.5)
-	resultModal.BackgroundColor3 = Color3.fromRGB(255,255,255)
-	resultModal.ZIndex = 100
-	local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0,16); corner.Parent = resultModal
-	local rmTitle = makeLabel(resultModal, "RmTitle", "冬 クリア！ +2両", UDim2.new(1,-20,0,48), UDim2.new(0.5,0,0,16), Vector2.new(0.5,0))
-	rmTitle.TextXAlignment = Enum.TextXAlignment.Center; rmTitle.Font = Enum.Font.GothamBold
-	local rmDesc  = makeLabel(resultModal, "RmDesc", "次の行き先を選んでください。", UDim2.new(1,-40,0,32), UDim2.new(0.5,0,0,70), Vector2.new(0.5,0))
-	rmDesc.TextXAlignment = Enum.TextXAlignment.Center
-
-	local btnRow = Instance.new("Frame"); btnRow.Parent = resultModal
-	btnRow.Size = UDim2.new(1,-40,0,64); btnRow.Position = UDim2.new(0.5,0,0,120); btnRow.AnchorPoint = Vector2.new(0.5,0)
-	btnRow.BackgroundTransparency = 1; btnRow.ZIndex = 101
-	local layout = Instance.new("UIListLayout", btnRow)
-	layout.FillDirection = Enum.FillDirection.Horizontal
-	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	layout.Padding = UDim.new(0, 16)
-
-	local function makeChoice(text)
-		local b = Instance.new("TextButton")
-		b.Size = UDim2.new(0.31, 0, 1, 0)
-		b.Text = text
-		b.AutoButtonColor = true
-		b.BackgroundColor3 = Color3.fromRGB(240,240,240)
-		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = b
-		b.Parent = btnRow
-		b.ZIndex = 102
-		b:SetAttribute("OrigText", text)
-		return b
-	end
-	local btnHome = makeChoice("帰宅する（TOPへ）")
-	local btnNext = makeChoice("次のステージへ（+25年＆屋台）")
-	local btnSave = makeChoice("セーブして終了")
-
-	local function setLocked(button, locked, reason)
-		local orig = button:GetAttribute("OrigText") or button.Text
-		if locked then
-			button.AutoButtonColor = false
-			button.BackgroundColor3 = Color3.fromRGB(220,220,220)
-			button.Text = orig .. "  🔒"
-			button:SetAttribute("locked", true)
-			if reason then button:SetAttribute("reason", reason) end
-		else
-			button.AutoButtonColor = true
-			button.BackgroundColor3 = Color3.fromRGB(240,240,240)
-			button.Text = orig
-			button:SetAttribute("locked", false)
-		end
+	-- Studio専用 DevTools
+	if RunService:IsStudio() and (self.deps.DevGrantRyo or self.deps.DevGrantRole) then
+		DevTools.create(self.frame, self.deps, { grantRyoAmount = 1000, offsetX = 10, offsetY = 10, width = 160, height = 32 })
 	end
 
 	-- 内部状態
-	local selectedHandIdx : number? = nil
+	self._selectedHandIdx = nil
 
-	local function clearButtons(container)
-		for _,c in ipairs(container:GetChildren()) do
-			if c:IsA("TextButton") or c:IsA("ImageButton") or c:IsA("TextLabel") or c:IsA("Frame") or c:IsA("ImageLabel") then
-				-- ボタン行の子は消さない（ResultModalのUIは保持）
-				if container ~= btnRow then
-					c:Destroy()
-				end
-			end
-		end
-	end
-
-	local function highlightHandButtons()
-		for _,node in ipairs(handArea:GetChildren()) do
-			if node:IsA("ImageButton") or node:IsA("TextButton") then
-				local myIdx = node:GetAttribute("index")
-				local on = (selectedHandIdx ~= nil and myIdx == selectedHandIdx)
-				local stroke = node:FindFirstChildOfClass("UIStroke")
-				if stroke then
-					stroke.Thickness = on and 4 or 1
-					stroke.Color = on and Color3.fromRGB(255,180,0) or Color3.fromRGB(0,0,0)
-					stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-				end
-				if node:IsA("TextButton") then
-					node.BorderSizePixel = on and 4 or 1
-					node.BorderColor3 = on and Color3.fromRGB(255,180,0) or Color3.fromRGB(0,0,0)
-				end
-			end
-		end
-	end
-
-	--========================
-	-- Hand / Field / Taken
-	--========================
+	-- レンダラー適用
 	local function renderHand(hand)
-		print("[RunScreen] renderHand #", #(hand or {}))
-		clearButtons(handArea); selectedHandIdx = nil
-		for i, card in ipairs(hand or {}) do
-			local code = card.code or string.format("%02d%02d", card.month, card.idx)
-			local node = makeCardNode(handArea, code, 180, 120)
-			node:SetAttribute("index", i)
-			node.MouseButton1Click:Connect(function()
-				if selectedHandIdx == i then selectedHandIdx = nil else selectedHandIdx = i end
-				highlightHandButtons()
-			end)
-		end
-		if self._awaitingInitial then
-			overlay.Visible = false
-			self._awaitingInitial = false
-		end
+		HandRenderer.render(self.handArea, hand, {
+			width = 90, height = 150,
+			selectedIndex = self._selectedHandIdx,
+			onSelect = function(i)
+				-- ★ MisleadingAndOr 対応（トグルを if-else で明示）
+				if self._selectedHandIdx == i then
+					self._selectedHandIdx = nil
+				else
+					self._selectedHandIdx = i
+				end
+
+				-- 再ハイライト（最小で済ませるため再呼び出し）
+				HandRenderer.render(self.handArea, hand, {
+					width = 90, height = 150,
+					selectedIndex = self._selectedHandIdx,
+					onSelect = function(ii)
+						-- ★ MisleadingAndOr 対応（こちらも if-else）
+						if self._selectedHandIdx == ii then
+							self._selectedHandIdx = nil
+						else
+							self._selectedHandIdx = ii
+						end
+						HandRenderer.render(self.handArea, hand, {
+							width = 90, height = 150,
+							selectedIndex = self._selectedHandIdx,
+							onSelect = function(...) end
+						})
+					end
+				})
+			end
+		})
+		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
 	end
 
 	local function renderField(field)
-		clearButtons(boardRowTop); clearButtons(boardRowBottom)
-		local n = #(field or {}); local split = math.ceil(n/2)
-		for i,card in ipairs(field or {}) do
-			local code = card.code or string.format("%02d%02d", card.month, card.idx)
-			local parentRow = (i<=split) and boardRowTop or boardRowBottom
-			local node = makeCardNode(parentRow, code, 180, 96)
-			node:SetAttribute("bindex", i)
-			node.MouseButton1Click:Connect(function()
-				if selectedHandIdx then
-					deps.ReqPick:FireServer(selectedHandIdx, i)
-					selectedHandIdx = nil
-					highlightHandButtons()
+		FieldRenderer.render(self.boardRowTop, self.boardRowBottom, field, {
+			width = 80, height = (self.ROW_H - 16),
+			onPick = function(bindex)
+				if self._selectedHandIdx then
+					self.deps.ReqPick:FireServer(self._selectedHandIdx, bindex)
+					self._selectedHandIdx = nil
+					-- 手札のハイライトも解除したいので、直近ハンドで再描画はScore/State/HandPushの次イベントに任せる
 				end
-			end)
-		end
+			end
+		})
 	end
 
--- RunScreen.lua: renderTaken を安全化版に置換
-local function renderTaken(cards)
-	-- 既存の子要素とレイアウトをクリア
-	for _,c in ipairs(takenBox:GetChildren()) do
-		c:Destroy()
-	end
-	-- グリッドレイアウト
-	local grid = Instance.new("UIGridLayout")
-	grid.CellSize   = UDim2.new(0, 66, 0, 88)
-	grid.CellPadding= UDim2.new(0, 6, 0, 6)
-	grid.SortOrder  = Enum.SortOrder.LayoutOrder
-	grid.Parent     = takenBox
-
-	for i,card in ipairs(cards or {}) do
-		-- month / idx は欠けることがある → 数値化して無ければ 0 に
-		local m   = tonumber(card and card.month) or 0
-		local idx = tonumber(card and card.idx)   or 0
-
-		-- code があれば優先、無ければ 00埋めで生成（m/idx が 0 でもOK）
-		local code = (type(card)=="table" and card.code and card.code ~= "") and card.code
-			or string.format("%02d%02d", m, idx)
-
-		local node = makeCardNode(takenBox, code, 66, 88)
-		node.AutoButtonColor = false
-		node.LayoutOrder = i
-
-		-- tipは %s に統一して tostring で nil を吸収（ここがクラッシュ原因の本丸）
-		local kind = (type(card)=="table" and card.kind) or ""
-		local name = (type(card)=="table" and card.name) or ""
-		node:SetAttribute("tip", string.format("月%s %s %s", tostring(m), tostring(kind), tostring(name)))
-	end
-end
-
-
-	--========================
-	-- ScorePush
-	--========================
-	local function rolesToLines(roles)
-		if typeof(roles) ~= "table" then return "--" end
-		local names = {
-			five_bright="五光", four_bright="四光", rain_four_bright="雨四光", three_bright="三光",
-			inoshikacho="猪鹿蝶", red_ribbon="赤短", blue_ribbon="青短",
-			seeds="たね", ribbons="たん", chaffs="かす", hanami="花見で一杯", tsukimi="月見で一杯"
-		}
-		local list = {}
-		for k,_ in pairs(roles) do table.insert(list, names[k] or k) end
-		table.sort(list)
-		return (#list > 0) and table.concat(list, " / ") or "--"
+	local function renderTaken(cards)
+		TakenRenderer.render(self.takenBox, cards, { cellW = 80, cellH = 112 })
 	end
 
 	local function onScore(total, roles, detail)
@@ -367,208 +122,60 @@ end
 		local mon = tonumber(detail.mon) or 0
 		local pts = tonumber(detail.pts) or 0
 		local tot = tonumber(total) or 0
-		local box = self._scoreBox or scoreBox
-		if not box then return end
-		box.Text = ("得点：%d（文%d × 点%d）\n役：%s"):format(tot, mon, pts, rolesToLines(roles))
+		local box = self._scoreBox
+		if box then
+			box.Text = ("得点：%d（文%d × 点%d）\n役：%s"):format(tot, mon, pts, Format.rolesToLines(roles))
+		end
 	end
 
-	--========================
-	-- StatePush（年先頭）
-	--========================
 	local function onState(st)
-		local ytxt = (st and st.year and tonumber(st.year) and st.year > 0) and tostring(st.year) or "----"
-		info.Text = ("年:%s  季節:%s  目標:%d  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d")
-			:format(
-				ytxt,
-				st.seasonStr or ("季節"..tostring(st.season or 0)),
-				st.target or 0, st.sum or 0, st.hands or 0, st.rerolls or 0,
-				st.mult or 1, st.bank or 0, st.deckLeft or 0, st.handLeft or 0
-			)
-		if self._awaitingInitial then
-			overlay.Visible = false
-			self._awaitingInitial = false
+		self.info.Text = Format.stateLineText(st)
+		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
+		self._resultShown = false
+	end
+
+	local function onStageResult(a, b, _c, _d, _e)
+		if typeof(a) ~= "boolean" or a ~= true then return end
+		if typeof(b) ~= "table" then return end
+		if self._resultShown then return end
+		self._resultShown = true
+
+		local data = b
+		self._resultModal:show(data)
+
+		local clears = tonumber(data.clears) or 0
+		local canNext, canSave = false, false
+		if typeof(data.options) == "table" then
+			if typeof(data.options.goNext) == "table" then canNext = (data.options.goNext.enabled == true) end
+			if typeof(data.options.saveQuit) == "table" then canSave = (data.options.saveQuit.enabled == true) end
 		end
+		if not canNext and data.canNext ~= nil then canNext = (data.canNext == true) end
+		if not canSave and data.canSave ~= nil then canSave = (data.canSave == true) end
+		if clears >= 3 then canNext, canSave = true, true end
+
+		self._resultModal:setLocked(not canNext, not canSave)
 	end
 
---========================
--- StageResult（冬クリア）
---========================
-local function onStageResult(a, b, c, d, e)
-	-- ★ 形式チェック：true 以外は無視、payload(table)なしは無視
-	if typeof(a) ~= "boolean" or a ~= true then return end
-	if typeof(b) ~= "table" then
-		print("[Run] StageResult ignored (no payload)")
-		return
-	end
-	-- ★ 二重受信ガード
-	if self._resultShown then
-		print("[Run] StageResult ignored (duplicate)")
-		return
-	end
-	self._resultShown = true
-
-	local data = b
-
-	-- ★★ DEBUG: 受信ペイロードの要点を出力
-	local dbgClears  = tonumber(data.clears) or -1
-	local dbgCanNext = (data.canNext ~= nil) and tostring(data.canNext) or "nil"
-	local dbgCanSave = (data.canSave ~= nil) and tostring(data.canSave) or "nil"
-	print(("[Run] StageResult recv | clears=%d canNext=%s canSave=%s"):format(dbgClears, dbgCanNext, dbgCanSave))
-
-	resultModal.Visible = true
-	modalOverlay.Visible = true
-	actionBar.Visible = false
-	playArea.Visible = false
-
-	local add = tonumber(data.rewardBank) or 2
-	rmTitle.Text = ("冬 クリア！ +%d両"):format(add)
-	rmDesc.Text  = data.message or "次の行き先を選んでください。"
-
-	-- 進捗（messageが無い場合は補助表示）
-	local clears = tonumber(data.clears) or 0
-	if not data.message then
-		rmDesc.Text = ("次の行き先を選んでください。（進捗: 通算 %d/3 クリア）"):format(clears)
-	end
-
-	-- === 解禁フラグの解釈（options優先 → 直フラグ → clears>=3 フォールバック）===
-	local canNext, canSave = false, false
-	if typeof(data.options) == "table" then
-		if typeof(data.options.goNext) == "table" then
-			canNext = (data.options.goNext.enabled == true)
-		end
-		if typeof(data.options.saveQuit) == "table" then
-			canSave = (data.options.saveQuit.enabled == true)
-		end
-	end
-	if not canNext and data.canNext ~= nil then canNext = (data.canNext == true) end
-	if not canSave and data.canSave ~= nil then canSave = (data.canSave == true) end
-	if clears >= 3 then canNext, canSave = true, true end
-
-	-- ★★ DEBUG: クライアント側の最終解釈
-	print(("[Run] interpreted | canNext=%s canSave=%s (clears=%d)")
-		:format(tostring(canNext), tostring(canSave), clears))
-
-	-- 文言を「通算3回クリア」に統一
-	setLocked(btnNext, not canNext, "通算3回クリアで解放")
-	setLocked(btnSave, not canSave, "通算3回クリアで解放")
-end
-
-
-
-	--========================
-	-- ボタン操作
-	--========================
-	btnConfirm.MouseButton1Click:Connect(function() deps.Confirm:FireServer() end)
-	btnRerollAll.MouseButton1Click:Connect(function() deps.ReqRerollAll:FireServer() end)
-	btnRerollHand.MouseButton1Click:Connect(function() deps.ReqRerollHand:FireServer() end)
-	btnClearSel.MouseButton1Click:Connect(function()
-		selectedHandIdx = nil
-		for _,b in ipairs(handArea:GetChildren()) do
-			if b:IsA("TextButton") or b:IsA("ImageButton") then
-				local stroke = b:FindFirstChildOfClass("UIStroke")
-				if stroke then stroke.Thickness = 1; stroke.Color = Color3.fromRGB(0,0,0) end
-				if b:IsA("TextButton") then b.BorderSizePixel = 1 end
-			end
-		end
+	-- ボタン
+	self.buttons.confirm.MouseButton1Click:Connect(function() self.deps.Confirm:FireServer() end)
+	self.buttons.rerollAll.MouseButton1Click:Connect(function() self.deps.ReqRerollAll:FireServer() end)
+	self.buttons.rerollHand.MouseButton1Click:Connect(function() self.deps.ReqRerollHand:FireServer() end)
+	self.buttons.clearSel.MouseButton1Click:Connect(function()
+		self._selectedHandIdx = nil
+		-- 実際のハイライト解除は、次の HandPush で再描画されると自然に消える
 	end)
 
-	-- 多重送信防止
-	local function disableChoices()
-		for _,b in ipairs(btnRow:GetChildren()) do
-			if b:IsA("TextButton") then
-				b.Active = false
-				b.AutoButtonColor = false
-			end
-		end
-	end
+	-- Remotes 接続管理
+	self._remotes = RemotesCtl.create(self.deps, {
+		onHand = renderHand,
+		onField = renderField,
+		onTaken = renderTaken,
+		onScore = onScore,
+		onState = onState,
+		onStageResult = onStageResult,
+	})
 
-	local function ifNotLocked(button, fn)
-		button.MouseButton1Click:Connect(function()
-			if button:GetAttribute("locked") then return end
-			fn()
-		end)
-	end
-	ifNotLocked(btnHome, function()
-		disableChoices()
-		resultModal.Visible = false
-		modalOverlay.Visible = false
-		actionBar.Visible = true
-		playArea.Visible = true
-		if deps.DecideNext then deps.DecideNext:FireServer("home") end
-	end)
-	ifNotLocked(btnNext, function()
-		disableChoices()
-		resultModal.Visible = false
-		modalOverlay.Visible = false
-		actionBar.Visible = true
-		playArea.Visible = true
-		if deps.DecideNext then deps.DecideNext:FireServer("next") end
-	end)
-	ifNotLocked(btnSave, function()
-		disableChoices()
-		resultModal.Visible = false
-		modalOverlay.Visible = false
-		actionBar.Visible = true
-		playArea.Visible = true
-		if deps.DecideNext then deps.DecideNext:FireServer("save") end
-	end)
-
-	--========================
-	-- Remote接続（画面表示時のみ）
-	--========================
-	local function connectRemotes()
-		table.insert(self._conns, deps.HandPush .OnClientEvent:Connect(renderHand))
-		table.insert(self._conns, deps.FieldPush.OnClientEvent:Connect(renderField))
-		table.insert(self._conns, deps.TakenPush.OnClientEvent:Connect(renderTaken))
-		table.insert(self._conns, deps.ScorePush.OnClientEvent:Connect(onScore))
-		table.insert(self._conns, deps.StatePush.OnClientEvent:Connect(onState))
-		if deps.StageResult then
-			table.insert(self._conns, deps.StageResult.OnClientEvent:Connect(function(...) onStageResult(...) end))
-		end
-	end
-	local function disconnectRemotes()
-		for _,c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
-		table.clear(self._conns)
-	end
-	self._connectRemotes   = connectRemotes
-	self._disconnectRemotes= disconnectRemotes
-
-	-- Studio DEV ボタン
-	if RunService:IsStudio() and (deps.DevGrantRyo or deps.DevGrantRole) then
-		local devFrame = Instance.new("Frame")
-		devFrame.Name = "DevRow"; devFrame.AnchorPoint = Vector2.new(0.5, 1)
-		devFrame.Position = UDim2.new(0.5, 0, 0.86, 0)
-		devFrame.Size = UDim2.new(0, 160, 0, 32)
-		devFrame.BackgroundTransparency = 1
-		devFrame.Parent = frame
-		local dlayout = Instance.new("UIListLayout")
-		dlayout.FillDirection = Enum.FillDirection.Horizontal
-		dlayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		dlayout.Padding = UDim.new(0, 8)
-		dlayout.Parent = devFrame
-		local function makeDevBtn(t, fn)
-			local b = Instance.new("TextButton")
-			b.Size = UDim2.new(0, 70, 1, 0)
-			b.Text = t
-			b.AutoButtonColor = true
-			b.BackgroundColor3 = Color3.fromRGB(35,130,90)
-			b.TextColor3 = Color3.fromRGB(255,255,255)
-			b.Font = Enum.Font.GothamBold
-			b.TextSize = 16
-			b.Parent = devFrame
-			local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = b
-			b.Activated:Connect(fn)
-		end
-		if deps.DevGrantRole then makeDevBtn("+役", function() deps.DevGrantRole:FireServer() end) end
-		if deps.DevGrantRyo  then makeDevBtn("+両", function() deps.DevGrantRyo:FireServer(1000) end) end
-	end
-
-	-- 参照保持
-	self._takenBox = takenBox
-	self._scoreBox = scoreBox
-	self._overlay  = overlay
-
-	-- Router.call 互換（self付き呼び出しに対応）
+	-- Router.call 互換
 	self.onHand        = function(_, hand)                 renderHand(hand) end
 	self.onField       = function(_, field)                renderField(field) end
 	self.onTaken       = function(_, taken)                renderTaken(taken) end
@@ -579,30 +186,26 @@ end
 	return self
 end
 
---========================
--- 画面の公開API
---========================
 function Run:show()
 	self.frame.Visible = true
-	self:_disconnectRemotes()
-	self:_connectRemotes()
+	self._remotes:disconnect()
+	self._remotes:connect()
 end
 
--- 新ラウンド直後の再同期（1回だけ）
 function Run:requestSync()
 	if not self.deps or not self.deps.ReqSyncUI then return end
 	self._awaitingInitial = true
-	if self._overlay then self._overlay.Visible = true end
+	if self._overlay then self._overlay:show() end
 	self.deps.ReqSyncUI:FireServer()
 end
 
 function Run:hide()
 	self.frame.Visible = false
-	self:_disconnectRemotes()
+	self._remotes:disconnect()
 end
 
 function Run:destroy()
-	self:_disconnectRemotes()
+	self._remotes:disconnect()
 	if self.gui then self.gui:Destroy() end
 end
 

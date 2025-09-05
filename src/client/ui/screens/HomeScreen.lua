@@ -11,6 +11,17 @@ local function setInteractable(btn: TextButton, on: boolean)
 	btn.TextTransparency = on and 0 or 0.4
 end
 
+-- 軽量通知（SetCoreが失敗しても落ちない）
+local function notify(title: string, text: string, duration: number?)
+	pcall(function()
+		game.StarterGui:SetCore("SendNotification", {
+			Title = title,
+			Text = text,
+			Duration = duration or 2,
+		})
+	end)
+end
+
 function Home.new(deps)
 	local self = setmetatable({}, Home)
 	self.deps = deps
@@ -24,61 +35,164 @@ function Home.new(deps)
 	g.Enabled = false
 	self.gui = g
 
-	-- 背景
-	local bg = Instance.new("Frame")
+	--========================
+	-- 背景画像（TOPアート：絵のみ）
+	--========================
+	local bg = Instance.new("ImageLabel")
+	bg.Name = "Background"
 	bg.Size = UDim2.fromScale(1,1)
-	bg.BackgroundColor3 = Color3.fromRGB(10,12,16)
-	bg.BackgroundTransparency = 0.2
+	bg.Position = UDim2.fromOffset(0,0)
+	bg.BackgroundTransparency = 1
+	bg.Image = "rbxassetid://132353504528822" -- 背景イメージID（絵のみ）
+	bg.ScaleType = Enum.ScaleType.Crop
+	bg.ZIndex = 0
 	bg.Parent = g
 
-	-- タイトル
-	local title = Instance.new("TextLabel")
-	title.Size = UDim2.new(1,0,0,80)
-	title.Position = UDim2.new(0,0,0,40)
-	title.BackgroundTransparency = 1
-	title.Text = "花札 × 倍率ローグ"
-	title.Font = Enum.Font.GothamBold
-	title.TextScaled = true
-	title.TextColor3 = Color3.fromRGB(240,240,240)
-	title.Parent = bg
+	-- 可読性向上の薄いディマー（やや強めに調整）
+	local dim = Instance.new("Frame")
+	dim.Name = "Dimmer"
+	dim.Size = UDim2.fromScale(1,1)
+	dim.BackgroundColor3 = Color3.fromRGB(0,0,0)
+	dim.BackgroundTransparency = 0.32 -- 0.28 → 0.32
+	dim.ZIndex = 1
+	dim.Parent = g
+
+	local grad = Instance.new("UIGradient")
+	grad.Rotation = 90
+	grad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.fromRGB(0,0,0)),
+		ColorSequenceKeypoint.new(0.20, Color3.fromRGB(40,40,40)),
+		ColorSequenceKeypoint.new(0.50, Color3.fromRGB(70,70,70)),
+		ColorSequenceKeypoint.new(0.80, Color3.fromRGB(40,40,40)),
+		ColorSequenceKeypoint.new(1.00, Color3.fromRGB(0,0,0)),
+	})
+	grad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0.00, 0.48),
+		NumberSequenceKeypoint.new(0.20, 0.40),
+		NumberSequenceKeypoint.new(0.50, 0.22), -- 0.18 → 0.22
+		NumberSequenceKeypoint.new(0.80, 0.40),
+		NumberSequenceKeypoint.new(1.00, 0.48),
+	})
+	grad.Parent = dim
+
+	-- 前景レイヤ
+	local ui = Instance.new("Frame")
+	ui.Name = "UIRoot"
+	ui.Size = UDim2.fromScale(1,1)
+	ui.BackgroundTransparency = 1
+	ui.ZIndex = 2
+	ui.Parent = g
+
+	-- タイトル（日本語）
+	local titleJP = Instance.new("TextLabel")
+	titleJP.Name = "TitleJP"
+	titleJP.Size = UDim2.new(1,0,0,76)
+	titleJP.Position = UDim2.new(0,0,0,36)
+	titleJP.BackgroundTransparency = 1
+	titleJP.Text = "極楽蝶"
+	titleJP.Font = Enum.Font.GothamBlack
+	titleJP.TextScaled = true
+	titleJP.TextColor3 = Color3.fromRGB(245,245,245)
+	titleJP.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+	titleJP.TextStrokeTransparency = 0.25 -- 0.35 → 0.25（可読性UP）
+	titleJP.ZIndex = 2
+	titleJP.Parent = ui
+
+	-- サブタイトル（英語）
+	local titleEN = Instance.new("TextLabel")
+	titleEN.Name = "TitleEN"
+	titleEN.Size = UDim2.new(1,0,0,38)
+	titleEN.Position = UDim2.new(0,0,0,104)
+	titleEN.BackgroundTransparency = 1
+	titleEN.Text = "Hanahuda Rogue" -- 指定の綴り
+	titleEN.Font = Enum.Font.Gotham
+	titleEN.TextScaled = true
+	titleEN.TextColor3 = Color3.fromRGB(235,235,235)
+	titleEN.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+	titleEN.TextStrokeTransparency = 0.35 -- 0.45 → 0.35
+	titleEN.ZIndex = 2
+	titleEN.Parent = ui
 
 	-- ステータス（年 / 両 / 進捗）
 	local status = Instance.new("TextLabel")
 	status.Name = "Status"
-	status.Size = UDim2.new(1,0,0,28)
-	status.Position = UDim2.new(0,0,0,110)
+	status.Size = UDim2.new(1,0,0,26)
+	status.Position = UDim2.new(0,0,0,146)
 	status.BackgroundTransparency = 1
 	status.Text = "年:----  両:0  進捗: 通算 0/3 クリア"
 	status.Font = Enum.Font.Gotham
 	status.TextSize = 20
-	status.TextColor3 = Color3.fromRGB(220,220,220)
+	status.TextColor3 = Color3.fromRGB(230,230,230)
+	status.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+	status.TextStrokeTransparency = 0.6
 	status.TextXAlignment = Enum.TextXAlignment.Center
-	status.Parent = bg
+	status.ZIndex = 2
+	status.Parent = ui
 	self.statusLabel = status
 
-	-- ボタンFactory
-	local function makeBtn(text, y)
+	--========================
+	-- メニュー：中央寄せ
+	--========================
+	local menu = Instance.new("Frame")
+	menu.Name = "Menu"
+	menu.Size = UDim2.new(0, 360, 0, 10) -- 高さは自動
+	menu.AutomaticSize = Enum.AutomaticSize.Y
+	menu.BackgroundTransparency = 1
+	menu.AnchorPoint = Vector2.new(0.5, 0.5)
+	menu.Position = UDim2.fromScale(0.5, 0.55) -- 画面中央やや下
+	menu.ZIndex = 2
+	menu.Parent = ui
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 10)
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = menu
+
+	local function makeBtn(text)
 		local b = Instance.new("TextButton")
-		b.Size = UDim2.new(0, 320, 0, 56)
-		b.Position = UDim2.new(0.5, -160, 0, 140 + (y * 66))
+		b.Size = UDim2.new(1, 0, 0, 56)
 		b.BackgroundColor3 = Color3.fromRGB(30,34,44)
+		b.BackgroundTransparency = 0.12
 		b.BorderSizePixel = 0
 		b.AutoButtonColor = true
 		b.Text = text
 		b.TextColor3 = Color3.fromRGB(235,235,235)
 		b.Font = Enum.Font.GothamMedium
 		b.TextSize = 22
-		b.Parent = bg
+		b.ZIndex = 2
+		b.Parent = menu
 		local uic = Instance.new("UICorner"); uic.CornerRadius = UDim.new(0, 12); uic.Parent = b
 		local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(70,75,90); stroke.Thickness = 1; stroke.Parent = b
+		local shadow = Instance.new("UIStroke"); shadow.Color = Color3.fromRGB(0,0,0); shadow.Thickness = 3; shadow.Transparency = 0.9; shadow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; shadow.Parent = b
 		return b
 	end
 
-	self.btnNew      = makeBtn("NEW GAME（新しく始める）", 0)
-	self.btnShrine   = makeBtn("神社（恒久強化）",        1)
-	self.btnItems    = makeBtn("持ち物（所持確認）",      2)
-	self.btnSettings = makeBtn("設定",                    3)
-	self.btnCont     = makeBtn("前回の続き（CONTINUE）",  4)
+	self.btnNew      = makeBtn("NEW GAME")
+	self.btnShrine   = makeBtn("神社（開発中）")
+	self.btnItems    = makeBtn("持ち物（開発中）")
+	self.btnSettings = makeBtn("設定（開発中）")
+	self.btnCont     = makeBtn("CONTINUE（開発中）")
+
+	--========================
+	-- BETA TEST バッジ（画面右下固定）
+	--========================
+	local beta = Instance.new("TextLabel")
+	beta.Name = "BetaBadge"
+	beta.AnchorPoint = Vector2.new(1,1)
+	beta.Position = UDim2.new(1, -16, 1, -12) -- 画面右下
+	beta.BackgroundTransparency = 0.25
+	beta.BackgroundColor3 = Color3.fromRGB(20,22,28)
+	beta.Text = "BETA TEST"
+	beta.Font = Enum.Font.GothamBold
+	beta.TextSize = 16
+	beta.TextColor3 = Color3.fromRGB(255,255,255)
+	beta.ZIndex = 3
+	beta.Parent = ui -- メニューではなく画面固定に変更
+	local betaCorner = Instance.new("UICorner"); betaCorner.CornerRadius = UDim.new(0, 8); betaCorner.Parent = beta
+	local betaPad = Instance.new("UIPadding"); betaPad.PaddingLeft = UDim.new(0,10); betaPad.PaddingRight = UDim.new(0,10); betaPad.PaddingTop = UDim.new(0,4); betaPad.PaddingBottom = UDim.new(0,4); betaPad.Parent = beta
+
 	-- 初期は無効（HomeOpenで有効化）
 	setInteractable(self.btnCont, false)
 
@@ -95,38 +209,21 @@ function Home.new(deps)
 	end)
 
 	self.btnShrine.Activated:Connect(function()
-		-- 画面遷移があれば使う／なければトースト
-		if self.deps.showShrine then
-			self.deps.showShrine()
-			self:hide()
-		else
-			pcall(function()
-				game.StarterGui:SetCore("SendNotification", {Title="神社", Text="開発中：恒久強化ショップ", Duration=2})
-			end)
-		end
+		notify("神社", "開発中：恒久強化ショップ", 2)
 	end)
 
 	self.btnItems.Activated:Connect(function()
-		pcall(function()
-			game.StarterGui:SetCore("SendNotification", {Title="持ち物", Text="開発中：所持品一覧", Duration=2})
-		end)
+		notify("持ち物", "開発中：所持品一覧", 2)
 	end)
 
 	self.btnSettings.Activated:Connect(function()
-		pcall(function()
-			game.StarterGui:SetCore("SendNotification", {Title="設定", Text="開発中：サウンド/UI/操作", Duration=2})
-		end)
+		notify("設定", "開発中：サウンド/UI/操作", 2)
 	end)
 
 	self.btnCont.Activated:Connect(function()
+		-- v0.8.2 MVP：セーブ未実装のためスタブのみ
 		if not self.btnCont.Active then return end
-		if self.deps.showRun then self.deps.showRun() end
-		if self.deps.remotes and self.deps.remotes.ReqContinueRun then
-			self.deps.remotes.ReqContinueRun:FireServer()
-		elseif self.deps.ReqContinueRun then
-			self.deps.ReqContinueRun:FireServer()
-		end
-		self:hide()
+		notify("CONTINUE", "次回対応（セーブ未実装）", 2)
 	end)
 
 	return self

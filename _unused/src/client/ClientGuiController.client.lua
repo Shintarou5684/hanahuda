@@ -87,12 +87,13 @@ local function clearChildrenButtons(frame)
 	end
 end
 
+
 --==================================================
 -- 画面レイアウト（大枠）
 --==================================================
 -- infoバー（最上段）
 local info = makeLabel(gui, "Info",
-	"季節:--  目標:--  合計:--  残ハンド:--  残リロール:--  倍率:--  Bank:--",
+	"季節:--  目標スコア:--  合計:--  残ハンド:--  残リロール:--  倍率:--  Bank:--",
 	UDim2.new(1,-20,0,32), UDim2.new(0,10,0,6))
 
 -- 左：プレイエリア（場札 2段 + 手札1段 を同じ枠に収容）
@@ -159,7 +160,7 @@ local takenList = Instance.new("UIListLayout", takenBox)
 takenList.FillDirection = Enum.FillDirection.Vertical
 takenList.Padding       = UDim.new(0,4)
 
-local scoreBox = makeLabel(rightPane, "ScoreBox", "得点：0\n役：--", UDim2.new(1,-20,0,90), UDim2.new(0,10,0,270))
+local scoreBox = makeLabel(rightPane, "ScoreBox", "スコア：0\n役：--", UDim2.new(1,-20,0,90), UDim2.new(0,10,0,270))
 scoreBox.TextYAlignment = Enum.TextYAlignment.Top
 
 --==================================================
@@ -183,9 +184,9 @@ local function makeBtn(txt)
 	return b
 end
 
-local btnConfirm    = makeBtn("確定（この手で勝負）");  btnConfirm.Parent    = actionBar; btnConfirm.Position    = UDim2.new(0.00,0,0,0)
-local btnRerollAll  = makeBtn("全体リロール");          btnRerollAll.Parent  = actionBar; btnRerollAll.Position  = UDim2.new(0.26,0,0,0)
-local btnRerollHand = makeBtn("手札だけリロール");      btnRerollHand.Parent = actionBar; btnRerollHand.Position = UDim2.new(0.52,0,0,0)
+local btnConfirm    = makeBtn("清算");  btnConfirm.Parent    = actionBar; btnConfirm.Position    = UDim2.new(0.00,0,0,0)
+local btnRerollAll  = makeBtn("リロール");          btnRerollAll.Parent  = actionBar; btnRerollAll.Position  = UDim2.new(0.26,0,0,0)
+local btnRerollHand = makeBtn("手札を引き直す");      btnRerollHand.Parent = actionBar; btnRerollHand.Position = UDim2.new(0.52,0,0,0)
 local btnClearSel   = makeBtn("選択解除");              btnClearSel.Parent   = actionBar; btnClearSel.Position   = UDim2.new(0.78,0,0,0)
 
 --==================================================
