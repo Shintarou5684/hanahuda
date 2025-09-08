@@ -9,6 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 -- Modules
 local Config = ReplicatedStorage:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
+local Locale = require(Config:WaitForChild("Locale")) -- ★ 追加：言語の明示引き渡し
 
 -- 相対モジュール
 local components     = script.Parent.Parent:WaitForChild("components")
@@ -27,11 +28,11 @@ local screensDir = script.Parent
 local UIBuilder  = require(screensDir:WaitForChild("RunScreenUI"))
 local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 
+-- "目標:123" or "Target:123" の数値だけ抜く
 local function extractGoalFromInfoText(text)
-	-- "目標:123" を抽出（半角スペース可）
 	if type(text) ~= "string" then return nil end
-	local num = string.match(text, "目標:%s*(%d+)")
-	return num
+	local n = string.match(text, "目標:%s*(%d+)") or string.match(text, "Target:%s*(%d+)")
+	return n
 end
 
 function Run.new(deps)
@@ -40,22 +41,29 @@ function Run.new(deps)
 	self._awaitingInitial = false
 	self._resultShown = false
 
-	-- UI構築
-	local ui = UIBuilder.build(nil)
+	-- === 言語の初期決定（グローバル→OS）を UI に明示 ===
+	local initialLang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
+	self._lang = initialLang
+	print("[LANG_FLOW] Run.new initialLang=", initialLang)
+
+	-- UI構築（★ 明示 lang を渡す）
+	local ui = UIBuilder.build(nil, { lang = initialLang })
 	self.gui      = ui.gui
 	self.frame    = ui.root
 	self.info     = ui.info
-	self.goalText = ui.goalText       -- ★ 追加
-	self.notice   = ui.notice         -- ★ 追加
+	self.goalText = ui.goalText
+	self.notice   = ui.notice
 	self.handArea = ui.handArea
 	self.boardRowTop    = ui.boardRowTop
 	self.boardRowBottom = ui.boardRowBottom
 	self.takenBox = ui.takenBox
 	self._scoreBox = ui.scoreBox
 	self.buttons  = ui.buttons
+	self._ui_setLang = ui.setLang  -- ★ 後から切替用
 
 	-- Overlay / ResultModal
-	self._overlay     = Overlay.create(self.frame, Theme.loadingText or "次の季節を準備中...")
+	local loadingText = Theme.loadingText or (Locale.t(initialLang, "RUN_HELP_LINE") or "Loading...")
+	self._overlay     = Overlay.create(self.frame, loadingText)
 	self._resultModal = ResultModal.create(self.frame)
 	self._resultModal:on({
 		home = function() if self.deps.GoHome  then self.deps.GoHome :FireServer() end end,
@@ -124,24 +132,26 @@ function Run.new(deps)
 		local tot = tonumber(total) or 0
 		local box = self._scoreBox
 		if box then
+			-- TODO: ローカライズ対応の書式に差し替え予定
 			box.Text = ("得点：%d（文%d × 点%d）\n役：%s"):format(tot, mon, pts, Format.rolesToLines(roles))
 		end
 	end
 
 	local function onState(st)
-		-- 情報パネル更新
+		-- 情報パネル更新（FormatUtil 側のローカライズは別途）
 		local line = Format.stateLineText(st)
 		self.info.Text = line
 
-		-- 目標スコア（情報パネルの値をミラー）
+		-- 目標スコア（情報パネルの値をミラー）※ラベル文言はローカライズ
 		if self.goalText then
 			local g = extractGoalFromInfoText(line)
-			self.goalText.Text = g and ("目標：" .. g) or "目標：—"
+			local label = (self._lang == "en") and "Goal:" or "目標："
+			self.goalText.Text = g and (label .. tostring(g)) or (label .. "—")
 		end
 
 		-- お知らせ（必要に応じて上書きする想定。初期は空）
 		if self.notice and self.notice.Text == "" then
-			self.notice.Text = "" -- 例: "役が確定しました" などを他のイベントで流す
+			self.notice.Text = ""
 		end
 
 		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
@@ -161,6 +171,7 @@ function Run.new(deps)
 		end
 
 		if isFinal then
+			-- TODO: ResultModal もローカライズ化
 			self._resultModal:showFinal(
 				"クリアおめでとう！",
 				"このランは終了です。メニューに戻ります。",
@@ -213,7 +224,7 @@ function Run.new(deps)
 		onStageResult = onStageResult,
 	})
 
-	-- Router.call 互換
+	-- Router.call 互換（従来のフォワード）
 	self.onHand        = function(_, hand)                 renderHand(hand) end
 	self.onField       = function(_, field)                renderField(field) end
 	self.onTaken       = function(_, taken)                renderTaken(taken) end
@@ -221,10 +232,38 @@ function Run.new(deps)
 	self.onState       = function(_, st)                   onState(st) end
 	self.onStageResult = function(_, ...)                  onStageResult(...) end
 
+	print("[LANG_FLOW] Run.new done | lang=", self._lang)
 	return self
 end
 
-function Run:show()
+-- ★ 外部からの言語切替 API（Router.call 用）
+function Run:setLang(lang)
+	if lang ~= "jp" and lang ~= "en" then return end
+	if self._lang == lang then
+		print("[LANG_FLOW] Run.setLang ignored(same) | lang=", lang)
+		return
+	end
+	print("[LANG_FLOW] Run.setLang apply | from=", self._lang, "to=", lang)
+	self._lang = lang
+	if type(self._ui_setLang) == "function" then
+		self._ui_setLang(lang)
+	end
+end
+
+function Run:show(payload)
+	-- payload?.lang があれば最優先で UI に適用
+	if payload and (payload.lang == "jp" or payload.lang == "en") then
+		print("[LANG_FLOW] Run.show payload.lang=", payload.lang, "(cur=", self._lang,")")
+		self:setLang(payload.lang)
+	else
+		-- 念のため、グローバルを見て差異があれば合わせる
+		local g = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or self._lang
+		if g ~= self._lang then
+			print("[LANG_FLOW] Run.show sync from global | from=", self._lang, "to=", g)
+			self:setLang(g)
+		end
+	end
+
 	self.frame.Visible = true
 	self._remotes:disconnect()
 	self._remotes:connect()

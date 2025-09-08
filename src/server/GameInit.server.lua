@@ -1,18 +1,20 @@
 -- ServerScriptService/GameInit.server.lua
--- モジュール分割版のエントリポイント（Remotesの生成＆各Serviceの初期化）
--- ★ DataStore最小実装対応：bank / year のロード＆保存（SaveService）
+-- エントリポイント：Remotes生成／各Service初期化／永続（SaveService）連携
 
+--==================================================
+-- Services
+--==================================================
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local SSS     = game:GetService("ServerScriptService")
 
 --==================================================
--- SaveService（bank/year の永続化）
+-- SaveService（bank/year/clears/lang の永続化）
 --==================================================
 local SaveService = require(SSS:WaitForChild("SaveService"))
 
 --==================================================
--- Remotes を用意（全てここで先に生やす）
+-- Remotes 生成（すべてここで先に生やす）
 --==================================================
 local function ensureRemote(name: string)
 	local rem = RS:FindFirstChild("Remotes")
@@ -30,9 +32,8 @@ local function ensureRemote(name: string)
 	return e
 end
 
--- 必要なリモートを全列挙（先生成）
+-- Core push系
 local Remotes = {
-	-- 表示系
 	HandPush      = ensureRemote("HandPush"),
 	FieldPush     = ensureRemote("FieldPush"),
 	TakenPush     = ensureRemote("TakenPush"),
@@ -55,39 +56,48 @@ local Remotes = {
 	BuyItem       = ensureRemote("BuyItem"),
 	ShopReroll    = ensureRemote("ShopReroll"),
 
-	-- 同期（C→S 一回だけの再同期要求）※ ハンドリングは UiResync.server.lua 側
+	-- 同期（C→S：再同期要求。実処理は UiResync.server.lua）
 	ReqSyncUI     = ensureRemote("ReqSyncUI"),
 }
 
---=== TOP/HOME Remotes ===
-local HomeOpen        = ensureRemote("HomeOpen")        -- S->C: トップページを開く
-local ReqStartNewRun  = ensureRemote("ReqStartNewRun")  -- C->S: NEW GAME
-local ReqContinueRun  = ensureRemote("ReqContinueRun")  -- C->S: 前回の続き
-local RoundReady      = ensureRemote("RoundReady")      -- S->C: ★ 新ラウンド準備完了通知
+-- Top/Home 系
+local HomeOpen        = ensureRemote("HomeOpen")        -- S→C: トップを開く
+local ReqStartNewRun  = ensureRemote("ReqStartNewRun")  -- C→S: NEW GAME
+local ReqContinueRun  = ensureRemote("ReqContinueRun")  -- C→S: CONTINUE（現状NEW扱い）
+local RoundReady      = ensureRemote("RoundReady")      -- S→C: 新ラウンド準備完了
+local ReqSetLang      = ensureRemote("ReqSetLang")      -- C→S: 言語保存
 
--- Remotes からも参照できるように
+-- Remotes からも参照できるように追加
 Remotes.HomeOpen       = HomeOpen
 Remotes.ReqStartNewRun = ReqStartNewRun
 Remotes.ReqContinueRun = ReqContinueRun
 Remotes.RoundReady     = RoundReady
+Remotes.ReqSetLang     = ReqSetLang
 
 --==================================================
--- DEV Remotes（Server / +役 は 3枚注入）
+-- Server-side modules
 --==================================================
 local StateHub = require(RS.SharedModules.StateHub)
 local Scoring  = require(RS.SharedModules.Scoring)
 
+local Round        = require(RS.SharedModules.RoundService)
+local PickService  = require(RS.SharedModules.PickService)
+local Reroll       = require(RS.SharedModules.RerollService)
+local Score        = require(RS.SharedModules.ScoreService)
+local ShopService  = require(RS.SharedModules.ShopService)
+
+--==================================================
+-- DEV Remotes（Studio向け：+両 / +役 付与）
+--==================================================
 local DevGrantRyo  = ensureRemote("DevGrantRyo")
 local DevGrantRole = ensureRemote("DevGrantRole")
 
 DevGrantRyo.OnServerEvent:Connect(function(plr, amount)
 	amount = tonumber(amount) or 1000
 	local s = StateHub.get(plr); if not s then return end
-	-- メモリ状態に反映
-	s.bank = (s.bank or 0) + amount
+	s.bank = (s.bank or 0) + amount                -- メモリ状態
 	StateHub.pushState(plr, s)
-	-- 永続にも反映（dirty化）
-	SaveService.addBank(plr, amount)
+	SaveService.addBank(plr, amount)               -- 永続もdirty化
 end)
 
 local function ensureTable(t) return (type(t)=="table") and t or {} end
@@ -95,9 +105,7 @@ local function takeByPredOrStub(s, pred, stub)
 	s.board = ensureTable(s.board); s.taken = ensureTable(s.taken)
 	for i,card in ipairs(s.board) do
 		if pred(card) then
-			table.insert(s.taken, card)
-			table.remove(s.board, i)
-			return
+			table.insert(s.taken, card); table.remove(s.board, i); return
 		end
 	end
 	local c = table.clone(stub)
@@ -112,33 +120,16 @@ DevGrantRole.OnServerEvent:Connect(function(plr)
 		function(c) return c.month==9 and ((c.tags and table.find(c.tags,"sake")) or c.name=="盃") end,
 		{month=9, kind="seed", name="盃", tags={"thing","sake"}}
 	)
-	takeByPredOrStub(s,
-		function(c) return c.month==8 and c.kind=="bright" end,
-		{month=8, kind="bright", name="芒に月"}
-	)
-	takeByPredOrStub(s,
-		function(c) return c.month==3 and c.kind=="bright" end,
-		{month=3, kind="bright", name="桜に幕"}
-	)
+	takeByPredOrStub(s, function(c) return c.month==8 and c.kind=="bright" end, {month=8, kind="bright", name="芒に月"})
+	takeByPredOrStub(s, function(c) return c.month==3 and c.kind=="bright" end, {month=3, kind="bright", name="桜に幕"})
 	local total, roles, detail = Scoring.evaluate(s.taken or {})
 	s.lastScore = { total=total, roles=roles, detail=detail }
 	StateHub.pushState(plr, s)
 end)
 
 --==================================================
--- サービス読み込み
---==================================================
-local Round        = require(RS.SharedModules.RoundService)
-local PickService  = require(RS.SharedModules.PickService)
-local Reroll       = require(RS.SharedModules.RerollService)
-local Score        = require(RS.SharedModules.ScoreService)
-local ShopService  = require(RS.SharedModules.ShopService)
-
---==================================================
 -- 初期化／バインド
 --==================================================
-
--- Remotesを一括で渡す（StateHub は push 時に Remotes.* を使う）
 StateHub.init(Remotes)
 
 if PickService and typeof(PickService.bind) == "function" then
@@ -154,7 +145,6 @@ else
 end
 
 if Score and typeof(Score.bind) == "function" then
-	-- ScoreService には openShop を依存注入
 	Score.bind(Remotes, { openShop = ShopService and ShopService.open })
 else
 	warn("[GameInit] Score.bind が見つかりません")
@@ -170,49 +160,85 @@ else
 end
 
 --==================================================
--- Player Added / Removing（永続のロードと保存）
+-- Player lifecycle：永続ロード/保存 + 言語トレースログ
 --==================================================
-Players.PlayerAdded:Connect(function(plr)
-	-- プロファイルをロード（{bank, year}）
-	local prof = SaveService.load(plr)
 
-	-- 既存のStateに bank/year をマージ（他は触らない）
+-- 共有ミニロガー（サーバ用）
+local function S(tag, msg, kv)
+	-- kv は {k=v, ...} or nil
+	local parts = {}
+	if type(kv)=="table" then
+		for k,v in pairs(kv) do
+			table.insert(parts, (tostring(k).."="..tostring(v)))
+		end
+	end
+	print(("[LANG_FLOW][S] %-16s | %s%s"):format(tag, msg or "", (#parts>0) and (" | "..table.concat(parts," ")) or ""))
+end
+
+Players.PlayerAdded:Connect(function(plr)
+	-- 1) 入力：ロード直前
+	S("PlayerAdded", "begin load profile", {user=plr.Name, userId=plr.UserId})
+
+	-- 2) プロファイルをロード（保存>OS で lang 決定）
+	local prof = SaveService.load(plr)
+	S("load.done", "profile loaded", {
+		user=plr.Name,
+		bank=prof and prof.bank,
+		year=prof and prof.year,
+		asc =prof and prof.asc,
+		clears=prof and prof.clears,
+		lang=prof and prof.lang
+	})
+
+	-- 3) State に bank/year/clears/lang をマージして確定
 	local s = StateHub.get(plr) or {}
+	local beforeLang = s.lang
 	s.bank        = prof.bank   or 0
 	s.year        = prof.year   or 0
 	s.totalClears = prof.clears or 0
+	s.lang        = (prof.lang == "jp" and "jp") or "en"
 	StateHub.set(plr, s)
+
+	S("state.set", "state merged & set", {
+		user=plr.Name,
+		beforeLang=beforeLang,
+		stateLang=s.lang,
+		bank=s.bank, year=s.year, clears=s.totalClears
+	})
+
+	-- 4) HomeOpen（トップ表示）に保存言語を必ず同梱
+	S("HomeOpen→C", "send payload to client", {
+		user=plr.Name,
+		payloadLang=s.lang,
+		hasSave=false, bank=s.bank, year=s.year, clears=s.totalClears or 0
+	})
 
 	HomeOpen:FireClient(plr, {
 		hasSave = false,
 		bank    = s.bank,
 		year    = s.year,
-		clears  = s.totalClears or 0,  -- ← ここも反映
+		clears  = s.totalClears or 0,
+		lang    = s.lang,
 	})
 end)
 
 Players.PlayerRemoving:Connect(function(plr)
-	-- 退室時に保存（失敗時は warn のみ）
-	SaveService.flush(plr)
+	S("PlayerRemoving", "flush profile", {user=plr.Name})
+	SaveService.flush(plr) -- 退室時の保存（失敗時は内部でwarn）
 end)
 
--- サーバ終了時の保険（任意）
 game:BindToClose(function()
-	-- なるべく保存を試みる
-	pcall(function() SaveService.flushAll() end)
+	S("BindToClose", "flushAll begin")
+	pcall(function() SaveService.flushAll() end) -- サーバ終了時の保険
+	S("BindToClose", "flushAll end")
 end)
-
 
 --==================================================
 -- ラン開始/続き（RoundReady → RunScreen.requestSync → UiResync）
 --==================================================
 local function startSeason(plr, opts)
-	-- ラン全体の初期化
-	Round.resetRun(plr, opts)
-	-- ★ ここで必ず今季の山/手/場を生成
-	-- Round.newRound(plr)
-	-- ★ 少し待ってから準備完了を通知（0残像対策）
-	task.delay(0.05, function()
+	Round.resetRun(plr, opts)     -- ラン全体の初期化（内部で newRound(1) まで）
+	task.delay(0.05, function()   -- 0残像対策
 		RoundReady:FireClient(plr)
 	end)
 end
@@ -222,32 +248,31 @@ ReqStartNewRun.OnServerEvent:Connect(function(plr)
 end)
 
 ReqContinueRun.OnServerEvent:Connect(function(plr)
-	-- まだCONTINUE実装がないので NEW GAME と同様に扱う
-	warn(("[Home] ReqContinueRun by %s: fallback NEW GAME."):format(plr.Name))
+	-- CONTINUE 未実装：暫定で NEW GAME 相当
 	startSeason(plr, { fresh = true })
 end)
 
 --==================================================
--- 屋台 → 次シーズン遷移（修正版）
+-- 屋台 → 次シーズン遷移
 --==================================================
 Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	local s = StateHub.get(plr); if not s then return end
 	if s.phase ~= "shop" then return end
 
-	-- 前季のスコア情報は破棄（画面再同期時の誤表示を防ぐ）
+	-- 前季スコアの残留を防ぐ
 	s.lastScore = nil
 	s.phase = "play"
 
 	local nextSeason = (s.season or 1) + 1
 	if nextSeason > 4 then
-		-- 冬→春はランリセット（※ resetRun 内で newRound(1) まで行う）
+		-- 冬→春はランリセット
 		Round.resetRun(plr)
 	else
 		-- 同一ラン内の季節遷移
 		Round.newRound(plr, nextSeason)
+		StateHub.set(plr, s)
 	end
 
-	-- 0残像対策で少し待ってから準備完了を通知
 	task.delay(0.05, function()
 		RoundReady:FireClient(plr)
 	end)
@@ -263,23 +288,16 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 
 	local clears = tonumber(s.totalClears or 0) or 0
 	local unlocked = clears >= 3
-	print(("[DecideNext] req by %s | op=%s clears=%d unlocked=%s bank=%d year=%d phase=%s")
-		:format(plr.Name, tostring(op), clears, tostring(unlocked), s.bank or 0, s.year or 0, tostring(s.phase)))
 
-	-- 冬クリア後の共通初期化
+	-- 共通初期化
 	s.mult = 1.0
 
-	-- ★ サーバ側ガード：未解禁なら "home" 以外は無効化（安全ネット）
+	-- サーバ側ガード：未解禁なら "home" 以外は無効化
 	if op ~= "home" and not unlocked then
-		warn(("[DecideNext] blocked: op=%s requires clears>=3 (now %d). Fallback to HOME."):format(tostring(op), clears))
 		op = "home"
 	end
 
 	if op == "home" then
-		print("[DecideNext] -> HOME")
-		-- （任意）最新表示反映したい場合は push してもOK
-		-- StateHub.pushState(plr)
-
 		-- トップへ戻す（新ランに初期化）
 		Round.resetRun(plr)
 		Remotes.HomeOpen:FireClient(plr, {
@@ -287,40 +305,32 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
+			lang    = SaveService.getLang(plr),
 		})
 		return
 
 	elseif op == "next" then
-		print("[DecideNext] -> NEXT (add +25y & open shop)")
-		-- 25年進行＋屋台オープン（次ランの前準備）
+		-- 25年進行＋屋台
 		s.year = (s.year or 0) + 25
 		if typeof(SaveService.bumpYear) == "function" then
 			SaveService.bumpYear(plr, 25)
-		elseif typeof(SaveService.setYear) == "function" then
+		else
 			SaveService.setYear(plr, s.year)
 		end
-
 		s.phase = "shop"
 		if ShopService and typeof(ShopService.open) == "function" then
 			ShopService.open(plr, s, { reason = "after_winter" })
-			print("[DecideNext] shop opened (reason=after_winter)")
 		else
 			StateHub.pushState(plr)
-			warn("[DecideNext] ShopService.open not available; pushed state only.")
 		end
 		return
 
 	elseif op == "save" then
-		print("[DecideNext] -> SAVE & QUIT (flush profile)")
-		-- DataStoreへ保存してからトップへ
+		-- 永続保存→トップへ
 		local ok = true
 		if typeof(SaveService.flush) == "function" then
 			ok = SaveService.flush(plr) == true
-			if not ok then warn("[DecideNext] flush failed; going Home anyway") end
-		else
-			warn("[DecideNext] SaveService.flush not available; skipping flush.")
 		end
-
 		Round.resetRun(plr)
 		Remotes.HomeOpen:FireClient(plr, {
 			hasSave = true,
@@ -328,11 +338,8 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
 			saved   = ok,
+			lang    = SaveService.getLang(plr),
 		})
-		print(("[DecideNext] save sent (ok=%s)"):format(tostring(ok)))
 		return
-
-	else
-		warn(("[DecideNext] unknown op: %s"):format(tostring(op)))
 	end
 end)
