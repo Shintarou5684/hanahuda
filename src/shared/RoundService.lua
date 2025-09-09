@@ -1,9 +1,10 @@
 -- ReplicatedStorage/SharedModules/RoundService.lua
 local RS = game:GetService("ReplicatedStorage")
-local HttpService    = game:GetService("HttpService")
+local HttpService = game:GetService("HttpService")
 
-local CardEngine = require(RS.SharedModules.CardEngine)
-local StateHub   = require(RS.SharedModules.StateHub)
+local CardEngine   = require(RS.SharedModules.CardEngine)
+local StateHub     = require(RS.SharedModules.StateHub)
+local RunDeckUtil  = require(RS.SharedModules.RunDeckUtil) -- ★ 追加：ランデッキ入出力
 
 local Round = {}
 
@@ -19,11 +20,40 @@ local function makeSeasonSeed(seasonNum: number?)
 	return num
 end
 
+-- ラン用に保存されている「デッキ構成（コード配列）」から、その季節の山札を新規生成してシャッフル
+local function buildShuffledDeckFromRun(stateTbl: any, seasonNum: number)
+	-- 1) ラン中デッキをロード（屋台で更新された構成を優先）
+	local runDeck = RunDeckUtil.load(stateTbl)
+
+	-- 2) 構成が無ければ（ラン初回など）通常の48枚初期デッキ
+	if not runDeck or #runDeck == 0 then
+		local d = CardEngine.buildDeck()
+		CardEngine.shuffle(d, makeSeasonSeed(seasonNum))
+		-- 初回はこの構成をラン用として保存しておく（堅牢化）
+		stateTbl.run = stateTbl.run or {}
+		stateTbl.run.deck = d
+		RunDeckUtil.save(stateTbl)
+		return d
+	end
+
+	-- 3) 構成（コード配列）から今季の山札を新規に起こす → 毎季節でシャッフル
+	local codes = table.create(#runDeck)
+	for i, c in ipairs(runDeck) do
+		local code = (type(c) == "table" and (c.code or CardEngine.toCode(c.month, c.idx))) or tostring(c)
+		codes[i] = code
+	end
+	local deck = CardEngine.buildDeckFromCodes(codes)
+	CardEngine.shuffle(deck, makeSeasonSeed(seasonNum))
+
+	-- 念のためスナップショットを最新化（別環境から復元して来た場合などの保険）
+	RunDeckUtil.save(stateTbl)
+	return deck
+end
+
 -- 新しいシーズンを開始（同一ラン内の季節遷移もここ）
 function Round.newRound(plr: Player, seasonNum: number)
-	-- ★ シーズン毎に新しい山を作成＆毎回ユニークなシードでシャッフル
-	local deck = CardEngine.buildDeck()
-	CardEngine.shuffle(deck, makeSeasonSeed(seasonNum))
+	-- ★ ラン構成を優先して今季の山を生成・シャッフル
+	local deck = buildShuffledDeckFromRun(StateHub.get(plr) or {}, seasonNum)
 
 	-- 手札5枚
 	local hand = CardEngine.draw(deck, 5)
@@ -36,6 +66,7 @@ function Round.newRound(plr: Player, seasonNum: number)
 
 	-- 状態を新規テーブルで保存（参照の使い回しを避ける）
 	local s = StateHub.get(plr) or {}
+	s.run         = s.run or {}                 -- ★ 念のため保持
 	s.deck        = deck
 	s.hand        = hand
 	s.board       = board
@@ -52,6 +83,9 @@ function Round.newRound(plr: Player, seasonNum: number)
 	s.mon         = s.mon or 0       -- 文：ラン通貨
 	s.phase       = "play"
 
+	-- ★ ラン構成のスナップショットを常に最新化（別経路の変更も拾う）
+	RunDeckUtil.save(s)
+
 	StateHub.set(plr, s)
 	print(("[Round.newRound] season=%s deck=%d hand=%d board=%d")
 		:format(tostring(seasonNum), #deck, #hand, #board))
@@ -66,14 +100,17 @@ function Round.resetRun(plr: Player)
 	local keepClears = (prev and prev.totalClears) or 0
 
 	-- 文（mon）はランごとにリセット
-	StateHub.set(plr, {
+	local fresh = {
 		bank = keepBank,
 		year = keepYear,
 		totalClears = keepClears,
 		mult = 1.0,
 		mon  = 0,
 		phase = "play",
-	})
+	}
+
+	-- ★ ラン構成は初期化：初回は newRound 内で初期デッキが自動採用される
+	StateHub.set(plr, fresh)
 	Round.newRound(plr, 1)
 end
 

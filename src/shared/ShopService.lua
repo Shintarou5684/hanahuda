@@ -1,5 +1,5 @@
 -- ReplicatedStorage/SharedModules/ShopService.lua
--- 屋台サービス：在庫ロール／購入／リロール／ShopOpen送信
+-- v0.8.3 屋台サービス：在庫ロール／購入／リロール／ShopOpen送信
 -- Remotes の生成は GameInit 側で行い、ここでは WaitForChild で受け取るだけ
 
 local RS  = game:GetService("ReplicatedStorage")
@@ -10,16 +10,44 @@ local ShopOpen   = Remotes:WaitForChild("ShopOpen")
 local BuyItem    = Remotes:WaitForChild("BuyItem")
 local ShopReroll = Remotes:WaitForChild("ShopReroll")
 
-local ShopDefs   = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopDefs"))
+local SharedModules = RS:WaitForChild("SharedModules")
+local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
+local RunDeckUtil   = require(SharedModules:WaitForChild("RunDeckUtil"))
+local CardEngine    = require(SharedModules:WaitForChild("CardEngine"))
 
--- ShopEffects の配置は 2 パターンを許容：ServerScriptService または ReplicatedStorage.SharedModules
+--==================================================
+-- ShopEffects ローダー（SRS/Folder配下init と RS/SharedModules の両対応）
+--==================================================
 local ShopEffects
 do
-	local ok, mod = pcall(function() return require(SSS:WaitForChild("ShopEffects")) end)
-	if ok and type(mod) == "table" then
+	local function tryRequire()
+		-- 1) ServerScriptService/ShopEffects（Folder配下に init を想定）
+		local node = SSS:FindFirstChild("ShopEffects")
+		if node then
+			if node:IsA("Folder") then
+				local initMod = node:FindFirstChild("init")
+				if initMod and initMod:IsA("ModuleScript") then
+					return require(initMod)
+				end
+			elseif node:IsA("ModuleScript") then
+				return require(node)
+			end
+		end
+		-- 2) ReplicatedStorage/SharedModules/ShopEffects（単体 ModuleScript）
+		local mod = SharedModules:FindFirstChild("ShopEffects")
+		if mod and mod:IsA("ModuleScript") then
+			return require(mod)
+		end
+		return nil
+	end
+
+	local ok, mod = pcall(tryRequire)
+	if ok and type(mod) == "table" and type(mod.apply) == "function" then
 		ShopEffects = mod
+		print("[ShopService] ShopEffects loaded OK")
 	else
-		ShopEffects = require(RS.SharedModules.ShopEffects)
+		warn("[ShopService] ShopEffects が見つからない/不正です（効果適用は無効）", ok, mod)
+		ShopEffects = nil
 	end
 end
 
@@ -43,38 +71,30 @@ local function rollCategory(rng: Random)
 	return "kito"
 end
 
--- 同一IDを避けて n 個選ぶ
-local function pickUnique(pool: {any}, n: number, rng: Random)
-	local res, used, tries = {}, {}, 0
-	while #res < n and tries < 200 do
-		tries += 1
-		local it = pool[rng:NextInteger(1, #pool)]
-		if it and not used[it.id] then
-			used[it.id] = true
-			-- クライアントへ送る表示用にクローン（数値系は念のため数値化）
-			local c = table.clone(it)
-			c.price = tonumber(c.price) or 0
-			table.insert(res, c)
-		end
-	end
-	return res
-end
-
+-- 重複OKで n 回引き、最後に順番をシャッフルする
 local function rollStock(rng: Random, n: number)
-	local items, guard = {}, 0
-	while #items < n and guard < 100 do
-		guard += 1
+	local items = {}
+	for _ = 1, n do
 		local cat  = rollCategory(rng)
 		local pool = (ShopDefs.POOLS or {})[cat]
 		if pool and #pool > 0 then
-			local pick = pickUnique(pool, 1, rng)[1]
-			if pick then table.insert(items, pick) end
+			local src = pool[rng:NextInteger(1, #pool)]
+			if src then
+				local c = table.clone(src)
+				c.price = tonumber(c.price) or 0
+				table.insert(items, c)
+			end
 		end
+	end
+	-- Fisher-Yates
+	for i = #items, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		items[i], items[j] = items[j], items[i]
 	end
 	return items
 end
 
--- 150ms の簡易デバウンス（多重入力防止）
+-- 150ms の簡易デバウンス
 local lastActionAt: {[Player]: number} = {}
 local function canAct(plr: Player): boolean
 	local t = os.clock()
@@ -83,28 +103,59 @@ local function canAct(plr: Player): boolean
 	return true
 end
 
+local function idsList(arr)
+	local s = {}
+	for _, it in ipairs(arr or {}) do table.insert(s, tostring(it and it.id or "?")) end
+	return table.concat(s, ",")
+end
+
+--========================
 -- クライアントへ屋台を開く（payload構築）
+--========================
 local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string?, target:number?}?)
-	-- phase は shop を強制（ガード）。ScoreService 側の付け忘れに備える
+	-- phase は shop を強制（ガード）
 	s.phase = "shop"
 
 	s.shop = s.shop or {}
-	s.shop.rng   = s.shop.rng or Random.new(os.time())
+	s.shop.rng   = s.shop.rng or Random.new(os.clock()*1000000)
 	s.shop.stock = s.shop.stock or rollStock(s.shop.rng, 6)
+
+	local rerollCost = 1
+	local remainingRerolls = s.shop.remainingRerolls  -- nil=無制限
+	if remainingRerolls ~= nil then
+		remainingRerolls = tonumber(remainingRerolls) or 0
+	end
 
 	local reward = (opts and opts.reward) or 0
 	local notice = (opts and opts.notice) or ""
 	local target = (opts and opts.target) or 0
 
+	-- ★ 正本スナップショット（entries.kind を保持）
+	local deckView = CardEngine.buildSnapshotFromState(s)
+
+	print(("[ShopService] openFor -> items=%d mon=%s notice=%s | order=[%s]")
+		:format(#(s.shop.stock or {}), tostring(s.mon), tostring(notice), idsList(s.shop.stock)))
+
 	ShopOpen:FireClient(plr, {
 		season    = s.season,
 		target    = target,
 		seasonSum = s.seasonSum or 0,
-		rewardMon = reward,         -- 今回のクリアで得た文（表示用）
-		totalMon  = s.mon or 0,     -- 現在の所持文
-		stock     = s.shop.stock,   -- 在庫（表示用コピー）
-		notice    = notice,         -- 画面内メッセージ
-		canReroll = (s.mon or 0) >= 1, -- 既定では 1 文
+		rewardMon = reward,
+		totalMon  = s.mon or 0,
+
+		-- 表示用
+		stock     = s.shop.stock,
+		items     = s.shop.stock,
+		notice    = notice,
+
+		-- UI が参照するフィールド
+		mon               = s.mon or 0,
+		rerollCost        = rerollCost,
+		remainingRerolls  = remainingRerolls, -- nil=無制限のまま渡す
+		canReroll         = (s.mon or 0) >= rerollCost,
+
+		-- ★ デッキの可視化データ（ShopScreen で表示）
+		currentDeck       = deckView,  -- {v=2, count, codes, histogram, entries[{code,kind}]}
 	})
 end
 
@@ -117,47 +168,99 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 	Service._getState  = getStateFn
 	Service._pushState = pushStateFn
 
+	print("[ShopService] init OK (handlers binding)")
+
 	-- ===== 購入 =====
 	BuyItem.OnServerEvent:Connect(function(plr: Player, itemId: string)
 		if not canAct(plr) then return end
 		local s = Service._getState and Service._getState(plr)
-		if not s then return end
+		if not s then
+			warn("[ShopService] BuyItem: state not found for", plr)
+			return
+		end
 
-		-- ガード：屋台中のみ
+		print(("[ShopService] BuyItem recv user=%s itemId=%s phase=%s mon=%s items=%d")
+			:format(plr.Name, tostring(itemId), tostring(s.phase), tostring(s.mon), #(s.shop and s.shop.stock or {})))
+
 		if s.phase ~= "shop" then
-			-- もし phase がズレていたら強制的に屋台UIを再度開いて整合
+			print("[ShopService] BuyItem: wrong phase -> reopen shop")
 			return openFor(plr, s, { notice = "現在は屋台の時間ではありません（同期し直します）", reward = 0, target = 0 })
 		end
 
-		local found
-		for _, it in ipairs(((s.shop and s.shop.stock) or {})) do
-			if it.id == itemId then found = it; break end
+		local foundIndex, found
+		for i, it in ipairs(((s.shop and s.shop.stock) or {})) do
+			if it.id == itemId then foundIndex = i; found = it; break end
 		end
 		if not found then
+			warn("[ShopService] BuyItem: item not found in current stock", itemId)
 			return openFor(plr, s, { notice = "不明な商品です", reward = 0, target = 0 })
 		end
 
 		local price = tonumber(found.price) or 0
 		if (s.mon or 0) < price then
+			print(("[ShopService] BuyItem: not enough money need=%d have=%s"):format(price, tostring(s.mon)))
 			return openFor(plr, s, { notice = "文が足りません", reward = 0, target = 0 })
 		end
 
-		-- 先に課金してから効果適用
-		s.mon = (s.mon or 0) - price
+		-- 先に課金
+		local beforeMon = s.mon or 0
+		s.mon = beforeMon - price
+		print(("[ShopService] BuyItem: charged %d -> mon %d -> %d"):format(price, beforeMon, s.mon))
 
-		-- 効果適用（ShopEffects.apply はメッセージ文字列を返す想定）
+		-- 効果適用
 		local effectId = found.effect or found.id
-		local msg = ""
-		if ShopEffects and type(ShopEffects.apply) == "function" then
-			msg = ShopEffects.apply(s, effectId) or ""
+		local effOk, effMsg = true, ""
+		if ShopEffects then
+			local okCall, okRet, msgRet = pcall(function()
+				return ShopEffects.apply(effectId, s, {
+					plr      = plr,
+					lang     = (s.lang or "ja"),
+					rng      = (s.shop and s.shop.rng) or Random.new(),
+					price    = price,
+					category = found.category,
+					now      = os.time(),
+				})
+			end)
+			if not okCall then
+				effOk, effMsg = false, ("効果適用エラー: %s"):format(tostring(okRet))
+				warn("[ShopService] BuyItem: effect apply threw:", okRet)
+			else
+				effOk, effMsg = okRet, msgRet
+				print(("[ShopService] BuyItem: effect result ok=%s msg=%s"):format(tostring(effOk), tostring(effMsg)))
+			end
+		else
+			print("[ShopService] BuyItem: ShopEffects missing -> treat as success/no-op")
 		end
 
-		-- 状態をクライアントへ反映
-		if Service._pushState then Service._pushState(plr) end
+		-- 失敗時はロールバック
+		if not effOk then
+			s.mon = (s.mon or 0) + price
+			print(("[ShopService] BuyItem: rollback due to effect failure -> mon %s"):format(tostring(s.mon)))
+			if Service._pushState then Service._pushState(plr) end
+			return openFor(plr, s, {
+				notice = ("購入失敗：%s（返金）\n%s"):format(found.name or found.id, tostring(effMsg or "未実装")),
+				reward = 0, target = 0
+			})
+		end
 
-		-- 在庫は消費しない（一般的な常設屋台想定）。消費型にしたい場合はここで remove する
+		-- 効果でデッキが変化した可能性 → 正本スナップショット保存
+		RunDeckUtil.save(s)
+
+		-- 在庫から除去
+		if s.shop and s.shop.stock and foundIndex then
+			table.remove(s.shop.stock, foundIndex)
+		end
+
+		-- 状態を先に同期
+		if Service._pushState then
+			print("[ShopService] BuyItem: pushState -> client")
+			Service._pushState(plr)
+		end
+
+		-- 再オープン
+		print("[ShopService] BuyItem: reopen shop with notice")
 		openFor(plr, s, {
-			notice = ("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, msg),
+			notice = ("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, tostring(effMsg or "")),
 			reward = 0, target = 0
 		})
 	end)
@@ -166,30 +269,41 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 	ShopReroll.OnServerEvent:Connect(function(plr: Player)
 		if not canAct(plr) then return end
 		local s = Service._getState and Service._getState(plr)
-		if not s then return end
+		if not s then
+			warn("[ShopService] Reroll: state not found for", plr)
+			return
+		end
+
+		print(("[ShopService] Reroll recv user=%s phase=%s mon=%s"):format(plr.Name, tostring(s.phase), tostring(s.mon)))
 
 		if s.phase ~= "shop" then
+			print("[ShopService] Reroll: wrong phase -> reopen")
 			return openFor(plr, s, { notice = "今はリロールできません（同期し直します）", reward = 0, target = 0 })
 		end
 
-		if (s.mon or 0) < 1 then
-			return openFor(plr, s, { notice = "リロールには 1 文 必要です", reward = 0, target = 0 })
+		local rerollCost = 1
+		if (s.mon or 0) < rerollCost then
+			print("[ShopService] Reroll: not enough money")
+			return openFor(plr, s, { notice = ("リロールには %d 文 必要です"):format(rerollCost), reward = 0, target = 0 })
 		end
 
-		s.mon -= 1
-		local rng = (s.shop and s.shop.rng) or Random.new(os.time())
+		s.mon -= rerollCost
+		local rng = (s.shop and s.shop.rng) or Random.new(os.clock()*1000000)
 		s.shop = s.shop or {}
 		s.shop.rng   = rng
 		s.shop.stock = rollStock(rng, 6)
 
-		if Service._pushState then Service._pushState(plr) end
-		openFor(plr, s, { notice = "品揃えを更新しました（-1 文）", reward = 0, target = 0 })
+		if Service._pushState then
+			print("[ShopService] Reroll: pushState -> client")
+			Service._pushState(plr)
+		end
+		openFor(plr, s, { notice = ("品揃えを更新しました（-%d 文）"):format(rerollCost), reward = 0, target = 0 })
 	end)
 end
 
--- ScoreService などから：屋台を開く（**ここで必ず phase=shop に遷移**）
+-- ScoreService などから：屋台を開く
 function Service.open(plr: Player, s: any, opts: {reward:number?, notice:string?, target:number?}?)
-	-- s は呼び出し元で取得/更新済み想定。ここで最終的に UI を開く。
+	print("[ShopService] Service.open called")
 	openFor(plr, s, opts)
 end
 

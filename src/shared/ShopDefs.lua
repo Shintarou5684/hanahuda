@@ -1,29 +1,50 @@
--- ShopDefs.lua
+-- ReplicatedStorage/SharedModules/ShopDefs.lua
+-- v0.8.3（内容は現行のまま）
 local ShopDefs = {}
 
 ShopDefs.CATEGORY = { kito="kito", sai="sai", omamori="omamori" }
-ShopDefs.WEIGHTS  = { kito=0.50,   sai=0.35,   omamori=0.15 } -- 出現率
 
--- 20種ずつ自動生成（当面はダミー名/価格、iconは差し替え前提）
-local function gen(prefix, display, basePrice, step)
-	local t = {}
-	for i=1,20 do
-		table.insert(t, {
-			id       = ("%s_%02d"):format(prefix, i),
-			name     = ("%s %02d"):format(display, i),
-			category = prefix,
-			price    = basePrice + ((i-1)%5)*step,
-			icon     = nil,                  -- 例: "rbxassetid://123456"
-			effect   = ("%s_%02d"):format(prefix, i), -- 効果キー（個別 or 後述フォールバック）
-		})
-	end
-	return t
-end
+ShopDefs.WEIGHTS = {
+	kito    = 1.0,
+	sai     = 0.0,
+	omamori = 0.0,
+}
 
 ShopDefs.POOLS = {
-	kito    = gen("kito",    "祈祷",   1, 0),
-	sai     = gen("sai",     "祭事",   1, 0),
-	omamori = gen("omamori", "お守り", 1, 0),
+	kito = {
+		{
+			id       = "kito_ushi",
+			name     = "丑：所持文を2倍",
+			category = "kito",
+			price    = 5,
+			effect   = "kito_ushi",
+			icon     = nil,
+			descJP   = "所持文を即時2倍（上限あり）。",
+			descEN   = "Double your current mon immediately (capped).",
+		},
+		{
+			id       = "kito_tora",
+			name     = "寅：取り札の得点+1",
+			category = "kito",
+			price    = 4,
+			effect   = "kito_tora",
+			icon     = nil,
+			descJP   = "以後、取り札の得点+1（恒常バフ／スタック可）。",
+			descEN   = "Permanent: taken cards score +1 (stackable).",
+		},
+		{
+			id       = "kito_tori",
+			name     = "酉：1枚を光札に変換",
+			category = "kito",
+			price    = 6,
+			effect   = "kito_tori",
+			icon     = nil,
+			descJP   = "ランのデッキからランダム1枚を光札へ変換（候補無しなら次ラウンド開始時に1枚変換のバフを付与）。",
+			descEN   = "Convert one random non-bright card in the run deck to a Bright (or queue a start-of-next-round conversion if none).",
+		},
+	},
+	sai     = {},
+	omamori = {},
 }
 
 return ShopDefs

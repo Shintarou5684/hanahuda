@@ -10,7 +10,19 @@ local RS      = game:GetService("ReplicatedStorage")
 local Remotes = RS:WaitForChild("Remotes")
 
 -- Locale（現在言語の保持/参照）
-local Locale  = require(RS:WaitForChild("Config"):WaitForChild("Locale"))
+local okLocale, Locale = pcall(function()
+	return require(RS:WaitForChild("Config"):WaitForChild("Locale"))
+end)
+if not okLocale or type(Locale) ~= "table" then
+	-- フォールバック：最低限の get/set だけ持つダミー
+	warn("[ClientMain] Locale module missing; using fallback")
+	local _g = "en"
+	Locale = {}
+	function Locale.getGlobal() return _g end
+	function Locale.setGlobal(v)
+		if v == "ja" or v == "jp" then _g = "jp" else _g = "en" end
+	end
+end
 
 --============= S → C =============
 local HomeOpen    = Remotes:WaitForChild("HomeOpen")
@@ -48,8 +60,25 @@ local uiRoot = script.Parent:FindFirstChild("UI") or script.Parent
 
 local ScreenRouterModule = uiRoot:FindFirstChild("ScreenRouter") or uiRoot:WaitForChild("ScreenRouter")
 local ScreensFolder      = uiRoot:FindFirstChild("screens")      or uiRoot:WaitForChild("screens")
-local Router             = require(ScreenRouterModule)
 
+-- Router 読み込み＋フォールバックスタブ
+local Router
+do
+	local ok, mod = pcall(require, ScreenRouterModule)
+	if not ok then
+		warn("[ClientMain] require(ScreenRouter) failed; using stub Router:", mod)
+		mod = {}
+	end
+	if type(mod) ~= "table" then mod = {} end
+	-- 欠けているAPIはスタブ化（fatalを避ける）
+	mod.init    = (type(mod.init)    == "function") and mod.init    or function(_) end
+	mod.setDeps = (type(mod.setDeps) == "function") and mod.setDeps or function(_) end
+	mod.show    = (type(mod.show)    == "function") and mod.show    or function(_) end
+	mod.call    = (type(mod.call)    == "function") and mod.call    or function() end
+	Router = mod
+end
+
+-- 画面モジュール
 local Screens = {
 	home   = require(ScreensFolder:WaitForChild("HomeScreen")),
 	run    = require(ScreensFolder:WaitForChild("RunScreen")),
@@ -57,6 +86,7 @@ local Screens = {
 	shrine = require(ScreensFolder:WaitForChild("ShrineScreen")),
 }
 
+-- Router 起動
 Router.init(Screens)
 
 --==================================================
@@ -83,26 +113,37 @@ Router.setDeps({
 	showRun    = function(payload)
 		local p = payload or {}
 		if p.lang == nil then
-			p.lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+			p.lang = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
 		end
 		Router.show("run", p)
 	end,
 	showHome   = function(payload)
 		local p = payload or {}
 		if p.lang == nil then
-			p.lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+			p.lang = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
 		end
 		Router.show("home", p)
 	end,
 	showShop   = function(payload)
 		local p = payload or {}
 		if p.lang == nil then
-			p.lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+			p.lang = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
 		end
 		Router.show("shop", p)
 	end,
 	showShrine = function()
-		Router.show("shrine", { lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en" })
+		Router.show("shrine", { lang = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en" })
+	end,
+
+	-- 軽量トースト（屋台MVPで使用）
+	toast = function(msg, dur)
+		pcall(function()
+			game.StarterGui:SetCore("SendNotification", {
+				Title = "通知",
+				Text = msg,
+				Duration = dur or 2,
+			})
+		end)
 	end,
 
 	-- 互換ネスト（古いコードのために維持）
@@ -125,7 +166,7 @@ Router.setDeps({
 -- トップ（帰宅先）
 HomeOpen.OnClientEvent:Connect(function(payload)
 	-- ★ payload.lang を共有へ反映してから Home を開く
-	if payload and payload.lang and typeof(Locale.setGlobal) == "function" then
+	if payload and payload.lang and type(Locale.setGlobal) == "function" then
 		Locale.setGlobal(payload.lang)
 		print("[LANG_FLOW] ClientMain.HomeOpen setGlobal ->", payload.lang)
 	end
@@ -139,8 +180,9 @@ ShopOpen.OnClientEvent:Connect(function(payload)
 	-- 言語が無ければ現在言語で補完
 	local p = payload or {}
 	if p.lang == nil then
-		p.lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+		p.lang = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
 	end
+	-- ★ ScreenRouter v0.9.1 で、同一画面でも update/show が走る
 	Router.show("shop", p)
 end)
 
@@ -153,14 +195,14 @@ RoundReady.OnClientEvent:Connect(function()
 	end
 	roundReadyBusy = true
 
-	local lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+	local lang = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
 	print("[ClientMain] RoundReady → show(run)+setLang(" .. tostring(lang) .. ")+requestSync")
 
 	-- 1) 画面インスタンスの確保
 	Router.show("run")
 
 	-- 2) ランタイム言語の明示適用（直接呼ぶ：vararg不使用）
-	if Router and typeof(Router.call)=="function" then
+	if Router and type(Router.call)=="function" then
 		Router.call("run", "setLang", lang)
 		Router.call("run", "requestSync")
 	end
@@ -170,41 +212,44 @@ end)
 
 -- プレイ画面（状態/手札/場/取り札/得点）→ run へ転送（vararg不使用で個別に転送）
 StatePush.OnClientEvent:Connect(function(st)
-	-- state から lang が来る場合は現在言語を同期（保険）
-	if st and st.lang and (st.lang == "jp" or st.lang == "en") and typeof(Locale.setGlobal)=="function" then
-		Locale.setGlobal(st.lang)
+	-- state から lang が来たら現在言語を同期（ja/jp/en を許容）
+	if st and st.lang and type(Locale.setGlobal)=="function" then
+		local l = tostring(st.lang)
+		if l == "ja" or l == "jp" or l == "en" then
+			Locale.setGlobal(l)
+		end
 	end
 	print(("[ClientMain] StatePush season=%s deckLeft=%s handLeft=%s"):format(
 		tostring(st and st.season), tostring(st and st.deckLeft), tostring(st and st.handLeft)))
-	if Router and typeof(Router.call)=="function" then
+	if Router and type(Router.call)=="function" then
 		Router.call("run", "onState", st)
 	end
 end)
 
 HandPush.OnClientEvent:Connect(function(hand)
 	print("[ClientMain] HandPush recv", typeof(hand), #(hand or {}))
-	if Router and typeof(Router.call)=="function" then
+	if Router and type(Router.call)=="function" then
 		Router.call("run", "onHand", hand)
 	end
 end)
 
 FieldPush.OnClientEvent:Connect(function(field)
 	print("[ClientMain] FieldPush recv", typeof(field), #(field or {}))
-	if Router and typeof(Router.call)=="function" then
+	if Router and type(Router.call)=="function" then
 		Router.call("run", "onField", field)
 	end
 end)
 
 TakenPush.OnClientEvent:Connect(function(taken)
 	print("[ClientMain] TakenPush recv", typeof(taken), #(taken or {}))
-	if Router and typeof(Router.call)=="function" then
+	if Router and type(Router.call)=="function" then
 		Router.call("run", "onTaken", taken)
 	end
 end)
 
 ScorePush.OnClientEvent:Connect(function(total, roles, dtl)
 	print("[ClientMain] ScorePush recv types:", typeof(total), typeof(roles), typeof(dtl))
-	if Router and typeof(Router.call)=="function" then
+	if Router and type(Router.call)=="function" then
 		-- 引数は明示3つ（vararg不使用）
 		Router.call("run", "onScore", total, roles, dtl)
 	end
@@ -213,7 +258,7 @@ end)
 -- ★ 冬クリア（3択モーダル表示）— フォワード（RunScreenが直接listenする場合の保険）
 StageResult.OnClientEvent:Connect(function(payload)
 	print("[ClientMain] StageResult recv", typeof(payload))
-	if Router and typeof(Router.call)=="function" then
+	if Router and type(Router.call)=="function" then
 		Router.call("run", "onStageResult", payload)
 	end
 end)
