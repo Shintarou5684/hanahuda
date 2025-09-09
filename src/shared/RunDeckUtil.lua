@@ -1,47 +1,55 @@
--- ReplicatedStorage/SharedModules/RunDeckUtil.lua
--- v0.8.3 ラン中デッキの「保存／復元」を一元化（次季へ引き継ぐ）
+-- v0.9.0 ラン構成ユーティリティ（唯一の正本：run.configSnapshot）
+-- ここだけを読み書きする。季節ごとの山札は毎季これをクローンして生成。
 
-local RS          = game:GetService("ReplicatedStorage")
-local SharedMods  = RS:WaitForChild("SharedModules")
-local CardEngine  = require(SharedMods:WaitForChild("CardEngine"))
+local RS         = game:GetService("ReplicatedStorage")
+local SharedMods = RS:WaitForChild("SharedModules")
+local CardEngine = require(SharedMods:WaitForChild("CardEngine"))
 
 local M = {}
 
--- state.run.deck（テーブル）を優先して返す。
--- 次点で state.run.deckSnapshot（v2: entries優先 / v1: codes）から復元して state.run.deck に戻す。
-function M.load(state: any): {any}?
-	if typeof(state) ~= "table" then return nil end
+-- run.configSnapshot を返す（必要なら初期48で初期化）
+local function _ensureSnapshot(state)
 	state.run = state.run or {}
-
-	-- すでにテーブルで保持されていればそれを使う
-	if typeof(state.run.deck) == "table" and #state.run.deck > 0 then
-		return state.run.deck
+	if typeof(state.run.configSnapshot) == "table" then
+		return state.run.configSnapshot
 	end
-
-	-- スナップショットから復元
-	local snap = state.run.deckSnapshot
-	if typeof(snap) == "table" then
-		local deck
-		if snap.v == 2 then
-			deck = CardEngine.buildDeckFromSnapshot(snap)
-		elseif typeof(snap.codes) == "table" then
-			deck = CardEngine.buildDeckFromCodes(snap.codes)
-		end
-		if typeof(deck) == "table" and #deck > 0 then
-			state.run.deck = deck
-			return deck
-		end
-	end
-
-	return nil
+	-- 初期化
+	local base = CardEngine.buildDeck()
+	local snap = CardEngine.buildSnapshot(base)
+	state.run.configSnapshot = snap
+	return snap
 end
 
--- 現在の「正本」デッキをスナップショットとして state.run.deckSnapshot に保存
--- 正本＝山・手・場・取り（＋捨て等）を合算した 48 枚を想定（entries.kind を保持）
-function M.save(state: any)
+-- ラン構成（テーブル48枚）を返す
+-- initIfMissing=true のとき、存在しなければ初期化して返す
+function M.loadConfig(state, initIfMissing)
+	if typeof(state) ~= "table" then return nil end
+	state.run = state.run or {}
+	local snap = state.run.configSnapshot
+	if typeof(snap) ~= "table" then
+		if initIfMissing then snap = _ensureSnapshot(state) else return nil end
+	end
+	return CardEngine.buildDeckFromSnapshot(snap)
+end
+
+-- 渡された deck（テーブル）で run.configSnapshot を更新
+-- deck が省略された場合、既存の run.configSnapshot を再保存（整形）するだけ
+function M.saveConfig(state, deck)
 	if typeof(state) ~= "table" then return end
 	state.run = state.run or {}
-	state.run.deckSnapshot = CardEngine.buildSnapshotFromState(state)
+	if typeof(deck) ~= "table" or #deck == 0 then
+		-- 既存スナップショットがない場合は初期化
+		if typeof(state.run.configSnapshot) ~= "table" then
+			state.run.configSnapshot = CardEngine.buildSnapshot(CardEngine.buildDeck())
+		end
+		return
+	end
+	state.run.configSnapshot = CardEngine.buildSnapshot(deck)
+end
+
+-- 現在のスナップショットを返す（必ず存在）
+function M.snapshot(state)
+	return _ensureSnapshot(state)
 end
 
 return M
