@@ -162,6 +162,7 @@ function S.evaluate(takenCards, state)
 	--========================
 	if typeof(state) == "table" then
 		local levels = RunDeckUtil.getMatsuriLevels(state) or {}
+		
 		if next(levels) ~= nil then
 			-- 成立役 → yaku_* のリストを作る
 			local yakuList = {}

@@ -119,6 +119,7 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		remainingRerolls = tonumber(s.shop.remainingRerolls) or REROLL_UNLIMITED
 	end
 
+	
 	local reward = (opts and opts.reward) or 0
 	local notice = (opts and opts.notice) or ""
 	local target = (opts and opts.target) or 0

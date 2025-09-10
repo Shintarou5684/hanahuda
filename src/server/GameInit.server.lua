@@ -116,16 +116,21 @@ end
 
 DevGrantRole.OnServerEvent:Connect(function(plr)
 	local s = StateHub.get(plr); if not s then return end
+
 	takeByPredOrStub(s,
 		function(c) return c.month==9 and ((c.tags and table.find(c.tags,"sake")) or c.name=="盃") end,
 		{month=9, kind="seed", name="盃", tags={"thing","sake"}}
 	)
 	takeByPredOrStub(s, function(c) return c.month==8 and c.kind=="bright" end, {month=8, kind="bright", name="芒に月"})
 	takeByPredOrStub(s, function(c) return c.month==3 and c.kind=="bright" end, {month=3, kind="bright", name="桜に幕"})
-	local total, roles, detail = Scoring.evaluate(s.taken or {})
-	s.lastScore = { total=total, roles=roles, detail=detail }
-	StateHub.pushState(plr, s)
+
+	-- ★ 修正ポイント：未定義の takenCards/state ではなく、s.taken と s を渡す
+	local total, roles, detail = Scoring.evaluate(s.taken or {}, s)
+
+	s.lastScore = { total = total or 0, roles = roles, detail = detail }
+	StateHub.pushState(plr) -- 第2引数は不要（あっても問題ないが省略でOK）
 end)
+
 
 --==================================================
 -- 初期化／バインド

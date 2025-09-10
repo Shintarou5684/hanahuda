@@ -36,7 +36,8 @@ function Score.bind(Remotes, deps)
 		if (s.handsLeft or 0) <= 0 then return end
 
 		-- 採点
-		local total, roles, detail = Scoring.evaluate(s.taken or {})
+		local takenCards = s.taken or {}
+		local total, roles, detail = Scoring.evaluate(takenCards, s)
 		local roleMon = (detail and detail.mon) or 0
 
 		-- 役チェイン
