@@ -1,5 +1,20 @@
 -- SharedModules/Scoring.lua
+-- v0.9.0 役採点＋祭事（Matsuri）上乗せ対応
+-- I/F:
+--   S.evaluate(takenCards: {Card}, state?: table) -> (totalScore: number, roles: table, detail: { mon: number, pts: number })
+-- 備考:
+--   ・従来どおり「総スコア = 文(mon) × 点(pts)」
+--   ・祭事は「成立した役」に応じて文/点へ加算（= レベル×係数）
+--   ・state を渡さない場合は従来スコア（祭事なし）で動作
+
+local RS = game:GetService("ReplicatedStorage")
+local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
+
 local S = {}
+
+--========================
+-- 基本テーブル
+--========================
 
 -- 役 → 文（Mon） ＝ 従来の基礎点を「文」とみなす
 local ROLE_MON = {
@@ -13,7 +28,55 @@ local ROLE_MON = {
 -- 例）光=5, たね=2, たん=2, かす=1
 local CARD_PTS = { bright=5, seed=2, ribbon=2, chaff=1 }
 
--- カウント系ユーティリティ
+--========================
+-- 祭事（Matsuri）係数テーブル
+--========================
+--   [festivalId] = { mult_per_lv, pts_per_lv }
+local MATSURI_COEFF = {
+	sai_kasu      = { 1.0,  1 },
+	sai_tanzaku   = { 1.0,  3 },
+	sai_tane      = { 1.0,  3 },
+	sai_akatan    = { 1.5,  5 },
+	sai_aotan     = { 1.5,  5 },
+	sai_inoshika  = { 2.0, 15 },
+	sai_hanami    = { 2.0, 15 },
+	sai_tsukimi   = { 2.0, 15 },
+	sai_sanko     = { 2.0, 20 },
+	sai_goko      = { 3.0, 30 },
+}
+
+-- 役コード（Scoring内部のキー）→ 抽象役ID（yaku_*）
+local ROLE_TO_YAKU = {
+	chaffs        = "yaku_kasu",
+	ribbons       = "yaku_tanzaku",
+	seeds         = "yaku_tane",
+	red_ribbon    = "yaku_akatan",
+	blue_ribbon   = "yaku_aotan",
+	inoshikacho   = "yaku_inoshikacho",
+	hanami        = "yaku_hanami",
+	tsukimi       = "yaku_tsukimi",
+	three_bright  = "yaku_sanko",
+	-- four_bright / rain_four_bright は対象外
+	five_bright   = "yaku_goko",
+}
+
+-- 抽象役ID → 関連する祭事ID（複数可）
+local YAKU_TO_SAI = {
+	yaku_kasu          = { "sai_kasu" },
+	yaku_tanzaku       = { "sai_tanzaku" },
+	yaku_tane          = { "sai_tane" },
+	yaku_akatan        = { "sai_akatan",  "sai_tanzaku" },
+	yaku_aotan         = { "sai_aotan",   "sai_tanzaku" },
+	yaku_inoshikacho   = { "sai_inoshika" },
+	yaku_hanami        = { "sai_hanami" },
+	yaku_tsukimi       = { "sai_tsukimi" },
+	yaku_sanko         = { "sai_sanko" },
+	yaku_goko          = { "sai_goko" },
+}
+
+--========================
+-- ユーティリティ
+--========================
 local function counts(cards)
 	local c = {bright=0, seed=0, ribbon=0, chaff=0, months={}, tags={}}
 	for _,card in ipairs(cards or {}) do
@@ -28,9 +91,11 @@ local function counts(cards)
 	return c
 end
 
--- 役判定（“こいこい”の抽象版）
+--========================
+-- メイン：採点
+--========================
 -- 戻り値： totalScore, rolesTable, detailTable{ mon=文合計, pts=点合計 }
-function S.evaluate(takenCards)
+function S.evaluate(takenCards, state)
 	local c = counts(takenCards)
 	local roles = {}
 	local mon = 0  -- 文（役の合計）
@@ -92,10 +157,44 @@ function S.evaluate(takenCards)
 		pts += w * (count or 0)
 	end
 
-	-- 総スコア = 文 × 点（要件）
+	--========================
+	-- 祭事の上乗せ（成立役に応じて文/点へ加算）
+	--========================
+	if typeof(state) == "table" then
+		local levels = RunDeckUtil.getMatsuriLevels(state) or {}
+		if next(levels) ~= nil then
+			-- 成立役 → yaku_* のリストを作る
+			local yakuList = {}
+			for roleKey, v in pairs(roles) do
+				if v and v > 0 then
+					local yaku = ROLE_TO_YAKU[roleKey]
+					if yaku then table.insert(yakuList, yaku) end
+				end
+			end
+
+			-- yaku_* ごとに紐づく祭事を見て加算
+			for _, yakuId in ipairs(yakuList) do
+				local festivals = YAKU_TO_SAI[yakuId]
+				if festivals then
+					for _, fid in ipairs(festivals) do
+						local lv = tonumber(levels[fid] or 0) or 0
+						if lv > 0 then
+							local coeff = MATSURI_COEFF[fid]
+							if coeff then
+								local multPerLv, ptsPerLv = coeff[1] or 0, coeff[2] or 0
+								mon += (lv * multPerLv)
+								pts += (lv * ptsPerLv)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- 総スコア = 文 × 点
 	local total = mon * pts
 	return total, roles, { mon = mon, pts = pts }
 end
 
 return S
-

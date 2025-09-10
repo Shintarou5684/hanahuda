@@ -123,8 +123,9 @@ function StateHub.pushState(plr: Player)
 	local s = stateByPlr[plr]; if not s then return end
 	ensureDefaults(s)
 
-	-- Scoring は「Mon×Pts方式」に対応：total, roles, detail{mon,pts}
-	local total, roles, detail = Scoring.evaluate(s.taken or {})
+	
+	local takenCards = s.taken or {}
+local total, roles, detail = Scoring.evaluate(takenCards, s)
 
 	-- 状態（HUD/UI用）
 	if Remotes.StatePush then

@@ -52,4 +52,40 @@ function M.snapshot(state)
 	return _ensureSnapshot(state)
 end
 
+--========================
+-- Matsuri Levels (Festival Levels)
+--========================
+function M.ensureMeta(state)
+	if typeof(state) ~= "table" then return {} end
+	state.run = state.run or {}
+	state.run.meta = state.run.meta or {}
+	state.run.meta.matsuriLevels = state.run.meta.matsuriLevels or {}
+	return state.run.meta
+end
+
+-- { [festivalId]=level } を返す（無ければ空）
+function M.getMatsuriLevels(state)
+	local meta = M.ensureMeta(state)
+	return meta.matsuriLevels
+end
+
+-- 祭事レベルを増減（通常は delta=+1）。戻り値：新レベル
+function M.incMatsuri(state, festivalId, delta)
+	local meta = M.ensureMeta(state)
+	local t = meta.matsuriLevels
+	local cur = tonumber(t[festivalId] or 0) or 0
+	local nextLv = math.max(0, cur + (tonumber(delta) or 0))
+	t[festivalId] = nextLv
+	return nextLv
+end
+
+-- ニューゲーム時に祭事をリセット
+function M.resetMatsuri(state)
+	local meta = M.ensureMeta(state)
+	meta.matsuriLevels = {}
+end
+
+
+
+
 return M

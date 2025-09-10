@@ -1,7 +1,9 @@
--- v0.9.4-deckview2-fix
+-- v0.9.4-deckview2-fix + UIログ + attachRemotes
 --  - ルア構文修正（三項演算子の除去）
 --  - summary の :format 誤用修正
---  - 既存機能はそのまま
+--  - 既存機能はそのまま（カード面は“名前だけ”表示）
+--  - リロール無制限の扱い：remainingRerolls が nil または 負数 の場合は「無制限」
+--  - [NEW] [SHOP][UI] ログ追加、attachRemotes (ShopOpenハンドラ) 追加
 
 local Shop = {}
 Shop.__index = Shop
@@ -12,7 +14,7 @@ export type Payload = {
 	mon: number?,
 	totalMon: number?,
 	rerollCost: number?,
-	remainingRerolls: number?, -- nil=無制限
+	remainingRerolls: number?, -- nil/負数=無制限
 	canReroll: boolean?,
 	seasonSum: number?,
 	target: number?,
@@ -48,6 +50,23 @@ local function itemDesc(it: any, lang: string): string
 	else
 		return (it.descJP or it.descJa or it.name or it.id or "")
 	end
+end
+
+-- ★ 切り取りはしない。干支ID→表示名の辞書で「名前だけ」を返す
+local ZODIAC_NAME: {[string]: string} = {
+	kito_ko="子", kito_ushi="丑", kito_tora="寅", kito_u="卯", kito_tatsu="辰", kito_mi="巳",
+	kito_uma="午", kito_hitsuji="未", kito_saru="申", kito_tori="酉", kito_inu="戌", kito_i="亥",
+}
+local function faceName(it: any): string
+	if not it then return "???" end
+	-- 1) 明示の短名を優先（UI向け）
+	if it.displayName and tostring(it.displayName) ~= "" then return tostring(it.displayName) end
+	if it.short and tostring(it.short) ~= "" then return tostring(it.short) end
+	if it.shortName and tostring(it.shortName) ~= "" then return tostring(it.shortName) end
+	-- 2) 干支IDは固定辞書
+	if it.id and ZODIAC_NAME[it.id] then return ZODIAC_NAME[it.id] end
+	-- 3) 最後に name / id をそのまま（カットしない）
+	return tostring(it.name or it.id or "???")
 end
 
 -- payload.currentDeck から codes を抽出して "0101 x2, 0103, ..." を作る
@@ -192,7 +211,7 @@ function Shop.new(deps)
 	grid.SortOrder = Enum.SortOrder.LayoutOrder
 	grid.Parent = scroll
 
-	-- 右：デッキパネル
+	-- 右：デッキパネル（デッキを見る押下で表示）
 	local deckPanel = Instance.new("Frame")
 	deckPanel.Name = "DeckPanel"
 	deckPanel.BackgroundColor3 = Color3.fromRGB(255,255,255)
@@ -227,15 +246,51 @@ function Shop.new(deps)
 	deckText.ZIndex = 3
 	deckText.Parent = deckPanel
 
-	-- 右：サマリ
+	-- 右：カード情報（常時／デッキ非表示時に上段で見せる）
+	local infoPanel = Instance.new("Frame")
+	infoPanel.Name = "InfoPanel"
+	infoPanel.BackgroundColor3 = Color3.fromRGB(255,255,255)
+	infoPanel.BorderColor3 = Color3.fromRGB(220,220,220)
+	infoPanel.Size = UDim2.new(1,0,0.52,0)
+	infoPanel.Position = UDim2.new(0,0,0,0)
+	infoPanel.Visible = true
+	infoPanel.ZIndex = 2
+	infoPanel.Parent = right
+
+	local infoTitle = Instance.new("TextLabel")
+	infoTitle.Name = "InfoTitle"
+	infoTitle.BackgroundTransparency = 1
+	infoTitle.Size = UDim2.new(1,-10,0,24)
+	infoTitle.Position = UDim2.new(0,6,0,4)
+	infoTitle.TextXAlignment = Enum.TextXAlignment.Left
+	infoTitle.Text = "アイテム情報"
+	infoTitle.TextSize = 18
+	infoTitle.ZIndex = 3
+	infoTitle.Parent = infoPanel
+
+	local infoText = Instance.new("TextLabel")
+	infoText.Name = "InfoText"
+	infoText.BackgroundTransparency = 1
+	infoText.Size = UDim2.new(1,-12,1,-30)
+	infoText.Position = UDim2.new(0,6,0,28)
+	infoText.TextXAlignment = Enum.TextXAlignment.Left
+	infoText.TextYAlignment = Enum.TextYAlignment.Top
+	infoText.TextWrapped = true
+	infoText.RichText = true   -- <b>…</b> 太字対応
+	infoText.Text = (normLang(self._lang) == "en") and "(Hover or click an item)" or "（アイテムにマウスを乗せるか、クリックしてください）"
+	infoText.ZIndex = 3
+	infoText.Parent = infoPanel
+
+	-- 右：ステータス／サマリ（下段固定）
 	local summary = Instance.new("TextLabel")
 	summary.Name = "Summary"
 	summary.BackgroundTransparency = 1
-	summary.Size = UDim2.new(1,0,1,0)
-	summary.Position = UDim2.new(0,0,0,0)
+	summary.Size = UDim2.new(1,0,0.48,0)
+	summary.Position = UDim2.new(0,0,0.52,0)
 	summary.TextXAlignment = Enum.TextXAlignment.Left
 	summary.TextYAlignment = Enum.TextYAlignment.Top
 	summary.TextWrapped = true
+	summary.RichText = false
 	summary.Text = ""
 	summary.ZIndex = 1
 	summary.Parent = right
@@ -261,6 +316,7 @@ function Shop.new(deps)
 	closeBtn.Activated:Connect(function()
 		if self._closing then return end
 		self._closing = true
+		print("[SHOP][UI] close clicked")
 		self:hide()
 		if self.deps and self.deps.toast then
 			self.deps.toast("屋台を閉じました。次の季節へ。", 2)
@@ -276,12 +332,14 @@ function Shop.new(deps)
 		if self._rerollBusy then return end
 		if not (self.deps and self.deps.remotes and self.deps.remotes.ShopReroll) then return end
 		self._rerollBusy = true
+		print("[SHOP][UI] REROLL click → FireServer()")
 		self.deps.remotes.ShopReroll:FireServer()
 		task.delay(rerollBusyDebounce, function() self._rerollBusy = false end)
 	end)
 
 	deckBtn.Activated:Connect(function()
 		self._deckOpen = not self._deckOpen
+		print("[SHOP][UI] deck toggle ->", self._deckOpen)
 		self:_render()
 	end)
 
@@ -290,6 +348,7 @@ function Shop.new(deps)
 		scroll = scroll, grid = grid,
 		summary = summary,
 		deckPanel = deckPanel, deckTitle = deckTitle, deckText = deckText,
+		infoPanel = infoPanel, infoTitle = infoTitle, infoText = infoText,
 	}
 	return self
 end
@@ -299,6 +358,7 @@ end
 --==================================================
 
 function Shop:setData(payload: Payload)
+	print("[SHOP][UI] setData items=", (payload and (payload.items and #payload.items or payload.stock and #payload.stock)) or 0)
 	self._payload = payload
 	self:_render()
 end
@@ -306,19 +366,45 @@ end
 function Shop:show(payload: Payload?)
 	if payload then self._payload = payload end
 	self.gui.Enabled = true
+	print("[SHOP][UI] show (enabled=true)")
 	self:_render()
 end
 
-function Shop:hide() self.gui.Enabled = false end
+function Shop:hide()
+	if self.gui.Enabled then
+		print("[SHOP][UI] hide (enabled=false)")
+	end
+	self.gui.Enabled = false
+end
 
 function Shop:update(payload: Payload?)
 	if payload then self._payload = payload end
+	print("[SHOP][UI] update")
 	self:_render()
 end
 
 function Shop:setLang(lang: string?)
 	self._lang = normLang(lang)
+	print("[SHOP][UI] setLang ->", self._lang)
 	self:_render()
+end
+
+-- 任意：サーバの ShopOpen を受け取って自動で表示する
+-- remotes: { ShopOpen: RemoteEvent, BuyItem: RemoteEvent, ShopReroll: RemoteEvent, ShopDone?: RemoteEvent }
+-- router (任意): { show = function(name, payload) end }
+function Shop:attachRemotes(remotes: any, router: any?)
+	if not remotes or not remotes.ShopOpen then
+		warn("[SHOP][UI] attachRemotes: invalid remotes")
+		return
+	end
+	remotes.ShopOpen.OnClientEvent:Connect(function(payload)
+		print("[SHOP][UI] <ShopOpen> received payload, items=", (payload and (payload.items and #payload.items or payload.stock and #payload.stock)) or 0)
+		if router and type(router.show) == "function" then
+			router:show("shop", payload)
+		end
+		self:show(payload)
+	end)
+	print("[SHOP][UI] attachRemotes: OK")
 end
 
 --==================================================
@@ -328,7 +414,8 @@ end
 function Shop:_createCard(it: any, lang: string, mon: number)
 	local btn = Instance.new("TextButton")
 	btn.Name = it.id or "Item"
-	btn.Text = itemTitle(it)
+	-- ★ “名前だけ”を表示（切り取り無し）
+	btn.Text = faceName(it)
 	btn.TextSize = 28
 	btn.Font = Enum.Font.GothamBold
 	btn.TextColor3 = Color3.fromRGB(30,30,30)
@@ -365,7 +452,9 @@ function Shop:_createCard(it: any, lang: string, mon: number)
 			"",
 			(desc ~= "" and desc or ((lang=="en") and "(no description)" or "(説明なし)")),
 		}
-		self._nodes.summary.Text = table.concat(lines, "\n")
+		if self._nodes.infoText then
+			self._nodes.infoText.Text = table.concat(lines, "\n")
+		end
 	end
 	btn.MouseEnter:Connect(showDesc)
 	priceBtn.MouseEnter:Connect(showDesc)
@@ -374,6 +463,7 @@ function Shop:_createCard(it: any, lang: string, mon: number)
 		if self._buyBusy then return end
 		if not (self.deps and self.deps.remotes and self.deps.remotes.BuyItem) then return end
 		self._buyBusy = true
+		print(("[SHOP][UI] BUY click id=%s name=%s"):format(it.id or "?", it.name or "?"))
 		self.deps.remotes.BuyItem:FireServer(it.id)
 		task.delay(0.25, function() self._buyBusy = false end)
 	end
@@ -391,10 +481,16 @@ function Shop:_render()
 	local lang = self._lang or normLang(p.lang)
 	local mon = tonumber(p.mon or p.totalMon or 0)
 	local rerollCost = tonumber(p.rerollCost or 1)
+
+	-- 残回数：nil または 負数なら「無制限」
 	local remainingRaw = p.remainingRerolls
 	local remaining = (remainingRaw ~= nil) and tonumber(remainingRaw) or nil
+	local unlimited = (remaining == nil) or (remaining < 0)
 
-	-- タイトル・ボタン（Lua で if/else）
+	print(("[SHOP][UI] render lang=%s items=%d mon=%d rerollCost=%d unlimited=%s remaining=%s")
+		:format(lang, #items, mon, rerollCost, tostring(unlimited), tostring(remaining)))
+
+	-- タイトル・ボタン
 	if self._nodes.title then
 		if lang == "en" then
 			self._nodes.title.Text = "Shop (MVP)"
@@ -416,29 +512,36 @@ function Shop:_render()
 			self._nodes.rerollBtn.Text = ("リロール（-%d 文）"):format(rerollCost)
 		end
 		local can = true
-		if p.canReroll == false then can=false end
-		if remaining ~= nil and remaining <= 0 then can=false end
-		if tonumber(mon or 0) < rerollCost then can=false end
-		if self._rerollBusy then can=false end
+		if p.canReroll == false then can = false end
+		-- 有限かつ 0 回なら不可。無制限(nil/負数)はここをスキップ
+		if (not unlimited) and remaining == 0 then can = false end
+		if tonumber(mon or 0) < rerollCost then can = false end
+		if self._rerollBusy then can = false end
 		self._nodes.rerollBtn.Active = can
 		self._nodes.rerollBtn.TextTransparency = can and 0 or 0.4
 		self._nodes.rerollBtn.BackgroundTransparency = can and 0 or 0.2
 	end
 
-	-- 右：configSnapshot の表示
+	-- 右：デッキ/情報の排他
 	do
-		local panel = self._nodes.deckPanel
-		local title = self._nodes.deckTitle
-		local text  = self._nodes.deckText
-		if panel and title and text then
-			panel.Visible = self._deckOpen
+		local deckPanel = self._nodes.deckPanel
+		local infoPanel = self._nodes.infoPanel
+		local deckTitle = self._nodes.deckTitle
+		local deckText  = self._nodes.deckText
+
+		if deckPanel and infoPanel then
+			deckPanel.Visible = self._deckOpen
+			infoPanel.Visible = not self._deckOpen
+		end
+
+		if deckPanel and deckTitle and deckText then
 			local n, lst = deckListFromSnapshot(p.currentDeck)
 			if lang == "en" then
-				title.Text = ("Current Deck (%d cards)"):format(n)
-				text.Text  = (n > 0) and lst or "(no cards)"
+				deckTitle.Text = ("Current Deck (%d cards)"):format(n)
+				deckText.Text  = (n > 0) and lst or "(no cards)"
 			else
-				title.Text = ("現在のデッキ（%d 枚）"):format(n)
-				text.Text  = (n > 0) and lst or "(カード無し)"
+				deckTitle.Text = ("現在のデッキ（%d 枚）"):format(n)
+				deckText.Text  = (n > 0) and lst or "(カード無し)"
 			end
 		end
 	end
@@ -467,7 +570,7 @@ function Shop:_render()
 		scroll.CanvasSize = UDim2.new(0, 0, 0, needed)
 	end)
 
-	-- サマリ：基本情報
+	-- サマリ：基本情報（下段固定）
 	local s = {}
 	if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
 		if lang == "en" then
@@ -483,18 +586,18 @@ function Shop:_render()
 	if lang == "en" then
 		table.insert(s, ("Items: %d"):format(#items))
 		table.insert(s, ("Money: %d mon"):format(mon))
-		if remaining ~= nil then
-			table.insert(s, ("Rerolls left: %d / Cost: %d"):format(remaining, rerollCost))
-		else
+		if unlimited then
 			table.insert(s, ("Rerolls: unlimited / Cost: %d"):format(rerollCost))
+		else
+			table.insert(s, ("Rerolls left: %d / Cost: %d"):format(remaining, rerollCost))
 		end
 	else
 		table.insert(s, ("商品数: %d 点"):format(#items))
 		table.insert(s, ("所持文: %d 文"):format(mon))
-		if remaining ~= nil then
-			table.insert(s, ("リロール: 残り %d 回 / 1回 %d 文"):format(remaining, rerollCost))
-		else
+		if unlimited then
 			table.insert(s, ("リロール: 無制限 / 1回 %d 文"):format(rerollCost))
+		else
+			table.insert(s, ("リロール: 残り %d 回 / 1回 %d 文"):format(remaining, rerollCost))
 		end
 	end
 	self._nodes.summary.Text = table.concat(s, "\n")
