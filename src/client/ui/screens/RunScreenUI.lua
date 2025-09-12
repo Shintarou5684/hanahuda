@@ -93,6 +93,15 @@ local function applyTexts(tRefs)
 		if tRefs.buttons.confirm    then tRefs.buttons.confirm.Text    = t("RUN_BTN_CONFIRM") end
 		if tRefs.buttons.rerollAll  then tRefs.buttons.rerollAll.Text  = t("RUN_BTN_REROLL_ALL") end
 		if tRefs.buttons.rerollHand then tRefs.buttons.rerollHand.Text = t("RUN_BTN_REROLL_HAND") end
+
+		-- ★ 追加：役一覧ボタン（ローカライズが無い場合はフォールバック）
+		if tRefs.buttons.yaku then
+			local label = t("RUN_BTN_YAKU")
+			if not label or label == "" or label == "RUN_BTN_YAKU" then
+				label = (_lang == "en") and "Yaku" or "役一覧"
+			end
+			tRefs.buttons.yaku.Text = label
+		end
 	end
 	-- ヘルプ・バー
 	if tRefs.help then
@@ -259,9 +268,24 @@ function M.build(parentGui: Instance, opts)
 	controlsPanel.ZIndex = 1
 	makeList(controlsPanel, Enum.FillDirection.Vertical, 8)
 
+	-- 既存
 	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", C.PrimaryBtnBg or Color3.fromRGB(255,153,0))
 	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", C.WarnBtnBg or Color3.fromRGB(220,70,70))
 	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", C.WarnBtnBg or Color3.fromRGB(220,70,70))
+
+	-- ★ 追加：役一覧ボタン（Confirm の“上”に出す）
+	local btnYaku = makeSideBtn(
+		controlsPanel,
+		"OpenYaku",
+		"",  -- 文字列は applyTexts() で入れる
+		(C.SecondaryBtnBg or C.PrimaryBtnBg or Color3.fromRGB(80,120,200))
+	)
+
+	-- ★ 並び順（UIListLayout 用）：Yaku=9, Confirm=10, RerollAll=11, RerollHand=12
+	btnYaku.LayoutOrder     = 9
+	btnConfirm.LayoutOrder  = 10
+	btnRerollAll.LayoutOrder  = 11
+	btnRerollHand.LayoutOrder = 12
 
 	--=== Center：盤面 / お知らせ / チュートリアル / 手札 ================
 	makeList(center, Enum.FillDirection.Vertical, 0.02, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
@@ -401,6 +425,7 @@ function M.build(parentGui: Instance, opts)
 		scorePanel = scorePanel,
 		takenPanel = takenPanel,
 		buttons = {
+			yaku = btnYaku,        -- ★ 追加
 			confirm = btnConfirm,
 			rerollAll = btnRerollAll,
 			rerollHand = btnRerollHand,

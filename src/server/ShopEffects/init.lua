@@ -1,3 +1,4 @@
+-- ServerScriptService/ShopEffects/init.lua
 -- v0.9.0 効果ディスパッチ（カテゴリ別振り分け）
 -- 公開I/F:
 --   apply(effectId, state, ctx) -> (ok:boolean, message:string)
@@ -5,37 +6,47 @@
 local M = {}
 
 --========================
--- サブモジュールの読込
+-- サブモジュールの読込（安全なpcall）
 --========================
-local Kito
-do
+local function safeRequire(container, childName)
 	local ok, mod = pcall(function()
-		return require(script:WaitForChild("Kito"))
+		return require(container:WaitForChild(childName))
 	end)
 	if ok and type(mod) == "table" then
-		Kito = mod
+		return mod
 	else
-		warn("[ShopEffects.init] Kito module not found or invalid:", mod)
+		warn("[ShopEffects.init] module not found or invalid:", childName, mod)
+		return nil
 	end
 end
 
-local Sai
-do
-	local ok, mod = pcall(function()
-		return require(script:WaitForChild("Sai"))
-	end)
-	if ok and type(mod) == "table" then
-		Sai = mod
-	else
-		warn("[ShopEffects.init] Sai module not found or invalid:", mod)
-	end
-end
+local Kito     = safeRequire(script, "Kito")
+local Sai      = safeRequire(script, "Sai")
+local Spectral = safeRequire(script, "Spectral") -- ★追加
 
 -- 直接呼びたい場合のエクスポート
-M.Kito = Kito
-M.Sai  = Sai
+M.Kito     = Kito
+M.Sai      = Sai
+M.Spectral = Spectral
 
 local function msgJa(s) return s end
+
+--========================
+-- 内部：委譲呼び出し（共通ラッパ）
+--========================
+local function delegate(mod, fx, effectId, state, ctx, tag)
+	if not (mod and type(mod[fx]) == "function") then
+		return false, msgJa(tag .. "モジュールが見つかりません")
+	end
+	local okCall, okRet, msgRet = pcall(function()
+		return mod[fx](effectId, state, ctx)
+	end)
+	if not okCall then
+		warn(("[ShopEffects.init] %s.apply threw: %s"):format(tag, tostring(okRet)))
+		return false, msgJa(tag .. "適用中にエラーが発生しました")
+	end
+	return okRet == true, tostring(msgRet or "")
+end
 
 --========================
 -- メインディスパッチ
@@ -47,34 +58,17 @@ function M.apply(effectId, state, ctx)
 
 	-- 祈祷（kito_）
 	if effectId:sub(1,5) == "kito_" then
-		if Kito and type(Kito.apply) == "function" then
-			local okCall, okRet, msgRet = pcall(function()
-				return Kito.apply(effectId, state, ctx)
-			end)
-			if not okCall then
-				warn("[ShopEffects.init] Kito.apply threw:", okRet)
-				return false, msgJa("祈祷適用中にエラーが発生しました")
-			end
-			return okRet == true, tostring(msgRet or "")
-		else
-			return false, msgJa("祈祷モジュールが見つかりません")
-		end
+		return delegate(Kito, "apply", effectId, state, ctx, "祈祷")
 	end
 
 	-- 祭事（sai_）
 	if effectId:sub(1,4) == "sai_" then
-		if Sai and type(Sai.apply) == "function" then
-			local okCall, okRet, msgRet = pcall(function()
-				return Sai.apply(effectId, state, ctx)
-			end)
-			if not okCall then
-				warn("[ShopEffects.init] Sai.apply threw:", okRet)
-				return false, msgJa("祭事適用中にエラーが発生しました")
-			end
-			return okRet == true, tostring(msgRet or "")
-		else
-			return false, msgJa("祭事モジュールが見つかりません")
-		end
+		return delegate(Sai, "apply", effectId, state, ctx, "祭事")
+	end
+
+	-- ★ スペクタル（spectral_/spec_/互換kito_spec_）
+	if effectId:sub(1,9) == "spectral_" or effectId:sub(1,5) == "spec_" or effectId:sub(1,11) == "kito_spec_" then
+		return delegate(Spectral, "apply", effectId, state, ctx, "スペクタル")
 	end
 
 	return false, msgJa(("未対応の効果ID: %s"):format(effectId))

@@ -9,7 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 -- Modules
 local Config = ReplicatedStorage:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
-local Locale = require(Config:WaitForChild("Locale")) -- ★ 追加：言語の明示引き渡し
+local Locale = require(Config:WaitForChild("Locale"))
 
 -- 相対モジュール
 local components     = script.Parent.Parent:WaitForChild("components")
@@ -20,6 +20,7 @@ local TakenRenderer  = require(renderersDir:WaitForChild("TakenRenderer"))
 local ResultModal    = require(components:WaitForChild("ResultModal"))
 local Overlay        = require(components:WaitForChild("Overlay"))
 local DevTools       = require(components:WaitForChild("DevTools"))
+local YakuPanel      = require(components:WaitForChild("YakuPanel")) -- ★ 役倍率パネル
 
 local lib        = script.Parent.Parent:WaitForChild("lib")
 local Format     = require(lib:WaitForChild("FormatUtil"))
@@ -35,18 +36,22 @@ local function extractGoalFromInfoText(text)
 	return n
 end
 
+local function mapLangForPanel(lang) -- Runは "jp"/"en"、パネルは "ja"/"en"
+	return (lang == "jp") and "ja" or "en"
+end
+
 function Run.new(deps)
 	local self = setmetatable({}, Run)
 	self.deps = deps
 	self._awaitingInitial = false
 	self._resultShown = false
 
-	-- === 言語の初期決定（グローバル→OS）を UI に明示 ===
+	-- 言語初期値
 	local initialLang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
 	self._lang = initialLang
 	print("[LANG_FLOW] Run.new initialLang=", initialLang)
 
-	-- UI構築（★ 明示 lang を渡す）
+	-- UI 構築
 	local ui = UIBuilder.build(nil, { lang = initialLang })
 	self.gui      = ui.gui
 	self.frame    = ui.root
@@ -59,7 +64,7 @@ function Run.new(deps)
 	self.takenBox = ui.takenBox
 	self._scoreBox = ui.scoreBox
 	self.buttons  = ui.buttons
-	self._ui_setLang = ui.setLang  -- ★ 後から切替用
+	self._ui_setLang = ui.setLang  -- 後から切替用
 
 	-- Overlay / ResultModal
 	local loadingText = Theme.loadingText or (Locale.t(initialLang, "RUN_HELP_LINE") or "Loading...")
@@ -70,6 +75,9 @@ function Run.new(deps)
 		next = function() if self.deps.GoNext  then self.deps.GoNext :FireServer() end end,
 		save = function() if self.deps.SaveQuit then self.deps.SaveQuit:FireServer() end end,
 	})
+
+	-- ★ 役倍率パネル（前面ポップアップ）
+	self._yakuPanel = YakuPanel.mount(self.gui)
 
 	-- Studio専用 DevTools
 	if RunService:IsStudio() and (self.deps.DevGrantRyo or self.deps.DevGrantRole) then
@@ -91,17 +99,7 @@ function Run.new(deps)
 				end
 				HandRenderer.render(self.handArea, hand, {
 					selectedIndex = self._selectedHandIdx,
-					onSelect = function(ii)
-						if self._selectedHandIdx == ii then
-							self._selectedHandIdx = nil
-						else
-							self._selectedHandIdx = ii
-						end
-						HandRenderer.render(self.handArea, hand, {
-							selectedIndex = self._selectedHandIdx,
-							onSelect = function(_) end
-						})
-					end
+					onSelect = function(_) end
 				})
 			end
 		})
@@ -132,30 +130,34 @@ function Run.new(deps)
 		local tot = tonumber(total) or 0
 		local box = self._scoreBox
 		if box then
-			-- TODO: ローカライズ対応の書式に差し替え予定
 			box.Text = ("得点：%d（文%d × 点%d）\n役：%s"):format(tot, mon, pts, Format.rolesToLines(roles))
 		end
 	end
 
 	local function onState(st)
-		-- 情報パネル更新（FormatUtil 側のローカライズは別途）
+		-- 情報パネル更新
 		local line = Format.stateLineText(st)
 		self.info.Text = line
 
-		-- 目標スコア（情報パネルの値をミラー）※ラベル文言はローカライズ
+		-- 目標表示
 		if self.goalText then
 			local g = extractGoalFromInfoText(line)
 			local label = (self._lang == "en") and "Goal:" or "目標："
 			self.goalText.Text = g and (label .. tostring(g)) or (label .. "—")
 		end
 
-		-- お知らせ（必要に応じて上書きする想定。初期は空）
-		if self.notice and self.notice.Text == "" then
-			self.notice.Text = ""
+		-- 役倍率パネルへ現在状態を反映
+		if self._yakuPanel then
+			local upd = {
+				lang    = mapLangForPanel(self._lang),
+				matsuri = st and st.matsuri
+			}
+			self._yakuPanel:update(upd)
 		end
 
 		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
 		self._resultShown = false
+		if self.notice and self.notice.Text == "" then self.notice.Text = "" end
 	end
 
 	local function onStageResult(a, b, _c, _d, _e)
@@ -171,7 +173,6 @@ function Run.new(deps)
 		end
 
 		if isFinal then
-			-- TODO: ResultModal もローカライズ化
 			self._resultModal:showFinal(
 				"クリアおめでとう！",
 				"このランは終了です。メニューに戻ります。",
@@ -203,18 +204,20 @@ function Run.new(deps)
 		self._resultModal:setLocked(not canNext, not canSave)
 	end
 
-	-- ボタン
+	-- ボタン（※Yakuは UI 側のボタンを“接続だけ”する）
+	if self.buttons.yaku then
+		self.buttons.yaku.MouseButton1Click:Connect(function()
+			if self._yakuPanel then self._yakuPanel:open() end
+		end)
+	end
 	self.buttons.confirm.MouseButton1Click:Connect(function() if self.deps.Confirm       then self.deps.Confirm:FireServer()       end end)
 	self.buttons.rerollAll.MouseButton1Click:Connect(function() if self.deps.ReqRerollAll then self.deps.ReqRerollAll:FireServer() end end)
 	self.buttons.rerollHand.MouseButton1Click:Connect(function() if self.deps.ReqRerollHand then self.deps.ReqRerollHand:FireServer() end end)
-
 	if self.buttons.clearSel then
-		self.buttons.clearSel.MouseButton1Click:Connect(function()
-			self._selectedHandIdx = nil
-		end)
+		self.buttons.clearSel.MouseButton1Click:Connect(function() self._selectedHandIdx = nil end)
 	end
 
-	-- Remotes 接続
+	-- Remotes
 	self._remotes = RemotesCtl.create(self.deps, {
 		onHand = renderHand,
 		onField = renderField,
@@ -224,7 +227,7 @@ function Run.new(deps)
 		onStageResult = onStageResult,
 	})
 
-	-- Router.call 互換（従来のフォワード）
+	-- Router.call 互換
 	self.onHand        = function(_, hand)                 renderHand(hand) end
 	self.onField       = function(_, field)                renderField(field) end
 	self.onTaken       = function(_, taken)                renderTaken(taken) end
@@ -236,7 +239,7 @@ function Run.new(deps)
 	return self
 end
 
--- ★ 外部からの言語切替 API（Router.call 用）
+-- 言語切替
 function Run:setLang(lang)
 	if lang ~= "jp" and lang ~= "en" then return end
 	if self._lang == lang then
@@ -247,6 +250,10 @@ function Run:setLang(lang)
 	self._lang = lang
 	if type(self._ui_setLang) == "function" then
 		self._ui_setLang(lang)
+	end
+	-- 役パネルは ja/en
+	if self._yakuPanel then
+		self._yakuPanel:update({ lang = mapLangForPanel(lang) })
 	end
 end
 

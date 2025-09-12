@@ -2,7 +2,10 @@
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
 
 local RS = game:GetService("ReplicatedStorage")
-local Scoring = require(RS.SharedModules.Scoring)
+
+-- 依存モジュール
+local Scoring     = require(RS:WaitForChild("SharedModules"):WaitForChild("Scoring"))
+local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil")) -- ★追加
 
 local StateHub = {}
 
@@ -31,7 +34,10 @@ type PlrState = {
 	year: number?,          -- 周回年数（25年進行で+25）
 	homeReturns: number?,   -- 「ホームへ戻る」回数（アンロック条件用）
 
+	lang: string?,          -- ★任意：言語（"ja"/"en"）
 	lastScore: any?,        -- 任意：デバッグ/結果表示
+
+	run: any?,              -- RunDeckUtil が内部で利用（meta/matsuriLevels 等）
 }
 
 local stateByPlr : {[Player]: PlrState} = {}
@@ -113,6 +119,7 @@ local function ensureDefaults(s: PlrState)
 	s.hand        = s.hand or {}
 	s.board       = s.board or {}
 	s.taken       = s.taken or {}
+	-- lang / run は任意
 end
 
 --========================
@@ -123,43 +130,47 @@ function StateHub.pushState(plr: Player)
 	local s = stateByPlr[plr]; if not s then return end
 	ensureDefaults(s)
 
-	
+	-- サマリー算出（Scoring は state（=s）内の祭事レベルも参照可能）
 	local takenCards = s.taken or {}
-local total, roles, detail = Scoring.evaluate(takenCards, s)
+	local total, roles, detail = Scoring.evaluate(takenCards, s) -- detail={mon,pts}
+
+	-- 祭事レベル（UI用にフラットで同梱）
+	local matsuriLevels = RunDeckUtil.getMatsuriLevels(s) or {} -- ★追加
 
 	-- 状態（HUD/UI用）
 	if Remotes.StatePush then
 		Remotes.StatePush:FireClient(plr, {
 			-- 基本
-			season    = s.season,
-			seasonStr = seasonName(s.season),       -- 仕様に沿って季節名も送る
-			target    = targetForSeason(s.season),
+			season      = s.season,
+			seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
+			target      = targetForSeason(s.season),
 
 			-- 残り系
-			hands     = s.handsLeft or 0,
-			rerolls   = s.rerollsLeft or 0,
+			hands       = s.handsLeft or 0,
+			rerolls     = s.rerollsLeft or 0,
 
 			-- 経済/表示
-			sum       = s.seasonSum or 0,
-			mult      = s.mult or 1.0,
-			bank      = s.bank or 0,
-			mon       = s.mon or 0,
+			sum         = s.seasonSum or 0,
+			mult        = s.mult or 1.0,
+			bank        = s.bank or 0,
+			mon         = s.mon or 0,
 
 			-- 進行/年数
-			phase     = s.phase or "play",
-			year      = s.year or 1,
+			phase       = s.phase or "play",
+			year        = s.year or 1,
 			homeReturns = s.homeReturns or 0,
 
+			-- 言語（UIで利用）
+			lang        = s.lang,                     -- ★追加
+
+			-- 祭事レベル（YakuPanel 等のUIで利用）
+			matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
+
 			-- 山/手の残枚数（UIの安全表示用）
-			deckLeft  = #(s.deck or {}),
-			handLeft  = #(s.hand or {}),
+			deckLeft    = #(s.deck or {}),
+			handLeft    = #(s.hand or {}),
 		})
 	end
-
-
-
-
-
 
 	-- スコア（リスト/直近役表示）
 	if Remotes.ScorePush then
@@ -168,7 +179,7 @@ local total, roles, detail = Scoring.evaluate(takenCards, s)
 	end
 
 	-- 札（手/場/取り）
-	if Remotes.HandPush then Remotes.HandPush:FireClient(plr, s.hand or {}) end
+	if Remotes.HandPush  then Remotes.HandPush:FireClient(plr, s.hand  or {}) end
 	if Remotes.FieldPush then Remotes.FieldPush:FireClient(plr, s.board or {}) end
 	if Remotes.TakenPush then Remotes.TakenPush:FireClient(plr, s.taken or {}) end
 end

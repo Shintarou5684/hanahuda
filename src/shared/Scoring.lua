@@ -198,4 +198,21 @@ function S.evaluate(takenCards, state)
 	return total, roles, { mon = mon, pts = pts }
 end
 
+---=== [追加] 祭事レベル→(文/点)の上乗せ値を返す（UI用） =======================
+function S.getFestivalStat(fid, level)
+	local lv = tonumber(level or 0) or 0
+	local coeff = MATSURI_COEFF[fid]
+	if not coeff then return 0, 0 end
+	local multPerLv, ptsPerLv = coeff[1] or 0, coeff[2] or 0
+	return lv * multPerLv, lv * ptsPerLv -- (addMon, addPts)
+end
+
+--=== [追加] yaku_* に紐づく祭事ID配列を返す（UI用） ============================
+function S.getFestivalsForYaku(yakuId)
+	return YAKU_TO_SAI[yakuId] or {}
+end
+
+
+
+
 return S
