@@ -1,6 +1,9 @@
 -- StarterPlayerScripts/UI/screens/HomeScreen.lua
--- NEW GAME / 神社 / 持ち物 / 設定 / CONTINUE
+-- START GAME / 神社 / 持ち物 / 設定 / パッチノート（別モジュール化）
 -- 言語切替（EN/JP）対応：保存(lang)があればそれを優先、無ければOS基準
+-- v0.9.4:
+--  - パッチノートのUI/取得ロジックを PatchNotesModal.lua へ分離
+--  - Home はボタン→モーダル呼び出しのみ
 
 local Home = {}
 Home.__index = Home
@@ -12,6 +15,7 @@ local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 
 local Locale  = require(RS:WaitForChild("Config"):WaitForChild("Locale"))
+local PatchNotesModal = require(script.Parent:WaitForChild("PatchNotesModal"))
 
 local function detectOSLang()
 	local lp  = Players.LocalPlayer
@@ -30,6 +34,11 @@ local function pickLang(forced)
 end
 
 local function makeL(dict) return function(k) return dict[k] or k end end
+
+-- 直接辞書を参照してフォールバック文字列を返すユーティリティ
+local function Dget(dict, key, fallback)
+	return (dict and dict[key]) or fallback
+end
 
 --========================
 -- Helpers
@@ -57,6 +66,7 @@ end
 function Home.new(deps)
 	local self = setmetatable({}, Home)
 	self.deps = deps
+	self.hasSave = false -- HomeOpen から受け取って保持（STARTラベル切替に使用）
 
 	-- 言語（初期は保存/明示→OSの順）
 	self.lang   = pickLang(deps and deps.lang)
@@ -69,12 +79,13 @@ function Home.new(deps)
 
 	-- ルートGUI
 	local g = Instance.new("ScreenGui")
-	g.Name           = "HomeScreen"
-	g.ResetOnSpawn   = false
-	g.IgnoreGuiInset = true
-	g.DisplayOrder   = 100
-	g.Enabled        = false
-	self.gui         = g
+	g.Name             = "HomeScreen"
+	g.ResetOnSpawn     = false
+	g.IgnoreGuiInset   = true
+	g.DisplayOrder     = 100
+	g.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
+	g.Enabled          = false
+	self.gui           = g
 
 	--========================
 	-- 背景
@@ -207,11 +218,12 @@ function Home.new(deps)
 		return b
 	end
 
-	self.btnNew      = makeBtn("") -- 後で文言を適用
-	self.btnShrine   = makeBtn("")
-	self.btnItems    = makeBtn("")
-	self.btnSettings = makeBtn("")
-	self.btnCont     = makeBtn("")
+	-- ★ ボタン構成（START / SHRINE / ITEMS / SETTINGS / PATCH NOTES）
+	self.btnStart     = makeBtn("") -- 文言は後で適用（hasSaveによって切替）
+	self.btnShrine    = makeBtn("")
+	self.btnItems     = makeBtn("")
+	self.btnSettings  = makeBtn("")
+	self.btnPatch     = makeBtn("")
 
 	--========================
 	-- BETA バッジ
@@ -284,17 +296,33 @@ function Home.new(deps)
 	self.chipJP = makeChip("JP")
 
 	--========================
+	-- ★ Patch Notes モーダル（別モジュール）
+	--========================
+	self.patch = PatchNotesModal.new({
+		parentGui = self.gui,
+		lang      = self.lang,
+		Locale    = Locale,
+	})
+
+	--========================
 	-- イベント
 	--========================
-self.btnNew.Activated:Connect(function()
-	-- ✅ 先に画面を開かない：RoundReady を待って run を開く
-	if self.deps and self.deps.remotes and self.deps.remotes.ReqStartNewRun then
-		self.deps.remotes.ReqStartNewRun:FireServer()
-	elseif self.deps and self.deps.ReqStartNewRun then
-		self.deps.ReqStartNewRun:FireServer()
-	end
-	self:hide()
-end)
+	self.btnStart.Activated:Connect(function()
+		-- ✅ RoundReady を待って Run 画面へ（ここでは Home を閉じるのみ）
+		local r = self.deps and self.deps.remotes or self.deps
+		-- 新：統合エントリ（推奨）
+		if r and r.ReqStartGame then
+			r.ReqStartGame:FireServer()
+		else
+			-- 旧：後方互換（スナップ有→CONTINUE / 無→NEW）
+			if self.hasSave and r and r.ReqContinueRun then
+				r.ReqContinueRun:FireServer()
+			elseif r and r.ReqStartNewRun then
+				r.ReqStartNewRun:FireServer()
+			end
+		end
+		self:hide()
+	end)
 
 	self.btnShrine.Activated:Connect(function()
 		notify(self._L("NOTIFY_SHRINE_TITLE"), self._L("NOTIFY_SHRINE_TEXT"), 2)
@@ -308,9 +336,9 @@ end)
 		notify(self._L("NOTIFY_SETTINGS_TITLE"), self._L("NOTIFY_SETTINGS_TEXT"), 2)
 	end)
 
-	self.btnCont.Activated:Connect(function()
-		if not self.btnCont.Active then return end
-		notify(self._L("CONTINUE_STUB_TITLE"), self._L("CONTINUE_STUB_TEXT"), 2)
+	-- ★ パッチノート：モーダルを開く
+	self.btnPatch.Activated:Connect(function()
+		self.patch:show()
 	end)
 
 	-- 言語切替ボタン
@@ -320,13 +348,16 @@ end)
 	-- 初回の文言適用
 	self:applyLocaleTexts()
 
-	-- CONTINUEは初期無効（HomeOpenで切替）
-	setInteractable(self.btnCont, false)
+	-- いずれのボタンも初期は有効（STARTのラベルは HomeOpen で再設定）
+	setInteractable(self.btnStart, true)
+	setInteractable(self.btnPatch, true)
 
 	return self
 end
 
--- 言語を変更（local適用＋保存をリクエスト）
+--========================
+-- 言語切替 / テキスト適用
+--========================
 function Home:setLanguage(lang: string, requestSave: boolean?)
 	if lang ~= "jp" and lang ~= "en" then return end
 	if self.lang == lang then return end
@@ -345,26 +376,34 @@ function Home:setLanguage(lang: string, requestSave: boolean?)
 		Locale.setGlobal(lang)
 	end
 
+	-- モーダルにも言語反映
+	if self.patch and self.patch.setLanguage then
+		self.patch:setLanguage(lang)
+	end
+
 	-- サーバ保存（任意・存在すれば）
 	if requestSave and self.deps and self.deps.remotes and self.deps.remotes.ReqSetLang then
 		self.deps.remotes.ReqSetLang:FireServer(lang)
 	end
 end
 
--- 文言を一括適用
+-- 文言を一括適用（静的部分）
 function Home:applyLocaleTexts()
 	local L = self._L
+	-- タイトル/サブタイトル
 	if self.titleJP     then self.titleJP.Text     = L("MAIN_TITLE") end
 	if self.titleEN     then self.titleEN.Text     = L("SUBTITLE") end
+	-- ステータス初期表示（HomeOpenで実値に更新）
 	if self.statusLabel then
 		self.statusLabel.Text = string.format(L("STATUS_FMT"), L("UNSET_YEAR"), 0, 0)
 	end
-	if self.btnNew      then self.btnNew.Text      = L("BTN_NEW")      end
-	if self.btnShrine   then self.btnShrine.Text   = L("BTN_SHRINE")   end
-	if self.btnItems    then self.btnItems.Text    = L("BTN_ITEMS")    end
-	if self.btnSettings then self.btnSettings.Text = L("BTN_SETTINGS") end
-	if self.btnCont     then self.btnCont.Text     = L("BTN_CONT")     end
-	if self.betaLabel   then self.betaLabel.Text   = L("BETA_BADGE")   end
+	-- メニュー（START は hasSave により show() で差し替え）
+	if self.btnStart     then self.btnStart.Text     = Dget(self.Dict, "BTN_START", Dget(self.Dict, "BTN_NEW", "START GAME")) end
+	if self.btnShrine    then self.btnShrine.Text    = L("BTN_SHRINE")   end
+	if self.btnItems     then self.btnItems.Text     = L("BTN_ITEMS")    end
+	if self.btnSettings  then self.btnSettings.Text  = L("BTN_SETTINGS") end
+	if self.btnPatch     then self.btnPatch.Text     = Dget(self.Dict, "BTN_PATCH", "PATCH NOTES") end
+	if self.betaLabel    then self.betaLabel.Text    = L("BETA_BADGE")   end
 end
 
 function Home:show(payload)
@@ -374,12 +413,19 @@ function Home:show(payload)
 		self:setLanguage(payload.lang, false)
 	end
 
-	local hasSave = payload and payload.hasSave == true
+	self.hasSave = (payload and payload.hasSave == true) or false
 	local bank    = (payload and tonumber(payload.bank))   or 0
 	local year    = (payload and tonumber(payload.year))   or 0
 	local clears  = (payload and tonumber(payload.clears)) or 0
 
-	setInteractable(self.btnCont, hasSave)
+	-- STARTボタンのラベルを hasSave で出し分け（CONTINUE 風/NEW 風）
+	if self.btnStart then
+		if self.hasSave then
+			self.btnStart.Text = Dget(self.Dict, "BTN_CONT", "CONTINUE")
+		else
+			self.btnStart.Text = Dget(self.Dict, "BTN_START", Dget(self.Dict, "BTN_NEW", "START GAME"))
+		end
+	end
 
 	local L = self._L
 	local yearTxt = (year > 0) and tostring(year) or L("UNSET_YEAR")

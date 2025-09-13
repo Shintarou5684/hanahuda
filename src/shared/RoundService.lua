@@ -1,10 +1,20 @@
--- v0.9.0 季節開始ロジック（configSnapshot → 当季デッキ）
+-- v0.9.1 季節開始ロジック（configSnapshot → 当季デッキ → ★季節開始スナップ保存）
 local RS = game:GetService("ReplicatedStorage")
+local SSS = game:GetService("ServerScriptService")
 local HttpService = game:GetService("HttpService")
 
 local CardEngine   = require(RS.SharedModules.CardEngine)
 local StateHub     = require(RS.SharedModules.StateHub)
 local RunDeckUtil  = require(RS.SharedModules.RunDeckUtil)
+
+-- ★ SaveService（サーバ専用：失敗してもゲームは継続）
+local SaveService do
+	local ok, mod = pcall(function() return require(SSS:WaitForChild("SaveService")) end)
+	if ok then SaveService = mod else
+		warn("[RoundService] SaveService not available; season snapshots will be skipped.")
+		SaveService = nil
+	end
+end
 
 local Round = {}
 
@@ -44,7 +54,7 @@ function Round.newRound(plr: Player, seasonNum: number)
 	consumeQueuedConversions(s, Random.new())
 	local configDeck = RunDeckUtil.loadConfig(s, true) -- 48枚
 
-	-- 2) 当季デッキを構成からクローン＆シャッフル
+	-- 2) 当季デッキを構成からクローン
 	local seasonDeck = {}
 	for i, c in ipairs(configDeck) do
 		seasonDeck[i] = {
@@ -52,7 +62,10 @@ function Round.newRound(plr: Player, seasonNum: number)
 			tags=c.tags and table.clone(c.tags) or nil, code=c.code,
 		}
 	end
-	CardEngine.shuffle(seasonDeck, makeSeasonSeed(seasonNum))
+
+	-- 2.5) ★ シードを明示管理（復元用に state に保持）
+	local seed = makeSeasonSeed(seasonNum)
+	CardEngine.shuffle(seasonDeck, seed)
 
 	-- 3) 初期配り
 	local hand  = CardEngine.draw(seasonDeck, 5)
@@ -75,9 +88,18 @@ function Round.newRound(plr: Player, seasonNum: number)
 	s.bank        = s.bank or 0
 	s.mon         = s.mon or 0
 	s.phase       = "play"
+	s.deckSeed    = seed            -- ★ 復元用に保持
 
 	StateHub.set(plr, s)
 	StateHub.pushState(plr)
+
+	-- 5) ★ 季節開始スナップを保存（CONTINUE用）
+	if SaveService and SaveService.snapSeasonStart then
+		-- 失敗してもゲームは継続（pcallで保護）
+		pcall(function()
+			SaveService.snapSeasonStart(plr, s, seasonNum)
+		end)
+	end
 end
 
 -- ランを完全リセット（構成も初期48へ戻す）
@@ -93,6 +115,8 @@ function Round.resetRun(plr: Player)
 		run = { configSnapshot = nil }, -- 次で自動初期化
 	}
 	StateHub.set(plr, fresh)
+
+	-- ★ 新ラン開始（newRound 内でスナップも作成される）
 	Round.newRound(plr, 1)
 end
 

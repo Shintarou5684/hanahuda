@@ -1,4 +1,4 @@
--- v0.9.0 祈祷：ラン構成(config)を直接更新する安全設計
+-- v0.9.1 祈祷：ラン構成(config)を直接更新する安全設計（寅Lvをstate.kitoへ反映）
 -- I/F:
 --   Kito.apply(effectId, state, ctx) -> (ok:boolean, message:string)
 
@@ -17,9 +17,15 @@ Kito.ID = {
 local DEFAULTS = { CAP_MON = 999999 }
 
 local function msg(s) return s end
+
 local function ensureBonus(state)
 	state.bonus = state.bonus or {}
 	return state.bonus
+end
+
+local function ensureKito(state)
+	state.kito = state.kito or {}
+	return state.kito
 end
 
 -- 丑：所持文2倍（プレイヤー状態のみ変更）
@@ -32,10 +38,17 @@ local function effect_ushi(state, ctx)
 end
 
 -- 寅：取り札の得点+1（恒常）
+-- ※ UI後方互換のため bonus.takenPointPlus も増やすが、参照の唯一真実は state.kito.tora
 local function effect_tora(state, _ctx)
+	-- 後方互換（旧UI/計算で利用している可能性あり）
 	local b = ensureBonus(state)
 	b.takenPointPlus = (b.takenPointPlus or 0) + 1
-	return true, msg(("寅：取り札の得点+1（累計+%d）"):format(b.takenPointPlus))
+
+	-- 採点（Scoring）側が参照する干支レベル
+	local k = ensureKito(state)
+	k.tora = (tonumber(k.tora) or 0) + 1
+
+	return true, msg(("寅：取り札の得点+1（累計+%d / Lv=%d）"):format(b.takenPointPlus, k.tora))
 end
 
 -- 酉：ラン構成の非brightを1枚brightへ

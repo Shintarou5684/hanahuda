@@ -1,11 +1,12 @@
 -- SharedModules/Scoring.lua
--- v0.9.0 役採点＋祭事（Matsuri）上乗せ対応
+-- v0.9.3 役採点＋祭事（Matsuri）＋干支（寅）対応／タグ配列対応／短冊(赤/青)の厳密判定
 -- I/F:
 --   S.evaluate(takenCards: {Card}, state?: table) -> (totalScore: number, roles: table, detail: { mon: number, pts: number })
 -- 備考:
---   ・従来どおり「総スコア = 文(mon) × 点(pts)」
+--   ・「総スコア = 文(mon) × 点(pts)」
 --   ・祭事は「成立した役」に応じて文/点へ加算（= レベル×係数）
---   ・state を渡さない場合は従来スコア（祭事なし）で動作
+--   ・寅（干支/Kito）は総Ptsに Lv×1 を加算（役の有無に依存しない）
+--   ・全札取得（バフなし）の基準値：文=38, pts=87 → 総スコア=3306
 
 local RS = game:GetService("ReplicatedStorage")
 local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
@@ -15,8 +16,6 @@ local S = {}
 --========================
 -- 基本テーブル
 --========================
-
--- 役 → 文（Mon） ＝ 従来の基礎点を「文」とみなす
 local ROLE_MON = {
 	five_bright = 10, four_bright = 8, rain_four_bright = 7, three_bright = 5,
 	inoshikacho = 5, red_ribbon = 5, blue_ribbon = 5,
@@ -24,14 +23,10 @@ local ROLE_MON = {
 	hanami = 5, tsukimi = 5,
 }
 
--- 札 → 点（Pts）重み：調整しやすいように種別ごとに係数を持つ
--- 例）光=5, たね=2, たん=2, かす=1
+-- 1枚あたりpts
 local CARD_PTS = { bright=5, seed=2, ribbon=2, chaff=1 }
 
---========================
--- 祭事（Matsuri）係数テーブル
---========================
---   [festivalId] = { mult_per_lv, pts_per_lv }
+-- 祭事（festivalId → { mult_per_lv, pts_per_lv }）
 local MATSURI_COEFF = {
 	sai_kasu      = { 1.0,  1 },
 	sai_tanzaku   = { 1.0,  3 },
@@ -45,48 +40,59 @@ local MATSURI_COEFF = {
 	sai_goko      = { 3.0, 30 },
 }
 
--- 役コード（Scoring内部のキー）→ 抽象役ID（yaku_*）
+-- 役キー → yaku_*
 local ROLE_TO_YAKU = {
-	chaffs        = "yaku_kasu",
-	ribbons       = "yaku_tanzaku",
-	seeds         = "yaku_tane",
-	red_ribbon    = "yaku_akatan",
-	blue_ribbon   = "yaku_aotan",
-	inoshikacho   = "yaku_inoshikacho",
-	hanami        = "yaku_hanami",
-	tsukimi       = "yaku_tsukimi",
-	three_bright  = "yaku_sanko",
-	-- four_bright / rain_four_bright は対象外
-	five_bright   = "yaku_goko",
+	chaffs="yaku_kasu", ribbons="yaku_tanzaku", seeds="yaku_tane",
+	red_ribbon="yaku_akatan", blue_ribbon="yaku_aotan",
+	inoshikacho="yaku_inoshikacho", hanami="yaku_hanami", tsukimi="yaku_tsukimi",
+	three_bright="yaku_sanko", five_bright="yaku_goko",
 }
 
--- 抽象役ID → 関連する祭事ID（複数可）
+-- yaku_* → 祭事ID
 local YAKU_TO_SAI = {
-	yaku_kasu          = { "sai_kasu" },
-	yaku_tanzaku       = { "sai_tanzaku" },
-	yaku_tane          = { "sai_tane" },
-	yaku_akatan        = { "sai_akatan",  "sai_tanzaku" },
-	yaku_aotan         = { "sai_aotan",   "sai_tanzaku" },
-	yaku_inoshikacho   = { "sai_inoshika" },
-	yaku_hanami        = { "sai_hanami" },
-	yaku_tsukimi       = { "sai_tsukimi" },
-	yaku_sanko         = { "sai_sanko" },
-	yaku_goko          = { "sai_goko" },
+	yaku_kasu={"sai_kasu"}, yaku_tanzaku={"sai_tanzaku"}, yaku_tane={"sai_tane"},
+	yaku_akatan={"sai_akatan","sai_tanzaku"}, yaku_aotan={"sai_aotan","sai_tanzaku"},
+	yaku_inoshikacho={"sai_inoshika"}, yaku_hanami={"sai_hanami"}, yaku_tsukimi={"sai_tsukimi"},
+	yaku_sanko={"sai_sanko"}, yaku_goko={"sai_goko"},
 }
 
 --========================
 -- ユーティリティ
 --========================
+local VALID_KIND = { bright=true, seed=true, ribbon=true, chaff=true }
+local KIND_ALIAS = { kasu="chaff", tane="seed", tan="ribbon", tanzaku="ribbon", hikari="bright", light="bright" }
+local function normKind(k)
+	if not k then return nil end
+	k = KIND_ALIAS[k] or k
+	return VALID_KIND[k] and k or nil
+end
+
+local function toTagSet(tags)
+	local set = {}
+	if typeof(tags) == "table" then
+		for k,v in pairs(tags) do
+			if typeof(k)=="number" then set[v]=true else set[k]=(v==nil) and true or v end
+		end
+	end
+	return set
+end
+
+local function hasTags(card, names:{string})
+	local set = toTagSet(card and card.tags)
+	for _,name in ipairs(names or {}) do
+		if not set[name] then return false end
+	end
+	return true
+end
+
 local function counts(cards)
 	local c = {bright=0, seed=0, ribbon=0, chaff=0, months={}, tags={}}
 	for _,card in ipairs(cards or {}) do
-		c[card.kind] += 1
-		c.months[card.month] = (c.months[card.month] or 0) + 1
-		if card.tags then
-			for t,_ in pairs(card.tags) do
-				c.tags[t] = (c.tags[t] or 0) + 1
-			end
-		end
+		local k = normKind(card.kind)
+		if k then c[k] += 1 end
+		if card.month then c.months[card.month] = (c.months[card.month] or 0) + 1 end
+		local tset = toTagSet(card.tags)
+		for t,_ in pairs(tset) do c.tags[t] = (c.tags[t] or 0) + 1 end
 	end
 	return c
 end
@@ -94,58 +100,56 @@ end
 --========================
 -- メイン：採点
 --========================
--- 戻り値： totalScore, rolesTable, detailTable{ mon=文合計, pts=点合計 }
 function S.evaluate(takenCards, state)
 	local c = counts(takenCards)
-	local roles = {}
-	local mon = 0  -- 文（役の合計）
+	local roles, mon = {}, 0
 
 	-- 光系
-	if c.bright == 5 then roles.five_bright = ROLE_MON.five_bright
+	if c.bright == 5 then
+		roles.five_bright = ROLE_MON.five_bright
 	elseif c.bright == 4 then
-		if c.tags["rain"] then roles.rain_four_bright = ROLE_MON.rain_four_bright
+		if (c.tags["rain"] or 0) > 0 then roles.rain_four_bright = ROLE_MON.rain_four_bright
 		else roles.four_bright = ROLE_MON.four_bright end
-	elseif c.bright == 3 and not c.tags["rain"] then
+	elseif c.bright == 3 and (c.tags["rain"] or 0) == 0 then
 		roles.three_bright = ROLE_MON.three_bright
 	end
 
-	-- 名前直接（猪鹿蝶）
-	local has = {}
-	for _,card in ipairs(takenCards or {}) do has[card.name or ""] = true end
-	if has["猪"] and has["鹿"] and has["蝶"] then
-		roles.inoshikacho = ROLE_MON.inoshikacho
+	-- 名前直接（猪鹿蝶・花見・月見）
+	local hasName = {}
+	for _,card in ipairs(takenCards or {}) do
+		if card and card.name then hasName[card.name] = true end
 	end
+	if hasName["猪"] and hasName["鹿"] and hasName["蝶"] then roles.inoshikacho = ROLE_MON.inoshikacho end
+	if hasName["桜に幕"] and hasName["盃"] then roles.hanami = ROLE_MON.hanami end
+	if hasName["芒に月"] and hasName["盃"] then roles.tsukimi = ROLE_MON.tsukimi end
 
 	-- 赤短（1,2,3 の 赤+字あり）
-	local ok_red = 0
-	for _,m in ipairs({1,2,3}) do
-		for _,card in ipairs(takenCards or {}) do
-			if card.month==m and card.kind=="ribbon" and card.tags and card.tags["aka"] and card.tags["jiari"] then
-				ok_red += 1; break
+	do
+		local ok = 0
+		for _,m in ipairs({1,2,3}) do
+			for _,card in ipairs(takenCards or {}) do
+				if card.month==m and normKind(card.kind)=="ribbon" and hasTags(card, {"aka","jiari"}) then ok += 1; break end
 			end
 		end
+		if ok==3 then roles.red_ribbon = ROLE_MON.red_ribbon end
 	end
-	if ok_red==3 then roles.red_ribbon = ROLE_MON.red_ribbon end
 
 	-- 青短（6,9,10 の 青+字あり）
-	local ok_blue = 0
-	for _,m in ipairs({6,9,10}) do
-		for _,card in ipairs(takenCards or {}) do
-			if card.month==m and card.kind=="ribbon" and card.tags and card.tags["ao"] and card.tags["jiari"] then
-				ok_blue += 1; break
+	do
+		local ok = 0
+		for _,m in ipairs({6,9,10}) do
+			for _,card in ipairs(takenCards or {}) do
+				if card.month==m and normKind(card.kind)=="ribbon" and hasTags(card, {"ao","jiari"}) then ok += 1; break end
 			end
 		end
+		if ok==3 then roles.blue_ribbon = ROLE_MON.blue_ribbon end
 	end
-	if ok_blue==3 then roles.blue_ribbon = ROLE_MON.blue_ribbon end
 
-	-- 花見/月見
-	if has["桜に幕"] and has["盃"] then roles.hanami = ROLE_MON.hanami end
-	if has["芒に月"] and has["盃"] then roles.tsukimi = ROLE_MON.tsukimi end
+	-- たね/たん/かす（閾値：5/5/10）→ 超過1枚ごとに +1文
+	if c.seed   >= 5  then roles.seeds   = ROLE_MON.seeds   + (c.seed   - 5)  end
+	if c.ribbon >= 5  then roles.ribbons = ROLE_MON.ribbons + (c.ribbon - 5)  end
+	if c.chaff  >= 10 then roles.chaffs  = ROLE_MON.chaffs  + (c.chaff  - 10) end
 
-	-- たね/たん/かす（閾値：5/5/10）
-	if c.seed   >= 5 then roles.seeds   = ROLE_MON.seeds   end
-	if c.ribbon >= 5 then roles.ribbons = ROLE_MON.ribbons end
-	if c.chaff  >=10 then roles.chaffs  = ROLE_MON.chaffs  end
 
 	-- 文合算
 	for _,v in pairs(roles) do mon += v end
@@ -153,18 +157,13 @@ function S.evaluate(takenCards, state)
 	-- 札 → 点合算
 	local pts = 0
 	for kind,count in pairs({bright=c.bright, seed=c.seed, ribbon=c.ribbon, chaff=c.chaff}) do
-		local w = CARD_PTS[kind] or 0
-		pts += w * (count or 0)
+		pts += (CARD_PTS[kind] or 0) * (count or 0)
 	end
 
-	--========================
-	-- 祭事の上乗せ（成立役に応じて文/点へ加算）
-	--========================
+	-- 祭事の上乗せ
 	if typeof(state) == "table" then
 		local levels = RunDeckUtil.getMatsuriLevels(state) or {}
-		
 		if next(levels) ~= nil then
-			-- 成立役 → yaku_* のリストを作る
 			local yakuList = {}
 			for roleKey, v in pairs(roles) do
 				if v and v > 0 then
@@ -172,8 +171,6 @@ function S.evaluate(takenCards, state)
 					if yaku then table.insert(yakuList, yaku) end
 				end
 			end
-
-			-- yaku_* ごとに紐づく祭事を見て加算
 			for _, yakuId in ipairs(yakuList) do
 				local festivals = YAKU_TO_SAI[yakuId]
 				if festivals then
@@ -182,37 +179,43 @@ function S.evaluate(takenCards, state)
 						if lv > 0 then
 							local coeff = MATSURI_COEFF[fid]
 							if coeff then
-								local multPerLv, ptsPerLv = coeff[1] or 0, coeff[2] or 0
-								mon += (lv * multPerLv)
-								pts += (lv * ptsPerLv)
+								mon += lv * (coeff[1] or 0)
+								pts += lv * (coeff[2] or 0)
 							end
 						end
 					end
 				end
 			end
 		end
+
+		-- 干支：寅（Ptsに +1/Lv）
+		do
+			local kitoLevels = (RunDeckUtil.getKitoLevels and RunDeckUtil.getKitoLevels(state)) or state.kito or {}
+			local toraLv = tonumber(kitoLevels.tora or kitoLevels["kito_tora"] or 0) or 0
+			if toraLv > 0 then pts += toraLv end
+		end
 	end
 
-	-- 総スコア = 文 × 点
 	local total = mon * pts
 	return total, roles, { mon = mon, pts = pts }
 end
 
----=== [追加] 祭事レベル→(文/点)の上乗せ値を返す（UI用） =======================
 function S.getFestivalStat(fid, level)
 	local lv = tonumber(level or 0) or 0
 	local coeff = MATSURI_COEFF[fid]
 	if not coeff then return 0, 0 end
-	local multPerLv, ptsPerLv = coeff[1] or 0, coeff[2] or 0
-	return lv * multPerLv, lv * ptsPerLv -- (addMon, addPts)
+	return lv * (coeff[1] or 0), lv * (coeff[2] or 0)
 end
 
---=== [追加] yaku_* に紐づく祭事ID配列を返す（UI用） ============================
 function S.getFestivalsForYaku(yakuId)
 	return YAKU_TO_SAI[yakuId] or {}
 end
 
-
-
+function S.getKitoPts(effectId, level)
+	if effectId == "tora" or effectId == "kito_tora" then
+		return tonumber(level or 0) or 0
+	end
+	return 0
+end
 
 return S

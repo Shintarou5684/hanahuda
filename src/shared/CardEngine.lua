@@ -1,19 +1,20 @@
--- v0.9.0 カードエンジン（構成=唯一の正本／ユーティリティ集約）
+-- SharedModules/CardEngine.lua
+-- v0.9.1 カードエンジン：48枚定義（1103 を ribbon に修正）
 local M = {}
 
 -- 48枚の定義
 M.cardsByMonth = {
 	[1]  = { {kind="bright", name="松に鶴", tags={"animal","crane"}}, {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[2]  = { {kind="seed",   name="鶯", tags={"animal"}}, {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[3]  = { {kind="bright", name="桜に幕"}, {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[4]  = { {kind="seed",   name="ホトトギス", tags={"animal"}}, {kind="ribbon", name="赤短(無地)",  tags={"aka"}}, {kind="chaff"}, {kind="chaff"} },
-	[5]  = { {kind="seed",   name="八つ橋", tags={"thing"}}, {kind="ribbon", name="赤短(無地)", tags={"aka"}}, {kind="chaff"}, {kind="chaff"} },
-	[6]  = { {kind="seed",   name="蝶", tags={"animal"}}, {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[7]  = { {kind="seed",   name="猪", tags={"animal"}}, {kind="ribbon", name="赤短(無地)", tags={"aka"}}, {kind="chaff"}, {kind="chaff"} },
-	[8]  = { {kind="bright", name="芒に月"}, {kind="seed",   name="雁", tags={"animal"}}, {kind="chaff"}, {kind="chaff"} },
-	[9]  = { {kind="seed",   name="盃", tags={"thing","sake"}}, {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[10] = { {kind="seed",   name="鹿", tags={"animal"}}, {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[11] = { {kind="bright", name="柳に雨", tags={"rain"}}, {kind="seed",   name="燕", tags={"animal"}}, {kind="chaff"}, {kind="chaff"} },
+	[2]  = { {kind="seed",   name="鶯", tags={"animal"}},            {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
+	[3]  = { {kind="bright", name="桜に幕"},                          {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
+	[4]  = { {kind="seed",   name="ホトトギス", tags={"animal"}},    {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
+	[5]  = { {kind="seed",   name="八つ橋", tags={"thing"}},         {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
+	[6]  = { {kind="seed",   name="蝶", tags={"animal"}},            {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
+	[7]  = { {kind="seed",   name="猪", tags={"animal"}},            {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
+	[8]  = { {kind="bright", name="芒に月"},                          {kind="seed",   name="雁", tags={"animal"}},                {kind="chaff"}, {kind="chaff"} },
+	[9]  = { {kind="seed",   name="盃", tags={"thing","sake"}},       {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
+	[10] = { {kind="seed",   name="鹿", tags={"animal"}},            {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
+	[11] = { {kind="bright", name="柳に雨", tags={"rain"}},          {kind="seed",   name="燕", tags={"animal"}},                {kind="ribbon", name="短冊(無地)"}, {kind="chaff"} }, -- ★ 1103 を ribbon に
 	[12] = { {kind="bright", name="桐に鳳凰", tags={"animal","phoenix"}}, {kind="chaff"}, {kind="chaff"}, {kind="chaff"} },
 }
 

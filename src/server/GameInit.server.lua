@@ -1,5 +1,10 @@
 -- ServerScriptService/GameInit.server.lua
 -- エントリポイント：Remotes生成／各Service初期化／永続（SaveService）連携
+-- v0.9.2:
+--  - ★ STARTGAME に統合（セーブがあればCONTINUE / なければNEW）
+--  - SaveService.activeRun（季節開始/屋台入場）スナップからの復帰に対応
+--  - HomeOpen.hasSave を正しく反映
+--  - 言語保存 ReqSetLang を実装
 
 --==================================================
 -- Services
@@ -9,7 +14,7 @@ local RS      = game:GetService("ReplicatedStorage")
 local SSS     = game:GetService("ServerScriptService")
 
 --==================================================
--- SaveService（bank/year/clears/lang の永続化）
+-- SaveService（bank/year/clears/lang/activeRun の永続化）
 --==================================================
 local SaveService = require(SSS:WaitForChild("SaveService"))
 
@@ -62,17 +67,19 @@ local Remotes = {
 
 -- Top/Home 系
 local HomeOpen        = ensureRemote("HomeOpen")        -- S→C: トップを開く
-local ReqStartNewRun  = ensureRemote("ReqStartNewRun")  -- C→S: NEW GAME
-local ReqContinueRun  = ensureRemote("ReqContinueRun")  -- C→S: CONTINUE（現状NEW扱い）
+local ReqStartNewRun  = ensureRemote("ReqStartNewRun")  -- C→S: ★後方互換（NEW強制）
+local ReqContinueRun  = ensureRemote("ReqContinueRun")  -- C→S: ★後方互換（CONTINUE推奨）
+local ReqStartGame    = ensureRemote("ReqStartGame")    -- C→S: ★統合エントリ（NEW or CONTINUE 自動）
 local RoundReady      = ensureRemote("RoundReady")      -- S→C: 新ラウンド準備完了
 local ReqSetLang      = ensureRemote("ReqSetLang")      -- C→S: 言語保存
 
 -- Remotes からも参照できるように追加
-Remotes.HomeOpen       = HomeOpen
-Remotes.ReqStartNewRun = ReqStartNewRun
-Remotes.ReqContinueRun = ReqContinueRun
-Remotes.RoundReady     = RoundReady
-Remotes.ReqSetLang     = ReqSetLang
+Remotes.HomeOpen        = HomeOpen
+Remotes.ReqStartNewRun  = ReqStartNewRun
+Remotes.ReqContinueRun  = ReqContinueRun
+Remotes.ReqStartGame    = ReqStartGame
+Remotes.RoundReady      = RoundReady
+Remotes.ReqSetLang      = ReqSetLang
 
 --==================================================
 -- Server-side modules
@@ -96,7 +103,7 @@ DevGrantRyo.OnServerEvent:Connect(function(plr, amount)
 	amount = tonumber(amount) or 1000
 	local s = StateHub.get(plr); if not s then return end
 	s.bank = (s.bank or 0) + amount                -- メモリ状態
-	StateHub.pushState(plr, s)
+	StateHub.pushState(plr)
 	SaveService.addBank(plr, amount)               -- 永続もdirty化
 end)
 
@@ -128,7 +135,7 @@ DevGrantRole.OnServerEvent:Connect(function(plr)
 	local total, roles, detail = Scoring.evaluate(s.taken or {}, s)
 
 	s.lastScore = { total = total or 0, roles = roles, detail = detail }
-	StateHub.pushState(plr) -- 第2引数は不要（あっても問題ないが省略でOK）
+	StateHub.pushState(plr)
 end)
 
 
@@ -211,15 +218,16 @@ Players.PlayerAdded:Connect(function(plr)
 		bank=s.bank, year=s.year, clears=s.totalClears
 	})
 
-	-- 4) HomeOpen（トップ表示）に保存言語を必ず同梱
+	-- 4) HomeOpen（トップ表示）に保存言語＆hasSaveを必ず同梱
+	local hasSave = SaveService.getActiveRun(plr) ~= nil
 	S("HomeOpen→C", "send payload to client", {
 		user=plr.Name,
 		payloadLang=s.lang,
-		hasSave=false, bank=s.bank, year=s.year, clears=s.totalClears or 0
+		hasSave=hasSave, bank=s.bank, year=s.year, clears=s.totalClears or 0
 	})
 
 	HomeOpen:FireClient(plr, {
-		hasSave = false,
+		hasSave = hasSave,
 		bank    = s.bank,
 		year    = s.year,
 		clears  = s.totalClears or 0,
@@ -239,22 +247,88 @@ game:BindToClose(function()
 end)
 
 --==================================================
+-- 言語保存（C→S）
+--==================================================
+ReqSetLang.OnServerEvent:Connect(function(plr, lang)
+	if lang ~= "jp" and lang ~= "en" then return end
+	SaveService.setLang(plr, lang)
+	local s = StateHub.get(plr) or {}
+	s.lang = lang
+	StateHub.set(plr, s)
+	-- ここでは即時UI再構築までは行わず、次の HomeOpen/StatePush で反映
+end)
+
+--==================================================
 -- ラン開始/続き（RoundReady → RunScreen.requestSync → UiResync）
 --==================================================
-local function startSeason(plr, opts)
-	Round.resetRun(plr, opts)     -- ラン全体の初期化（内部で newRound(1) まで）
-	task.delay(0.05, function()   -- 0残像対策
-		RoundReady:FireClient(plr)
+local function fireReadySoon(plr)
+	task.delay(0.05, function()
+		Remotes.RoundReady:FireClient(plr)
 	end)
 end
 
-ReqStartNewRun.OnServerEvent:Connect(function(plr)
-	startSeason(plr, { fresh = true })
+local function startNewRun(plr)
+	-- NEW は既存スナップを破棄してから開始
+	if SaveService.clearActiveRun then pcall(function() SaveService.clearActiveRun(plr) end) end
+	Round.resetRun(plr)   -- 内部で newRound(1) → RoundReady はここでは投げない
+	fireReadySoon(plr)
+end
+
+local function continueFromSnapshot(plr, snap:any)
+	-- snap = {version=1, season, atShop, bank, mon, deckSeed?, effects?, shopStock?}
+	local s = StateHub.get(plr) or {}
+	s.bank = tonumber(snap.bank or s.bank or 0) or 0
+	s.mon  = tonumber(snap.mon  or s.mon  or 0) or 0
+	-- 役/効果系メタ（存在すれば）
+	if snap.effects then
+		s.effects = snap.effects
+	end
+	StateHub.set(plr, s)
+
+	-- ★ 季節開始スナップに揃えて当該季節を開始（seedはMVPでは再現しない）
+	local season = tonumber(snap.season or 1) or 1
+	Round.newRound(plr, season)
+
+	-- 画面準備
+	fireReadySoon(plr)
+
+	-- ★ 屋台入場スナップだった場合は、Run表示後に屋台を即時オープン
+	if snap.atShop and ShopService and typeof(ShopService.open)=="function" then
+		task.delay(0.08, function()
+			local cur = StateHub.get(plr); if not cur then return end
+			cur.phase = "shop"
+			if snap.shopStock then
+				cur.shop = cur.shop or {}
+				cur.shop.stock = snap.shopStock
+			end
+			StateHub.set(plr, cur)
+			ShopService.open(plr, cur, { notice = "" })
+		end)
+	end
+end
+
+local function startGameAuto(plr)
+	local snap = SaveService.getActiveRun(plr)
+	if snap then
+		continueFromSnapshot(plr, snap)
+	else
+		startNewRun(plr)
+	end
+end
+
+-- ★ 新：統合エントリ
+ReqStartGame.OnServerEvent:Connect(function(plr)
+	startGameAuto(plr)
 end)
 
+-- ★ 旧：後方互換（NEWを強制）
+ReqStartNewRun.OnServerEvent:Connect(function(plr)
+	startNewRun(plr)
+end)
+
+-- ★ 旧：後方互換（CONTINUE優先 / 無ければNEW）
 ReqContinueRun.OnServerEvent:Connect(function(plr)
-	-- CONTINUE 未実装：暫定で NEW GAME 相当
-	startSeason(plr, { fresh = true })
+	startGameAuto(plr)
 end)
 
 --==================================================
@@ -270,17 +344,15 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 
 	local nextSeason = (s.season or 1) + 1
 	if nextSeason > 4 then
-		-- 冬→春はランリセット
+		-- 冬→春はランリセット（Round.resetRun 内で春スナップが再生成される）
 		Round.resetRun(plr)
 	else
-		-- 同一ラン内の季節遷移
+		-- 同一ラン内の季節遷移（Round.newRound 内で季節開始スナップ作成）
 		Round.newRound(plr, nextSeason)
 		StateHub.set(plr, s)
 	end
 
-	task.delay(0.05, function()
-		RoundReady:FireClient(plr)
-	end)
+	fireReadySoon(plr)
 end)
 
 --==================================================
@@ -303,10 +375,11 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 	end
 
 	if op == "home" then
-		-- トップへ戻す（新ランに初期化）
+		-- トップへ戻す（新ランに初期化）※春スナップができるため Home にも hasSave=true が出る
 		Round.resetRun(plr)
+		local hasSave = SaveService.getActiveRun(plr) ~= nil
 		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = false,
+			hasSave = hasSave,
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
@@ -331,14 +404,15 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 		return
 
 	elseif op == "save" then
-		-- 永続保存→トップへ
+		-- 永続保存→トップへ（プロフィールflushのみ。activeRunはそのまま）
 		local ok = true
 		if typeof(SaveService.flush) == "function" then
 			ok = SaveService.flush(plr) == true
 		end
-		Round.resetRun(plr)
+		local hasSave = SaveService.getActiveRun(plr) ~= nil
+		Round.resetRun(plr) -- 新ランを作る（春スナップ作成）
 		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = true,
+			hasSave = hasSave or true,
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,

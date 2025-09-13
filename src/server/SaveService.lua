@@ -1,23 +1,30 @@
 -- ServerScriptService/SaveService (ModuleScript)
--- 最小DataStore：bank / year / asc / clears / lang を永続化（version=4）
+-- 最小DataStore：bank / year / asc / clears / lang / activeRun を永続化（version=4据え置き）
 -- 使い方：
 --   local SaveService = require(game.ServerScriptService.SaveService)
---   SaveService.load(player)                    -- PlayerAdded で呼ぶ（メモリに展開）
---   SaveService.addBank(player, 2)              -- 両の加算（dirty化）
---   SaveService.setYear(player, s.year)         -- 年数更新（dirty化）
---   SaveService.bumpYear(player, 25)            -- 年数を加算（例：冬クリアで +25）
---   SaveService.getAscension(player)            -- アセンション値を取得
---   SaveService.setAscension(player, 1)         -- アセンション値を設定（0以上）
---   SaveService.getBaseStartYear(player)        -- 1000 + 100*asc を返す
---   SaveService.ensureBaseYear(player)          -- 年が未設定/0なら基準年に補正
---   SaveService.getClears(player)               -- 通算クリア回数を取得
---   SaveService.setClears(player, n)            -- 通算クリア回数を設定
---   SaveService.bumpClears(player, 1)           -- 通算クリア回数を加算
---   SaveService.getLang(player)                 -- 保存言語("jp"|"en")を取得（保存>OS）
---   SaveService.setLang(player, "jp"|"en")      -- 保存言語を設定（dirty化）
---   SaveService.mergeIntoState(player, state)   -- bank/year/asc/clears/lang を state に反映
---   SaveService.flush(player)                   -- PlayerRemoving で呼ぶ（保存）
---   SaveService.flushAll()                      -- サーバ終了時の保険
+--   SaveService.load(player)                      -- PlayerAdded で呼ぶ（メモリに展開）
+--   SaveService.addBank(player, 2)                -- 両の加算（dirty化）
+--   SaveService.setYear(player, s.year)           -- 年数更新（dirty化）
+--   SaveService.bumpYear(player, 25)              -- 年数を加算（例：冬クリアで +25）
+--   SaveService.getAscension(player)              -- アセンション値を取得
+--   SaveService.setAscension(player, 1)           -- アセンション値を設定（0以上）
+--   SaveService.getBaseStartYear(player)          -- 1000 + 100*asc を返す
+--   SaveService.ensureBaseYear(player)            -- 年が未設定/0なら基準年に補正
+--   SaveService.getClears(player)                 -- 通算クリア回数を取得
+--   SaveService.setClears(player, n)              -- 通算クリア回数を設定
+--   SaveService.bumpClears(player, 1)             -- 通算クリア回数を加算
+--   SaveService.getLang(player)                   -- 保存言語("jp"|"en")を取得（保存>OS）
+--   SaveService.setLang(player, "jp"|"en")        -- 保存言語を設定（dirty化）
+--   SaveService.mergeIntoState(player, state)     -- bank/year/asc/clears/lang を state に反映
+--   -- ★ アクティブ・ラン（続き用スナップ）
+--   SaveService.getActiveRun(player)              -- 現在のスナップを取得（nil可）
+--   SaveService.setActiveRun(player, snap)        -- スナップを設定（dirty化）
+--   SaveService.clearActiveRun(player)            -- スナップを破棄（dirty化）
+--   SaveService.snapSeasonStart(player, state, n) -- 季節開始スナップ（簡易ヘルパ）
+--   SaveService.snapShopEnter(player, state)      -- 屋台入場スナップ（簡易ヘルパ）
+--   -- 保存
+--   SaveService.flush(player)                     -- PlayerRemoving で呼ぶ（保存）
+--   SaveService.flushAll()                        -- サーバ終了時の保険
 
 local DataStoreService = game:GetService("DataStoreService")
 local Players          = game:GetService("Players")
@@ -46,7 +53,7 @@ local function keyForUserId(userId:number): string
 	return "u:" .. tostring(userId)
 end
 
---=== デフォルト（version 4：lang 追加） ==========================
+--=== デフォルト（version 4：lang 追加 / activeRun 追加） =========
 local DEFAULT_PROFILE = {
 	version = 4,
 	bank = 0,       -- 両（永続通貨）
@@ -54,12 +61,14 @@ local DEFAULT_PROFILE = {
 	asc  = 0,       -- アセンション（0以上の整数）
 	clears = 0,     -- 通算クリア回数
 	lang = "en",    -- 保存言語（"jp"|"en"）
+	activeRun = nil,-- ★ 続き用スナップ（{version,season,atShop,bank,mon,deckSeed,shopStock?,effects?}）
 }
 
 --=== 内部メモリ（サーバ滞在中のキャッシュ） ======================
 type Profile = {
 	version:number, bank:number, year:number, asc:number, clears:number,
 	lang:string,
+	activeRun:any?, -- ★ 追加
 }
 local Save = {
 	_profiles = {} :: {[Player]: Profile},
@@ -90,6 +99,9 @@ local function normalizeProfile(p:any): Profile
 	local l = tostring(p and p.lang or ""):lower()
 	if l ~= "jp" and l ~= "en" then l = "en" end
 	out.lang = l
+
+	-- ★ activeRun はテーブルなら素通し、それ以外は nil
+	out.activeRun = (type(p and p.activeRun) == "table") and p.activeRun or nil
 
 	return out :: Profile
 end
@@ -129,6 +141,7 @@ function Save.load(plr: Player): Profile
 	-- - year <= 0 の場合は、asc に応じた基準年に補正
 	-- - clears 欠損は 0 補完
 	-- - lang 欠損は OS ロケールから初期化
+	-- - activeRun は既存値を尊重（nil可）
 	local migrated = false
 	if prof.version < 4 then
 		prof.version = 4
@@ -265,6 +278,55 @@ function Save.mergeIntoState(plr: Player, state:any)
 	return state
 end
 
+--=== activeRun（続き用スナップ） =================================
+function Save.getActiveRun(plr: Player)
+	local p = Save._profiles[plr]; return p and p.activeRun or nil
+end
+
+function Save.setActiveRun(plr: Player, snap: table)
+	if type(snap) ~= "table" then return end
+	local p = Save._profiles[plr]; if not p then return end
+	p.activeRun = snap
+	Save._dirty[plr] = true
+end
+
+function Save.clearActiveRun(plr: Player)
+	local p = Save._profiles[plr]; if not p then return end
+	if p.activeRun ~= nil then
+		p.activeRun = nil
+		Save._dirty[plr] = true
+	end
+end
+
+-- 簡易スナップ・ヘルパ（必要最小のフィールドのみ）
+function Save.snapSeasonStart(plr: Player, state:any, season:number)
+	local s = state or {}
+	Save.setActiveRun(plr, {
+		version = 1,
+		season  = tonumber(season) or 1,
+		atShop  = false,
+		bank    = tonumber(s.bank or 0) or 0,
+		mon     = tonumber(s.mon or 0) or 0,
+		deckSeed= s.deckSeed,
+		effects = s.effects,            -- { [effectId]=stacks } など（nil可）
+	})
+end
+
+function Save.snapShopEnter(plr: Player, state:any)
+	local s = state or {}
+	local shop = s.shop
+	Save.setActiveRun(plr, {
+		version  = 1,
+		season   = tonumber(s.season or 1) or 1,
+		atShop   = true,
+		bank     = tonumber(s.bank or 0) or 0,
+		mon      = tonumber(s.mon or 0) or 0,
+		deckSeed = s.deckSeed,
+		effects  = s.effects,
+		shopStock= (shop and shop.stock) or nil, -- 軽量化のためID/必要最小だけを持つのが理想
+	})
+end
+
 --=== dirty 判定 ===================================================
 function Save.isDirty(plr: Player): boolean
 	return Save._dirty[plr] == true
@@ -292,12 +354,13 @@ function Save.flush(plr: Player)
 		ok, err = pcall(function()
 			profileDS:UpdateAsync(key, function(old:any)
 				local base = typeof(old) == "table" and old or {}
-				base.version = 4
-				base.bank    = p.bank   or 0
-				base.year    = p.year   or 0
-				base.asc     = p.asc    or 0
-				base.clears  = p.clears or 0
-				base.lang    = (p.lang == "jp" and "jp") or "en"
+				base.version   = 4
+				base.bank      = p.bank    or 0
+				base.year      = p.year    or 0
+				base.asc       = p.asc     or 0
+				base.clears    = p.clears  or 0
+				base.lang      = (p.lang == "jp" and "jp") or "en"
+				base.activeRun = p.activeRun -- ★ 続きスナップも保存（nil可）
 				return base
 			end)
 		end)
