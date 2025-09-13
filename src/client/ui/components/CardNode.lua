@@ -1,21 +1,28 @@
 -- StarterPlayerScripts/UI/components/CardNode.lua
--- カード画像ボタン（画像・角丸・枠・軽い拡大アニメ）＋任意のサイド情報／下部バッジ
+-- カード画像ボタン（画像・角丸・枠・軽い拡大アニメ）
+-- 右側インフォ / 下部バッジはローカライズ（JP/EN）対応
 -- 依存: ReplicatedStorage/SharedModules/CardImageMap.lua
--- 任意依存: ReplicatedStorage/Config/Theme.lua（存在すれば色などを拝借）
+-- 任意依存: ReplicatedStorage/Config/Theme.lua, ReplicatedStorage/Config/Locale.lua
 
 local TweenService = game:GetService("TweenService")
 local RS = game:GetService("ReplicatedStorage")
 
 local CardImageMap = require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
 
--- Theme（任意）。存在しない環境でも動くように安全に参照。
--- ★ Luau型は any にしてパースエラー回避
+-- Optional: Theme / Locale
 local Theme: any = nil
+local Locale: any = nil
 do
-	local ok, cfg = pcall(function() return RS:FindFirstChild("Config") end)
-	if ok and cfg and cfg:FindFirstChild("Theme") then
-		local ok2, t = pcall(function() return require(cfg.Theme) end)
-		if ok2 then Theme = t end
+	local okCfg, cfg = pcall(function() return RS:FindFirstChild("Config") end)
+	if okCfg and cfg then
+		if cfg:FindFirstChild("Theme") then
+			local okT, t = pcall(function() return require(cfg.Theme) end)
+			if okT then Theme = t end
+		end
+		if cfg:FindFirstChild("Locale") then
+			local okL, l = pcall(function() return require(cfg.Locale) end)
+			if okL then Locale = l end
+		end
 	end
 end
 
@@ -23,12 +30,12 @@ local M = {}
 
 export type Info = {
 	month: number?,  -- 1..12
-	kind: string?,   -- "bright" | "seed" | "ribbon" | ...
+	kind: string?,   -- "bright"|"seed"|"ribbon"|"chaff"|…（任意）
 	name: string?,   -- 札の日本語名など
 }
 
 --========================
--- Themeヘルパ
+-- Theme helpers
 --========================
 local function kindColorFallback(kind: string?)
 	if kind == "bright" then return Color3.fromRGB(255,230,140)
@@ -47,20 +54,78 @@ end
 
 local function themeColor(path: string, fallback: Color3)
 	local c = fallback
-	if Theme and Theme.COLORS and Theme.COLORS[path] then
-		local v = Theme.COLORS[path]
-		if typeof(v) == "Color3" then c = v end
+	if Theme and Theme.COLORS and Theme.COLORS[path] and typeof(Theme.COLORS[path]) == "Color3" then
+		c = Theme.COLORS[path]
 	end
 	return c
 end
 
 local function themeImage(path: string, fallback: string)
 	local id = fallback
-	if Theme and Theme.IMAGES and Theme.IMAGES[path] then
-		local v = Theme.IMAGES[path]
-		if typeof(v) == "string" and #v > 0 then id = v end
+	if Theme and Theme.IMAGES and Theme.IMAGES[path] and typeof(Theme.IMAGES[path]) == "string" and #Theme.IMAGES[path] > 0 then
+		id = Theme.IMAGES[path]
 	end
 	return id
+end
+
+--========================
+-- Locale helpers
+--========================
+local function curLang(): string
+	if Locale and typeof(Locale.getGlobal) == "function" then
+		local ok, v = pcall(Locale.getGlobal)
+		if ok and (v == "jp" or v == "en") then return v end
+	end
+	if Locale and typeof(Locale.pick) == "function" then
+		local ok, v = pcall(Locale.pick)
+		if ok and (v == "jp" or v == "en") then return v end
+	end
+	return "en"
+end
+
+local function kindJP(kind: string?, fallbackName: string?): string
+	if fallbackName and #fallbackName > 0 then return fallbackName end
+	if kind == "bright" then return "光"
+	elseif kind == "seed" then return "タネ"
+	elseif kind == "ribbon" then return "短冊"
+	elseif kind == "chaff" or kind == "kasu" then return "カス"
+	else return "--" end
+end
+
+local function kindEN(kind: string?, fallbackName: string?): string
+	if kind == "bright" then return "Bright"
+	elseif kind == "seed" then return "Seed"
+	elseif kind == "ribbon" then return "Ribbon"
+	elseif kind == "chaff" or kind == "kasu" then return "Chaff"
+	-- name が英字なら使っても良い
+	elseif fallbackName and fallbackName:match("^[%w%p%space]+$") then
+		return fallbackName
+	else
+		return "--"
+	end
+end
+
+-- JP: "11月/タネ" / EN: "11/Seed"（ENは単位「月」を省く）
+local function footerText(monthNum: number?, kind: string?, name: string?, lang: string): string
+	local m = tonumber(monthNum)
+	local mStr = m and tostring(m) or ""
+	if lang == "jp" then
+		local k = kindJP(kind, name)
+		return (mStr ~= "" and (mStr .. "月/" .. k)) or k
+	else
+		local k = kindEN(kind, name)
+		return (mStr ~= "" and (mStr .. "/" .. k)) or k
+	end
+end
+
+-- 右側インフォの文言（短め）
+local function sideInfoText(monthNum: number?, kind: string?, name: string?, lang: string): string
+	local m = tonumber(monthNum) or 0
+	if lang == "jp" then
+		return string.format("%d月 %s", m, (name and #name>0) and name or kindJP(kind))
+	else
+		return string.format("%s %s", tostring(m), kindEN(kind))
+	end
 end
 
 --========================
@@ -71,13 +136,8 @@ end
 -- 新API（推奨）:
 --   create(parent, code, opts)
 --     opts = {
---       size: UDim2,           -- 明示サイズ（ある場合は最優先）
---       pos: UDim2,            -- 配置
---       anchor: Vector2,       -- アンカー
---       zindex: number,        -- ZIndexの明示指定
---       info: Info,            -- バッジ/右ラベル用
---       showInfoRight: boolean,
---       cornerRadius: number?, -- 角丸(ピクセル)
+--       size: UDim2, pos: UDim2, anchor: Vector2, zindex: number,
+--       info: Info, showInfoRight: boolean, cornerRadius: number?,
 --     }
 function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: any?)
 	-- 画像ID
@@ -134,10 +194,10 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	if opts and opts.anchor then btn.AnchorPoint = opts.anchor end
 	if opts and opts.pos    then btn.Position    = opts.pos    end
 
-	-- 最小サイズの安全弁（極端に薄くならない）
+	-- 最小サイズの安全弁
 	do
 		local min = Instance.new("UISizeConstraint")
-		min.MinSize = Vector2.new(56, 78) -- だいたい 63:88
+		min.MinSize = Vector2.new(56, 78) -- 約 63:88
 		min.Parent = btn
 	end
 
@@ -149,7 +209,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		corner.Parent = btn
 
 		local stroke = Instance.new("UIStroke")
-		stroke.Thickness = 1
+		stroke.Thickness = 0
 		stroke.Color = themeColor("CardStroke", Color3.fromRGB(0,0,0))
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 		stroke.Parent = btn
@@ -169,7 +229,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		shadow.ZIndex = btn.ZIndex - 1
 	end
 
-	-- ★ アスペクト固定（花札：横:縦=63:88）※高さ基準で幅を決定
+	-- アスペクト固定（横:縦=63:88、高さ基準）
 	do
 		local ar = Instance.new("UIAspectRatioConstraint")
 		ar.AspectRatio = 63/88
@@ -204,42 +264,38 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		btn.MouseLeave:Connect(restore)
 	end
 
-	-- 右側の補助ラベル（「1月 短冊」など）※必要なときだけ
+	-- 右側の補助ラベル（必要なときのみ）
 	local showInfoRight = (opts and opts.showInfoRight) or legacyShowRight
 	local info: Info?    = (opts and opts.info) or legacyInfo
-	if showInfoRight then
-		local m  = tonumber(info and info.month) or 0
-		local role = tostring(info and info.kind or "")
-		local name = tostring(info and info.name or "")
-
+	if showInfoRight and info then
 		local lab = Instance.new("TextLabel")
 		lab.Name = "SideInfo"
 		lab.Parent = btn
 		lab.BackgroundTransparency = 1
 		lab.TextScaled = true
-		lab.Size = UDim2.new(0, 72, 0, 22) -- サイドはpxのほうが視認性安定
+		lab.Size = UDim2.new(0, 72, 0, 22) -- サイドはpx固定で視認性を保つ
 		lab.Position = UDim2.new(1, 6, 0, 0)
 		lab.TextXAlignment = Enum.TextXAlignment.Left
 		lab.TextYAlignment = Enum.TextYAlignment.Center
-		lab.Text = string.format("%d月 %s", m, (name ~= "" and name) or role)
-		lab.TextColor3 = colorForKind(info and info.kind)
+		lab.Font = Enum.Font.GothamMedium
+		lab.Text = sideInfoText(info.month, info.kind, info.name, curLang())
+		lab.TextColor3 = colorForKind(info.kind)
 		lab.ZIndex = btn.ZIndex + 1
 	end
 
 	return btn
 end
 
--- 下部のバッジ（「1月 / 短冊」など）をカードに追加
+-- 下部のバッジ（「11月/タネ」 or "11/Seed"）をカードに追加
 function M.addBadge(cardButton: Instance, info: Info?)
 	if not cardButton or not cardButton:IsA("GuiObject") then return end
 
 	-- 既存を掃除
 	local old = cardButton:FindFirstChild("Badge")
 	if old then old:Destroy() end
+	if not info then return end
 
-	local m    = tonumber(info and info.month) or 0
-	local kind = tostring(info and info.kind or "")
-	local name = tostring(info and info.name or "")
+	local lang = curLang()
 
 	-- 台
 	local holder = Instance.new("Frame")
@@ -248,7 +304,7 @@ function M.addBadge(cardButton: Instance, info: Info?)
 	holder.AnchorPoint = Vector2.new(0, 1)
 	holder.Position = UDim2.new(0, 0, 1, -2)              -- 下に2pxマージン
 	holder.Size     = UDim2.new(1, 0, 0, 26)              -- カード幅いっぱい
-	holder.BackgroundTransparency = 0.25
+	holder.BackgroundTransparency = 0.15                   -- 少し濃く
 	holder.BorderSizePixel = 0
 	holder.ZIndex = cardButton.ZIndex + 1
 	holder.BackgroundColor3 = themeColor("BadgeBg", Color3.fromRGB(25,28,36))
@@ -265,17 +321,10 @@ function M.addBadge(cardButton: Instance, info: Info?)
 	t.TextScaled = true
 	t.TextXAlignment = Enum.TextXAlignment.Center
 	t.TextYAlignment = Enum.TextYAlignment.Center
-
-	local kindJp = (kind == "ribbon" and "短冊")
-		or (kind == "seed" and "たね")
-		or (kind == "bright" and "光")
-		or (name ~= "" and name)
-		or "--"
-
-	t.Text = string.format("%d月 / %s", m, kindJp)
-	t.TextColor3 = colorForKind(kind)
 	t.Font = Enum.Font.GothamMedium
+	t.TextColor3 = colorForKind(info.kind)
 	t.ZIndex = holder.ZIndex + 1
+	t.Text = footerText(info.month, info.kind, info.name, lang)
 end
 
 return M

@@ -20,7 +20,7 @@ local TakenRenderer  = require(renderersDir:WaitForChild("TakenRenderer"))
 local ResultModal    = require(components:WaitForChild("ResultModal"))
 local Overlay        = require(components:WaitForChild("Overlay"))
 local DevTools       = require(components:WaitForChild("DevTools"))
-local YakuPanel      = require(components:WaitForChild("YakuPanel")) -- ★ 役倍率パネル
+local YakuPanel      = require(components:WaitForChild("YakuPanel")) -- 役倍率パネル
 
 local lib        = script.Parent.Parent:WaitForChild("lib")
 local Format     = require(lib:WaitForChild("FormatUtil"))
@@ -29,10 +29,12 @@ local screensDir = script.Parent
 local UIBuilder  = require(screensDir:WaitForChild("RunScreenUI"))
 local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 
--- "目標:123" or "Target:123" の数値だけ抜く
+-- "目標:123" / "Target:123" / "Goal:123" の数値だけ抜く
 local function extractGoalFromInfoText(text)
 	if type(text) ~= "string" then return nil end
-	local n = string.match(text, "目標:%s*(%d+)") or string.match(text, "Target:%s*(%d+)")
+	local n = string.match(text, "目標:%s*(%d+)")
+	          or string.match(text, "Target:%s*(%d+)")
+	          or string.match(text, "Goal:%s*(%d+)")
 	return n
 end
 
@@ -40,11 +42,30 @@ local function mapLangForPanel(lang) -- Runは "jp"/"en"、パネルは "ja"/"en
 	return (lang == "jp") and "ja" or "en"
 end
 
+-- JPの情報ラインをENに置換する簡易マッパ
+local function jpLineToEn(lineJP)
+	if type(lineJP) ~= "string" then return "" end
+	local s = lineJP
+	s = s:gsub("年:", "Year:")
+	     :gsub("季節:", "Season:")
+	     :gsub("目標:", "Target:")
+	     :gsub("合計:", "Total:")
+	     :gsub("残ハンド:", "Hands:")
+	     :gsub("残リロール:", "Rerolls:")
+	     :gsub("倍率:", "Mult:")
+	     :gsub("山:", "Deck:")
+	     :gsub("手:", "Hand:")
+	-- 季節表記も英語へ
+	s = s:gsub("春", "Spring"):gsub("夏", "Summer"):gsub("秋", "Autumn"):gsub("冬", "Winter")
+	return s
+end
+
 function Run.new(deps)
 	local self = setmetatable({}, Run)
 	self.deps = deps
 	self._awaitingInitial = false
 	self._resultShown = false
+	self._langConn = nil
 
 	-- 言語初期値
 	local initialLang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
@@ -64,7 +85,15 @@ function Run.new(deps)
 	self.takenBox = ui.takenBox
 	self._scoreBox = ui.scoreBox
 	self.buttons  = ui.buttons
-	self._ui_setLang = ui.setLang  -- 後から切替用
+	self._ui_setLang = ui.setLang
+	self._fmtScore   = ui.formatScore or function(score, mons, pts, rolesText)
+		-- フォールバック（UIが持っていない場合）
+		if self._lang == "jp" then
+			return string.format("得点：%d\n文%d×%d点\n%s", score or 0, mons or 0, pts or 0, rolesText or "役：--")
+		else
+			return string.format("Score: %d\n%dMon × %dPts\n%s", score or 0, mons or 0, pts or 0, rolesText or "Roles: --")
+		end
+	end
 
 	-- Overlay / ResultModal
 	local loadingText = Theme.loadingText or (Locale.t(initialLang, "RUN_HELP_LINE") or "Loading...")
@@ -76,7 +105,7 @@ function Run.new(deps)
 		save = function() if self.deps.SaveQuit then self.deps.SaveQuit:FireServer() end end,
 	})
 
-	-- ★ 役倍率パネル（前面ポップアップ）
+	-- 役倍率パネル
 	self._yakuPanel = YakuPanel.mount(self.gui)
 
 	-- Studio専用 DevTools
@@ -122,24 +151,28 @@ function Run.new(deps)
 		TakenRenderer.renderTaken(self.takenBox, cards or {})
 	end
 
+	-- ★ 言語対応したスコア更新
 	local function onScore(total, roles, detail)
 		if typeof(roles) ~= "table" then roles = {} end
 		if typeof(detail) ~= "table" then detail = { mon = 0, pts = 0 } end
 		local mon = tonumber(detail.mon) or 0
 		local pts = tonumber(detail.pts) or 0
 		local tot = tonumber(total) or 0
-		local box = self._scoreBox
-		if box then
-			box.Text = ("得点：%d（文%d × 点%d）\n役：%s"):format(tot, mon, pts, Format.rolesToLines(roles))
+		if self._scoreBox then
+			local rolesBody = Format.rolesToLines(roles)
+			if not rolesBody or rolesBody == "" then rolesBody = (_G and _G.EMPTY_ROLES_TEXT) or "--" end
+			local rolesLabel = (self._lang == "en") and "Roles: " or "役："
+			self._scoreBox.Text = self._fmtScore(tot, mon, pts, rolesLabel .. rolesBody)
 		end
 	end
 
 	local function onState(st)
-		-- 情報パネル更新
-		local line = Format.stateLineText(st)
+		-- 情報パネル（JP→EN 変換）
+		local lineJP = Format.stateLineText(st)
+		local line = (self._lang == "en") and jpLineToEn(lineJP) or lineJP
 		self.info.Text = line
 
-		-- 目標表示
+		-- 目標表示（Goal/Target/目標 どれでも拾う）
 		if self.goalText then
 			local g = extractGoalFromInfoText(line)
 			local label = (self._lang == "en") and "Goal:" or "目標："
@@ -148,11 +181,10 @@ function Run.new(deps)
 
 		-- 役倍率パネルへ現在状態を反映
 		if self._yakuPanel then
-			local upd = {
+			self._yakuPanel:update({
 				lang    = mapLangForPanel(self._lang),
 				matsuri = st and st.matsuri
-			}
-			self._yakuPanel:update(upd)
+			})
 		end
 
 		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
@@ -204,7 +236,7 @@ function Run.new(deps)
 		self._resultModal:setLocked(not canNext, not canSave)
 	end
 
-	-- ボタン（※Yakuは UI 側のボタンを“接続だけ”する）
+	-- ボタン
 	if self.buttons.yaku then
 		self.buttons.yaku.MouseButton1Click:Connect(function()
 			if self._yakuPanel then self._yakuPanel:open() end
@@ -226,6 +258,13 @@ function Run.new(deps)
 		onState = onState,
 		onStageResult = onStageResult,
 	})
+
+	-- 言語変更イベント購読（Home 側の切替を即反映）
+	if typeof(Locale.changed) == "RBXScriptSignal" then
+		self._langConn = Locale.changed:Connect(function(newLang)
+			self:setLang(newLang)
+		end)
+	end
 
 	-- Router.call 互換
 	self.onHand        = function(_, hand)                 renderHand(hand) end
@@ -263,7 +302,6 @@ function Run:show(payload)
 		print("[LANG_FLOW] Run.show payload.lang=", payload.lang, "(cur=", self._lang,")")
 		self:setLang(payload.lang)
 	else
-		-- 念のため、グローバルを見て差異があれば合わせる
 		local g = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or self._lang
 		if g ~= self._lang then
 			print("[LANG_FLOW] Run.show sync from global | from=", self._lang, "to=", g)
@@ -290,6 +328,7 @@ end
 
 function Run:destroy()
 	self._remotes:disconnect()
+	if self._langConn then self._langConn:Disconnect() end
 	if self.gui then self.gui:Destroy() end
 end
 

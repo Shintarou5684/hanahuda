@@ -1,6 +1,4 @@
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
--- 画面の土台UIを構築して参照を束ねて返す（背景テクスチャ＋透過度対応）
--- 和室（ROOM_BG）＝最背面、毛氈（FIELD_BG）＝盤面、木目（TAKEN_BG）＝取り札
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = ReplicatedStorage:WaitForChild("Config")
@@ -12,12 +10,11 @@ local UiUtil = require(lib:WaitForChild("UiUtil"))
 
 local M = {}
 
---=== local helpers ======================================================
+--=== helpers ============================================================
 local function addCornerStroke(frame: Instance, radius: number?, strokeColor: Color3?, thickness: number?)
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, radius or (Theme.PANEL_RADIUS or 10))
 	corner.Parent = frame
-
 	local s = Instance.new("UIStroke")
 	s.Thickness = thickness or 1
 	if strokeColor then s.Color = strokeColor end
@@ -45,11 +42,11 @@ local function makePanel(parent: Instance, name: string, sizeScale: Vector2, lay
 	p.LayoutOrder = layoutOrder or 1
 	p.BackgroundColor3 = bgColor
 	addCornerStroke(p, nil, strokeColor, 1)
-
 	if titleText and titleText ~= "" then
 		local title = UiUtil.makeLabel(p, name.."Title", titleText, UDim2.new(1,-12,0,24), UDim2.new(0,6,0,6), nil, titleColor)
 		title.TextScaled = true
 		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.ZIndex = 3 -- ★ 木目より確実に前面へ
 	end
 	return p
 end
@@ -68,69 +65,61 @@ local function makeSideBtn(parent: Instance, name: string, text: string, bg: Col
 end
 --=======================================================================
 
--- 内部状態（言語）: Global -> OS（pick）の順で決定。以降、OS に自動で戻さない
+-- 言語：Global → OS 推定
 local _lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
-print("[LANG_FLOW] RunScreenUI.init _lang(from Global or OS) =", _lang)
+print("[LANG_FLOW] RunScreenUI.init _lang =", _lang)
 
--- UIテキストの反映（ランタイム切替対応）
+-- ラベル適用
 local function applyTexts(tRefs)
 	if not tRefs then return end
 	local t = function(key) return Locale.t(_lang, key) end
 
-	-- 左カラム：タイトルなど
-	if tRefs.goalPanel and tRefs.goalPanel:FindFirstChild("GoalPanelTitle") then
-		tRefs.goalPanel.GoalPanelTitle.Text = t("RUN_GOAL_TITLE")
-	end
-	if tRefs.scorePanel and tRefs.scorePanel:FindFirstChild("ScorePanelTitle") then
-		tRefs.scorePanel.ScorePanelTitle.Text = t("RUN_SCORE_TITLE")
-	end
 	-- 右カラム：取り札
 	if tRefs.takenPanel and tRefs.takenPanel:FindFirstChild("TakenPanelTitle") then
 		tRefs.takenPanel.TakenPanelTitle.Text = t("RUN_TAKEN_TITLE")
+		tRefs.takenPanel.TakenPanelTitle.ZIndex = 3 -- 念のため
 	end
-	-- ボタン
+
+	-- 左カラム：ボタン
 	if tRefs.buttons then
 		if tRefs.buttons.confirm    then tRefs.buttons.confirm.Text    = t("RUN_BTN_CONFIRM") end
 		if tRefs.buttons.rerollAll  then tRefs.buttons.rerollAll.Text  = t("RUN_BTN_REROLL_ALL") end
 		if tRefs.buttons.rerollHand then tRefs.buttons.rerollHand.Text = t("RUN_BTN_REROLL_HAND") end
-
-		-- ★ 追加：役一覧ボタン（ローカライズが無い場合はフォールバック）
-		if tRefs.buttons.yaku then
-			local label = t("RUN_BTN_YAKU")
-			if not label or label == "" or label == "RUN_BTN_YAKU" then
-				label = (_lang == "en") and "Yaku" or "役一覧"
+		if tRefs.buttons.yaku       then
+			local lbl = Locale.t(_lang, "RUN_BTN_YAKU")
+			if not lbl or lbl == "" or lbl == "RUN_BTN_YAKU" then
+				lbl = (_lang == "en") and "Yaku" or "役一覧"
 			end
-			tRefs.buttons.yaku.Text = label
+			tRefs.buttons.yaku.Text = lbl
 		end
 	end
-	-- ヘルプ・バー
+
+	-- ヘルプ
 	if tRefs.help then
-		-- Theme.helpText があれば優先。無ければ Locale の定義
 		local T = Theme or {}
 		local helpDefault = (T and T.helpText) and T.helpText or t("RUN_HELP_LINE")
 		tRefs.help.Text = helpDefault
 	end
-	-- 情報パネルの初期プレースホルダ
+
+	-- 情報パネル
 	if tRefs.info then
 		tRefs.info.Text = t("RUN_INFO_PLACEHOLDER")
 	end
-	-- スコアボックスの初期表示
+
+	-- スコア：辞書の初期値（言語ごとに2行目が Mon/Pts / 文×点）
 	if tRefs.scoreBox then
 		tRefs.scoreBox.Text = t("RUN_SCOREBOX_INIT")
 	end
 end
 
 function M.build(parentGui: Instance, opts)
-	-- opts.lang があれば最優先で採用（OSに戻さない）
 	if opts and (opts.lang == "jp" or opts.lang == "en") then
-		print("[LANG_FLOW] RunScreenUI.build opts.lang override=", opts.lang, " (before=", _lang,")")
 		_lang = opts.lang
 	end
-	print("[LANG_FLOW] RunScreenUI.build final _lang=", _lang)
+	print("[LANG_FLOW] RunScreenUI.build lang=", _lang)
 
-	--=== Theme 参照 ======================================================
+	--=== Theme ===========================================================
 	local T = Theme or {}
-	local S = T.SIZES  or {}
 	local C = T.COLORS or {}
 	local R = T.RATIOS or {}
 	local IMAGES = T.IMAGES or {}
@@ -146,19 +135,17 @@ function M.build(parentGui: Instance, opts)
 	local ROW_GAP      = 0.035
 	local COL_GAP      = R.COL_GAP or 0.015
 
-	-- 画像ID（Theme優先／フォールバックあり）
 	local ROOM_BG_IMAGE  = IMAGES.ROOM_BG  or "rbxassetid://134603580471930"
-	local FIELD_BG_IMAGE = IMAGES.FIELD_BG or "rbxassetid://138521222203366" -- 既定：畳
+	local FIELD_BG_IMAGE = IMAGES.FIELD_BG or "rbxassetid://138521222203366"
 	local TAKEN_BG_IMAGE = IMAGES.TAKEN_BG or "rbxassetid://93059114972102"
 
-	-- 色
-	local COLOR_TEXT         = C.TextDefault     or Color3.fromRGB(20,20,20)
-	local COLOR_RIGHT_BG     = C.RightPaneBg     or Color3.fromRGB(245,248,255)
-	local COLOR_RIGHT_STROKE = C.RightPaneStroke or Color3.fromRGB(210,220,230)
-	local COLOR_PANEL_BG     = C.PanelBg         or Color3.fromRGB(255,255,255)
-	local COLOR_PANEL_STROKE = C.PanelStroke     or Color3.fromRGB(220,225,235)
+	local COLOR_TEXT         = (T.COLORS and T.COLORS.TextDefault)     or Color3.fromRGB(20,20,20)
+	local COLOR_RIGHT_BG     = (T.COLORS and T.COLORS.RightPaneBg)     or Color3.fromRGB(245,248,255)
+	local COLOR_RIGHT_STROKE = (T.COLORS and T.COLORS.RightPaneStroke) or Color3.fromRGB(210,220,230)
+	local COLOR_PANEL_BG     = (T.COLORS and T.COLORS.PanelBg)         or Color3.fromRGB(255,255,255)
+	local COLOR_PANEL_STROKE = (T.COLORS and T.COLORS.PanelStroke)     or Color3.fromRGB(220,225,235)
 
-	--=== Root ScreenGui ==================================================
+	--=== ScreenGui =======================================================
 	local g = parentGui
 	if not g or not g:IsA("ScreenGui") then
 		g = Instance.new("ScreenGui")
@@ -170,19 +157,18 @@ function M.build(parentGui: Instance, opts)
 		g.Parent = parentGui
 	end
 
-	--=== 最背面：和室背景 ================================================
+	-- 背景
 	local roomBG = Instance.new("ImageLabel")
 	roomBG.Name = "RoomBG"
 	roomBG.Parent = g
 	roomBG.Image = ROOM_BG_IMAGE
 	roomBG.BackgroundTransparency = 1
 	roomBG.Size = UDim2.fromScale(1,1)
-	roomBG.Position = UDim2.fromScale(0,0)
 	roomBG.ScaleType = Enum.ScaleType.Crop
 	roomBG.ZIndex = 0
 	roomBG.ImageTransparency = TRANSP.roomBg or 0
 
-	--=== Root と PlayArea ===============================================
+	-- Root
 	local root = Instance.new("Frame")
 	root.Name = "Root"
 	root.Parent = g
@@ -206,7 +192,7 @@ function M.build(parentGui: Instance, opts)
 		ar.Parent = playArea
 	end
 
-	--=== 3カラム ========================================================
+	-- 3カラム
 	local left = Instance.new("Frame")
 	left.Name = "LeftSidebar"
 	left.Parent = playArea
@@ -227,37 +213,42 @@ function M.build(parentGui: Instance, opts)
 	rightPane.Name = "RightPane"
 	rightPane.Parent = playArea
 	rightPane.BackgroundColor3 = COLOR_RIGHT_BG
-	rightPane.BackgroundTransparency = T.rightPaneBgT or 0.08
+	rightPane.BackgroundTransparency = T.rightPaneBgT or 0
 	rightPane.Size = UDim2.fromScale(RIGHT_W, 1 - PAD*2)
 	rightPane.Position = UDim2.fromScale(1 - RIGHT_W - PAD, PAD)
 	rightPane.ZIndex = 1
 	addCornerStroke(rightPane, nil, COLOR_RIGHT_STROKE, 1)
 
-	--=== Left：情報パネル群 =============================================
+	-- Left：情報パネル
 	makeList(left, Enum.FillDirection.Vertical, 8, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
 
 	local infoPanel = makePanel(left, "InfoPanel", Vector2.new(1, 0.14), 1, COLOR_PANEL_BG, COLOR_PANEL_STROKE)
-	infoPanel.ZIndex = 1
-	local info = UiUtil.makeLabel(infoPanel, "Info",
-		"--", -- 文字列は applyTexts() で差し替え
-		UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), Vector2.new(0,0), COLOR_TEXT)
+	local info = UiUtil.makeLabel(infoPanel, "Info", "--", UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), Vector2.new(0,0), COLOR_TEXT)
 	info.TextWrapped = true
 	info.TextScaled = true
 	info.TextXAlignment = Enum.TextXAlignment.Left
 
-	-- タイトルは初期ロケールで生成（後で applyTexts が上書き）
-	local goalPanel = makePanel(left, "GoalPanel", Vector2.new(1, 0.10), 2, COLOR_PANEL_BG, COLOR_PANEL_STROKE, Locale.t(_lang, "RUN_GOAL_TITLE"), COLOR_TEXT)
-	goalPanel.ZIndex = 1
-	local goalText = UiUtil.makeLabel(goalPanel, "GoalValue", "—", UDim2.new(1,-12,1,-36), UDim2.new(0,6,0,30), nil, COLOR_TEXT)
+	-- 目標（見出しなし）
+	local goalPanel = makePanel(left, "GoalPanel", Vector2.new(1, 0.10), 2, COLOR_PANEL_BG, COLOR_PANEL_STROKE, nil, nil)
+	local goalText = UiUtil.makeLabel(goalPanel, "GoalValue", "—", UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), nil, COLOR_TEXT)
 	goalText.TextScaled = true
 	goalText.TextXAlignment = Enum.TextXAlignment.Left
 
-	local scorePanel = makePanel(left, "ScorePanel", Vector2.new(1, 0.22), 3, COLOR_PANEL_BG, COLOR_PANEL_STROKE, Locale.t(_lang, "RUN_SCORE_TITLE"), COLOR_TEXT)
-	scorePanel.ZIndex = 1
-	local scoreBox = UiUtil.makeLabel(scorePanel, "ScoreBox", "--",
-		UDim2.new(1,-12,1,-42), UDim2.new(0,6,0,36), nil, COLOR_TEXT)
-	scoreBox.TextYAlignment = Enum.TextYAlignment.Top
+	-- スコア＋役一覧（水色）
+	local scorePanel = makePanel(left, "ScorePanel", Vector2.new(1, 0.26), 3, COLOR_PANEL_BG, COLOR_PANEL_STROKE, nil, nil)
+	local scoreStack = Instance.new("Frame"); scoreStack.Name="ScoreStack"; scoreStack.Parent=scorePanel
+	scoreStack.Size = UDim2.new(1,-12,1,-12); scoreStack.Position = UDim2.new(0,6,0,6); scoreStack.BackgroundTransparency=1
+	makeList(scoreStack, Enum.FillDirection.Vertical, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Top)
 
+	local scoreBox = UiUtil.makeLabel(scoreStack, "ScoreBox", "--", UDim2.new(1,0,0,96), UDim2.new(0,0,0,0), nil, COLOR_TEXT)
+	scoreBox.TextYAlignment = Enum.TextYAlignment.Top
+	scoreBox.TextWrapped = true
+	scoreBox.TextScaled = true
+
+	local btnYakuColor = (Theme.COLORS and Theme.COLORS.InfoBtnBg) or Color3.fromRGB(120, 180, 255)
+	local btnYaku = makeSideBtn(scoreStack, "OpenYaku", "", btnYakuColor)
+
+	-- コントロールボタン
 	local controlsPanel = Instance.new("Frame")
 	controlsPanel.Name = "ControlsPanel"
 	controlsPanel.Parent = left
@@ -268,189 +259,103 @@ function M.build(parentGui: Instance, opts)
 	controlsPanel.ZIndex = 1
 	makeList(controlsPanel, Enum.FillDirection.Vertical, 8)
 
-	-- 既存
-	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", C.PrimaryBtnBg or Color3.fromRGB(255,153,0))
-	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", C.WarnBtnBg or Color3.fromRGB(220,70,70))
-	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", C.WarnBtnBg or Color3.fromRGB(220,70,70))
+	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", (T.COLORS and T.COLORS.PrimaryBtnBg) or Color3.fromRGB(255,153,0))
+	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", (T.COLORS and T.COLORS.WarnBtnBg)    or Color3.fromRGB(220,70,70))
+	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", (T.COLORS and T.COLORS.WarnBtnBg)    or Color3.fromRGB(220,70,70))
 
-	-- ★ 追加：役一覧ボタン（Confirm の“上”に出す）
-	local btnYaku = makeSideBtn(
-		controlsPanel,
-		"OpenYaku",
-		"",  -- 文字列は applyTexts() で入れる
-		(C.SecondaryBtnBg or C.PrimaryBtnBg or Color3.fromRGB(80,120,200))
-	)
-
-	-- ★ 並び順（UIListLayout 用）：Yaku=9, Confirm=10, RerollAll=11, RerollHand=12
-	btnYaku.LayoutOrder     = 9
-	btnConfirm.LayoutOrder  = 10
-	btnRerollAll.LayoutOrder  = 11
-	btnRerollHand.LayoutOrder = 12
-
-	--=== Center：盤面 / お知らせ / チュートリアル / 手札 ================
+	-- Center
 	makeList(center, Enum.FillDirection.Vertical, 0.02, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
-
-	local boardArea = Instance.new("Frame")
-	boardArea.Name = "BoardArea"
-	boardArea.Parent = center
-	boardArea.BackgroundTransparency = 1
-	boardArea.Size = UDim2.fromScale(1, BOARD_H)
-	boardArea.LayoutOrder = 1
-	boardArea.ZIndex = 1
+	local boardArea = Instance.new("Frame"); boardArea.Name="BoardArea"; boardArea.Parent=center; boardArea.BackgroundTransparency=1
+	boardArea.Size=UDim2.fromScale(1, BOARD_H); boardArea.LayoutOrder=1; boardArea.ZIndex=1
 	do
-		local tatami = Instance.new("ImageLabel")
-		tatami.Name = "BoardBG"
-		tatami.Parent = boardArea
-		tatami.Image = FIELD_BG_IMAGE
-		tatami.BackgroundTransparency = 1
-		tatami.Size = UDim2.fromScale(1,1)
-		tatami.ScaleType = Enum.ScaleType.Crop
-		tatami.ZIndex = 1
-		tatami.ImageTransparency = TRANSP.boardBg or 0
-		local tatamiCorner = Instance.new("UICorner")
-		tatamiCorner.CornerRadius = UDim.new(0, Theme.PANEL_RADIUS or 10)
-		tatamiCorner.Parent = tatami
+		local tatami = Instance.new("ImageLabel"); tatami.Name="BoardBG"; tatami.Parent=boardArea
+		tatami.Image=FIELD_BG_IMAGE; tatami.BackgroundTransparency=1; tatami.Size=UDim2.fromScale(1,1)
+		tatami.ScaleType=Enum.ScaleType.Crop; tatami.ZIndex=1; tatami.ImageTransparency=TRANSP.boardBg or 0
+		local tatamiCorner = Instance.new("UICorner"); tatamiCorner.CornerRadius=UDim.new(0, Theme.PANEL_RADIUS or 10); tatamiCorner.Parent=tatami
 
-		local boardWrap = Instance.new("Frame")
-		boardWrap.Name = "BoardWrap"
-		boardWrap.Parent = boardArea
-		boardWrap.BackgroundTransparency = 1
-		boardWrap.Size = UDim2.fromScale(1,1)
-		boardWrap.ZIndex = 2
-
+		local boardWrap = Instance.new("Frame"); boardWrap.Name="BoardWrap"; boardWrap.Parent=boardArea
+		boardWrap.BackgroundTransparency=1; boardWrap.Size=UDim2.fromScale(1,1); boardWrap.ZIndex=2
 		makeList(boardWrap, Enum.FillDirection.Vertical, ROW_GAP)
 
-		local boardRowTop = Instance.new("Frame")
-		boardRowTop.Name = "BoardRowTop"
-		boardRowTop.Parent = boardWrap
-		boardRowTop.BackgroundTransparency = 1
-		boardRowTop.Size = UDim2.fromScale(1, (1 - ROW_GAP) * 0.5)
-		boardRowTop.ZIndex = 2
-		makeList(boardRowTop, Enum.FillDirection.Horizontal, 0.02)
+		local top = Instance.new("Frame"); top.Name="BoardRowTop"; top.Parent=boardWrap; top.BackgroundTransparency=1
+		top.Size=UDim2.fromScale(1,(1-ROW_GAP)*0.5); top.ZIndex=2; makeList(top, Enum.FillDirection.Horizontal, 0.02)
 
-		local boardRowBottom = Instance.new("Frame")
-		boardRowBottom.Name = "BoardRowBottom"
-		boardRowBottom.Parent = boardWrap
-		boardRowBottom.BackgroundTransparency = 1
-		boardRowBottom.Size = UDim2.fromScale(1, (1 - ROW_GAP) * 0.5)
-		boardRowBottom.ZIndex = 2
-		makeList(boardRowBottom, Enum.FillDirection.Horizontal, 0.02)
+		local bottom = Instance.new("Frame"); bottom.Name="BoardRowBottom"; bottom.Parent=boardWrap; bottom.BackgroundTransparency=1
+		bottom.Size=UDim2.fromScale(1,(1-ROW_GAP)*0.5); bottom.ZIndex=2; makeList(bottom, Enum.FillDirection.Horizontal, 0.02)
 
-		M._boardRowTop = boardRowTop
-		M._boardRowBottom = boardRowBottom
+		M._boardRowTop, M._boardRowBottom = top, bottom
 	end
 
-	local notice = Instance.new("Frame")
-	notice.Name = "NoticeBar"
-	notice.Parent = center
-	notice.LayoutOrder = 4
+	local notice = Instance.new("Frame"); notice.Name="NoticeBar"; notice.Parent=center; notice.LayoutOrder=4
 	local noticeH = math.max(0.05, (TUTORIAL_H or 0.08) * 0.9)
-	notice.Size = UDim2.fromScale(1, noticeH)
-	notice.BackgroundColor3 = Color3.fromRGB(240,246,255)
-	notice.ZIndex = 1
-	addCornerStroke(notice, nil, nil, 1)
+	notice.Size=UDim2.fromScale(1, noticeH); notice.BackgroundColor3=Color3.fromRGB(240,246,255); notice.ZIndex=1; addCornerStroke(notice,nil,nil,1)
 	local noticeText = UiUtil.makeLabel(notice, "NoticeText", "", UDim2.new(1,-16,1,-12), UDim2.new(0,8,0,6), nil, COLOR_TEXT)
-	noticeText.TextScaled = true
-	noticeText.TextWrapped = true
-	noticeText.TextXAlignment = Enum.TextXAlignment.Left
+	noticeText.TextScaled=true; noticeText.TextWrapped=true; noticeText.TextXAlignment=Enum.TextXAlignment.Left
 
-	local tutorial = Instance.new("Frame")
-	tutorial.Name = "TutorialBar"
-	tutorial.Parent = center
-	tutorial.Size = UDim2.fromScale(1, TUTORIAL_H)
-	tutorial.BackgroundColor3 = Color3.fromRGB(255,153,0)
-	tutorial.LayoutOrder = 3
-	tutorial.ZIndex = 1
-	addCornerStroke(tutorial, nil, nil, 1)
-	local help = UiUtil.makeLabel(tutorial, "Help",
-		"", -- 文字列は applyTexts() で設定
-		UDim2.new(1,-16,1,-12), UDim2.new(0,8,0,6), nil, COLOR_TEXT)
-	help.TextScaled = true
-	help.TextWrapped = true
-	help.TextXAlignment = Enum.TextXAlignment.Center
+	local tutorial = Instance.new("Frame"); tutorial.Name="TutorialBar"; tutorial.Parent=center
+	tutorial.Size=UDim2.fromScale(1, TUTORIAL_H); tutorial.BackgroundColor3=Color3.fromRGB(255,153,0)
+	tutorial.LayoutOrder=3; tutorial.ZIndex=1; addCornerStroke(tutorial,nil,nil,1)
+	local help = UiUtil.makeLabel(tutorial, "Help", "", UDim2.new(1,-16,1,-12), UDim2.new(0,8,0,6), nil, COLOR_TEXT)
+	help.TextScaled=true; help.TextWrapped=true; help.TextXAlignment=Enum.TextXAlignment.Center
 
-	local handArea = Instance.new("Frame")
-	handArea.Name = "HandArea"
-	handArea.Parent = center
-	handArea.BackgroundTransparency = 1
-	handArea.Size = UDim2.fromScale(1, HAND_H)
-	handArea.LayoutOrder = 2
-	handArea.ZIndex = 1
+	local handArea = Instance.new("Frame"); handArea.Name="HandArea"; handArea.Parent=center
+	handArea.BackgroundTransparency=1; handArea.Size=UDim2.fromScale(1, HAND_H); handArea.LayoutOrder=2; handArea.ZIndex=1
 
-	--=== Right：取り札 ================================================
+	-- Right：取り札
 	makeList(rightPane, Enum.FillDirection.Vertical, 0.02, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
-
 	local takenPanel = makePanel(rightPane, "TakenPanel", Vector2.new(1,1), 1, COLOR_PANEL_BG, COLOR_PANEL_STROKE, Locale.t(_lang, "RUN_TAKEN_TITLE"), COLOR_TEXT)
-	takenPanel.ZIndex = 1
+	local takenBG = Instance.new("ImageLabel"); takenBG.Name="TakenBG"; takenBG.Parent=takenPanel
+	takenBG.Image=TAKEN_BG_IMAGE; takenBG.BackgroundTransparency=1; takenBG.ScaleType=Enum.ScaleType.Crop; takenBG.Size=UDim2.fromScale(1,1)
+	takenBG.ZIndex=1; takenBG.ImageTransparency=TRANSP.takenBg or 0 -- ★ 木目はZ=1のまま（消えない）
+	local takenCorner = Instance.new("UICorner"); takenCorner.CornerRadius=UDim.new(0, Theme.PANEL_RADIUS or 10); takenCorner.Parent=takenBG
+	local takenBox = Instance.new("ScrollingFrame"); takenBox.Name="TakenBox"; takenBox.Parent=takenPanel
+	takenBox.Size=UDim2.new(1,-12,1,-42); takenBox.Position=UDim2.new(0,6,0,36); takenBox.AutomaticCanvasSize=Enum.AutomaticSize.Y
+	takenBox.CanvasSize=UDim2.new(0,0,0,0); takenBox.ScrollBarThickness=8; takenBox.BackgroundTransparency=1; takenBox.ZIndex=2
 
-	local takenBG = Instance.new("ImageLabel")
-	takenBG.Name = "TakenBG"
-	takenBG.Parent = takenPanel
-	takenBG.Image = TAKEN_BG_IMAGE
-	takenBG.BackgroundTransparency = 1
-	takenBG.ScaleType = Enum.ScaleType.Crop
-	takenBG.Size = UDim2.fromScale(1,1)
-	takenBG.ZIndex = 1
-	takenBG.ImageTransparency = TRANSP.takenBg or 0
-	local takenCorner = Instance.new("UICorner")
-	takenCorner.CornerRadius = UDim.new(0, Theme.PANEL_RADIUS or 10)
-	takenCorner.Parent = takenBG
-
-	local takenBox = Instance.new("ScrollingFrame")
-	takenBox.Name = "TakenBox"
-	takenBox.Parent = takenPanel
-	takenBox.Size = UDim2.new(1,-12,1,-42)
-	takenBox.Position = UDim2.new(0,6,0,36)
-	takenBox.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	takenBox.CanvasSize = UDim2.new(0,0,0,0)
-	takenBox.ScrollBarThickness = 8
-	takenBox.BackgroundTransparency = 1
-	takenBox.ZIndex = 2
-
-	-- 返却参照束
+	-- 参照束
 	local refs = {
-		gui = g,
-		root = root,
-		playArea = playArea,
-		info = info,
-		goalText = goalText,
-		help = help,
-		notice = noticeText,
-		handArea = handArea,
-		boardRowTop = M._boardRowTop,
-		boardRowBottom = M._boardRowBottom,
-		takenBox = takenBox,
-		scoreBox = scoreBox,
-		goalPanel = goalPanel,
-		scorePanel = scorePanel,
-		takenPanel = takenPanel,
-		buttons = {
-			yaku = btnYaku,        -- ★ 追加
-			confirm = btnConfirm,
-			rerollAll = btnRerollAll,
-			rerollHand = btnRerollHand,
-		},
-		theme = { T = T, S = S, C = C, R = R },
+		gui = g, root = root, playArea = playArea,
+		info = info, goalText = goalText, scoreBox = scoreBox,
+		help = help, notice = noticeText, handArea = handArea,
+		boardRowTop = M._boardRowTop, boardRowBottom = M._boardRowBottom,
+		takenBox = takenBox, takenPanel = takenPanel,
+		scorePanel = scorePanel, goalPanel = goalPanel,
+		buttons = { yaku = btnYaku, confirm = btnConfirm, rerollAll = btnRerollAll, rerollHand = btnRerollHand },
 	}
 
-	-- 初期テキスト適用
-	applyTexts(refs)
-
-	-- ランタイム言語切替API
+	-- 初期テキスト
 	local function setLang(newLang: string)
-		print("[LANG_FLOW] RunScreenUI.setLang called with", newLang, " (prev=", _lang,")")
 		if newLang ~= "jp" and newLang ~= "en" then return end
 		_lang = newLang
 		applyTexts(refs)
 	end
+	applyTexts(refs)
 
+	-- ★ 言語変更イベント購読（Home の切替 → setGlobal で即反映）
+	local langConn = nil
+	if typeof(Locale.changed) == "RBXScriptSignal" then
+		langConn = Locale.changed:Connect(function(newLang)
+			if newLang == "jp" or newLang == "en" then setLang(newLang) end
+		end)
+	end
+
+	-- 任意：スコア文面のフォーマッタ（Run側で使いたい時に）
+	refs.formatScore = function(score, mons, pts, rolesText)
+		if _lang == "jp" then
+			return string.format("得点：%d\n文%d×%d点\n%s", score or 0, mons or 0, pts or 0, rolesText or "役：--")
+		else
+			return string.format("Score: %d\n%dMon × %dPts\n%s", score or 0, mons or 0, pts or 0, rolesText or "Roles: --")
+		end
+	end
+
+	-- 後片付け用
+	refs.cleanup = function()
+		if langConn then langConn:Disconnect() end
+	end
 	refs.setLang = setLang
 	refs.getLang = function() return _lang end
 
-	-- ★ build の最終行ログ（念のため残す）
-	print(("[LANG_FLOW] RunScreenUI.build done | lang=%s | has setLang=%s")
-		:format(tostring(_lang), tostring(type(setLang)=="function")))
-
+	print(("[LANG_FLOW] RunScreenUI.build done | lang=%s"):format(tostring(_lang)))
 	return refs
 end
 

@@ -4,6 +4,8 @@
 -- v0.9.4:
 --  - パッチノートのUI/取得ロジックを PatchNotesModal.lua へ分離
 --  - Home はボタン→モーダル呼び出しのみ
+--  - ★ 右端の安全余白を追加（LangBox/BETA の位置を内側へ）
+--  - ★ Start ボタン文言は BTN_START に統一（BTN_NEW フォールバックを撤廃）
 
 local Home = {}
 Home.__index = Home
@@ -16,6 +18,9 @@ local RS      = game:GetService("ReplicatedStorage")
 
 local Locale  = require(RS:WaitForChild("Config"):WaitForChild("Locale"))
 local PatchNotesModal = require(script.Parent:WaitForChild("PatchNotesModal"))
+
+-- ★ 右端の安全余白（必要に応じて増減）
+local RIGHT_SAFE_PAD = 32 -- px 例: 32/40/48 に調整可
 
 local function detectOSLang()
 	local lp  = Players.LocalPlayer
@@ -231,7 +236,7 @@ function Home.new(deps)
 	local beta = Instance.new("TextLabel")
 	beta.Name                   = "BetaBadge"
 	beta.AnchorPoint            = Vector2.new(1,1)
-	beta.Position               = UDim2.new(1, -16, 1, -12)
+	beta.Position               = UDim2.new(1, -(16 + RIGHT_SAFE_PAD), 1, -12) -- ← 右余白を追加
 	beta.BackgroundTransparency = 0.25
 	beta.BackgroundColor3       = Color3.fromRGB(20,22,28)
 	beta.Font                   = Enum.Font.GothamBold
@@ -254,10 +259,11 @@ function Home.new(deps)
 	local langBox = Instance.new("Frame")
 	langBox.Name                   = "LangBox"
 	langBox.AnchorPoint            = Vector2.new(1,0)
-	langBox.Position               = UDim2.new(1, -16, 0, 16)
+	langBox.Position               = UDim2.new(1, -(16 + RIGHT_SAFE_PAD), 0, 16) -- ← 右余白を追加
 	langBox.BackgroundColor3       = Color3.fromRGB(20,22,28)
 	langBox.BackgroundTransparency = 0.25
 	langBox.ZIndex                 = 3
+	langBox.AutomaticSize          = Enum.AutomaticSize.XY -- 中身に合わせて自動拡張
 	langBox.Parent                 = ui
 	local lbCorner = Instance.new("UICorner"); lbCorner.CornerRadius = UDim.new(0, 10); lbCorner.Parent = langBox
 	local lbPad    = Instance.new("UIPadding")
@@ -398,7 +404,7 @@ function Home:applyLocaleTexts()
 		self.statusLabel.Text = string.format(L("STATUS_FMT"), L("UNSET_YEAR"), 0, 0)
 	end
 	-- メニュー（START は hasSave により show() で差し替え）
-	if self.btnStart     then self.btnStart.Text     = Dget(self.Dict, "BTN_START", Dget(self.Dict, "BTN_NEW", "START GAME")) end
+	if self.btnStart     then self.btnStart.Text     = Dget(self.Dict, "BTN_START", "Start Game") end
 	if self.btnShrine    then self.btnShrine.Text    = L("BTN_SHRINE")   end
 	if self.btnItems     then self.btnItems.Text     = L("BTN_ITEMS")    end
 	if self.btnSettings  then self.btnSettings.Text  = L("BTN_SETTINGS") end
@@ -423,7 +429,7 @@ function Home:show(payload)
 		if self.hasSave then
 			self.btnStart.Text = Dget(self.Dict, "BTN_CONT", "CONTINUE")
 		else
-			self.btnStart.Text = Dget(self.Dict, "BTN_START", Dget(self.Dict, "BTN_NEW", "START GAME"))
+			self.btnStart.Text = Dget(self.Dict, "BTN_START", "Start Game")
 		end
 	end
 
