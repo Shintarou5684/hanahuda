@@ -5,7 +5,7 @@
 -- - ホバーでカードのストロークを少し強調
 -- - 既存のクリック/説明表示/購入フローは据え置き
 -- P0-12: 二重クリック対策
---  - 価格帯を TextLabel 化 + InputTransparent=true（入力は親ボタンへ）
+--  - 価格帯を TextLabel 化し、Active=false / Selectable=false（入力は親ボタンへ）
 --  - Activated は本体ボタンのみ接続
 
 local RS = game:GetService("ReplicatedStorage")
@@ -96,7 +96,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	addCorner(btn, Theme.PANEL_RADIUS)
 	local stroke = addStroke(btn, Theme.COLORS.PanelStroke, 1, 0)
 
-	-- 価格バンド（入力は親に透過させる）
+	-- 価格バンド（TextLabel に変更し、入力は親へパス）
 	local priceBand = Instance.new("TextLabel")
 	priceBand.Name = "Price"
 	priceBand.BackgroundColor3 = Theme.COLORS.BadgeBg
@@ -107,7 +107,8 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	priceBand.Font = Enum.Font.Gotham
 	priceBand.TextColor3 = Color3.fromRGB(245,245,245)
 	priceBand.ZIndex = 11
-	priceBand.InputTransparent = true -- ★ ここがポイント：クリックは親ボタンへ通す
+	priceBand.Active = false       -- ★ 入力を自身で取らない
+	priceBand.Selectable = false   -- ★ 選択不可
 	priceBand.Parent = btn
 	addStroke(priceBand, Theme.COLORS.BadgeStroke, 1, 0.2)
 
@@ -134,7 +135,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 
 	btn.MouseEnter:Connect(hoverIn)
 	btn.MouseLeave:Connect(hoverOut)
-	-- priceBand は InputTransparent のため、MouseEnter/Leave は不要（親で拾える）
+	-- priceBand は Label なので個別の MouseEnter/Leave 接続は不要（親で拾える）
 
 	-- 説明表示（Infoパネルへ）
 	local function showDesc()
@@ -151,7 +152,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 		end
 	end
 	btn.MouseEnter:Connect(showDesc)
-	-- priceBand からの説明表示も、InputTransparent により btn.MouseEnter で一貫化
+	-- priceBand からの説明表示も、親の MouseEnter で一貫化
 
 	-- 購入（Activated は本体のみ）
 	local function doBuy()
@@ -159,7 +160,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 		handlers.onBuy(it)
 	end
 	btn.Activated:Connect(doBuy)
-	-- ★ 削除: priceBand.Activated（Label化 + 入力透過で二重送出を根絶）
+	-- ※ 二重送出防止のため priceBand 側の Activated 接続は無し（Labelなので発火もしない）
 
 end
 
