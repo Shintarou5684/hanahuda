@@ -33,7 +33,6 @@ end
 --========================
 local MAX_STOCK        = 6       -- ★ 並べる最大数
 local REROLL_COST      = 1       -- リロール費用
-local REROLL_UNLIMITED = -1      -- UI用センチネル：-1 => 無制限
 
 --========================
 -- ログ支援
@@ -151,43 +150,38 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		s.shop.stock = generateStock(s.shop.rng, MAX_STOCK)
 	end
 
-	local remainingRerolls = REROLL_UNLIMITED
-	if s.shop.remainingRerolls ~= nil then
-		remainingRerolls = tonumber(s.shop.remainingRerolls) or REROLL_UNLIMITED
-	end
-
 	local reward = (opts and opts.reward) or 0
 	local notice = (opts and opts.notice) or ""
 	local target = (opts and opts.target) or 0
+	local money  = tonumber(s.mon or 0)
 
 	local deckView = RunDeckUtil.snapshot(s)
 
-	-- ===== DEBUG =====
-	print(("[SHOP][OPEN] u=%s season=%s mon=%d rerollCost=%d remain=%d matsuri=%s stock=%s notice=%s")
-		:format(tostring(plr and plr.Name or "?"), tostring(s.season), tonumber(s.mon or 0),
-				REROLL_COST, remainingRerolls, matsuriJSON(s), stockBrief(s.shop.stock), notice ~= "" and notice or ""))
+	-- ===== DEBUG =====（残回数の概念は撤去）
+	print(("[SHOP][OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s")
+		:format(tostring(plr and plr.Name or "?"), tostring(s.season), money,
+				REROLL_COST, matsuriJSON(s), stockBrief(s.shop.stock), notice ~= "" and notice or ""))
 
 	-- ★ 入場直後にスナップ
 	snapShop(plr, s)
 
 	ShopOpen:FireClient(plr, {
-		season                 = s.season,
-		target                 = target,
-		seasonSum              = s.seasonSum or 0,
-		rewardMon              = reward,
-		totalMon               = s.mon or 0,
-		stock                  = s.shop.stock,
-		items                  = s.shop.stock,          -- 互換
-		notice                 = notice,
-		mon                    = s.mon or 0,
-		rerollCost             = REROLL_COST,
-		remainingRerolls       = remainingRerolls,
-		canReroll              = (s.mon or 0) >= REROLL_COST,
-		currentDeck            = deckView,
-		-- ★ UI支援：満杯でもリロール可能であることを明示
-		maxStock               = MAX_STOCK,
-		stockCount             = #(s.shop.stock or {}),
-		rerollIgnoresCapacity  = true,
+		season       = s.season,
+		target       = target,
+		seasonSum    = s.seasonSum or 0,
+		rewardMon    = reward,
+		totalMon     = money,
+		mon          = money,              -- 互換
+		stock        = s.shop.stock,
+		items        = s.shop.stock,       -- 互換
+		notice       = notice,
+		rerollCost   = REROLL_COST,
+		canReroll    = money >= REROLL_COST,
+		currentDeck  = deckView,
+
+		-- ※UIが参照していれば残す（不要なら削除可）
+		maxStock     = MAX_STOCK,
+		stockCount   = #(s.shop.stock or {}),
 	})
 end
 

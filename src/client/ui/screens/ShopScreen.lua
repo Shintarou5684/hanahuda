@@ -1,5 +1,5 @@
 -- src/client/ui/screens/ShopScreen.lua
--- v0.9.4 …（前歴省略）
+-- v0.9.SIMPLE ShopScreen（残回数系の型定義を撤去）
 --  - [A] ShopFormat
 --  - [B] ShopCells
 --  - [C] ShopUI
@@ -22,14 +22,18 @@ local ShopRenderer = require(componentsFolder:WaitForChild("renderers"):WaitForC
 local ShopWires    = require(componentsFolder:WaitForChild("controllers"):WaitForChild("ShopWires"))
 
 export type Payload = {
-	items: {any}?, stock: {any}?,
-	mon: number?, totalMon: number?,
-	rerollCost: number?,
-	remainingRerolls: number?, -- nil/負数=無制限
-	canReroll: boolean?,
-	seasonSum: number?, target: number?, rewardMon: number?,
-	lang: string?, notice: string?,
-	currentDeck: any?, -- {v=2, codes, histogram, entries[{code,kind}], count}
+	items: {any}?,         -- サーバ互換: items/stock どちらでも
+	stock: {any}?,
+	mon: number?,          -- 所持文（同義: totalMon）
+	totalMon: number?,
+	rerollCost: number?,   -- 1回あたりの費用
+	canReroll: boolean?,   -- サーバ提示の可否（なければクライアントで mon>=cost 判定）
+	seasonSum: number?,    -- クリア合計
+	target: number?,       -- 目標
+	rewardMon: number?,    -- 報酬
+	lang: string?,         -- "ja"/"en"
+	notice: string?,       -- UI通知文
+	currentDeck: any?,     -- {v=2, codes, histogram, entries[{code,kind}], count}
 }
 
 --==================================================

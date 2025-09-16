@@ -1,5 +1,6 @@
 -- src/client/ui/components/renderers/ShopRenderer.lua
--- v0.9.G ShopRenderer：Shop画面の描画処理（_render 相当）
+-- v0.9.SIMPLE-2 ShopRenderer：Shop画面の描画処理（_render 相当）
+-- ポリシー: リロール可否は「所持金 >= 費用」のみで判定。_rerollBusy は renderer では参照しない。
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
@@ -18,16 +19,11 @@ function M.render(self)
   local p = self._payload or {}
   local items = p.items or p.stock or {}
   local lang = self._lang or ShopFormat.normLang(p.lang)
-  local mon = tonumber(p.mon or p.totalMon or 0)
-  local rerollCost = tonumber(p.rerollCost or 1)
+  local mon = tonumber(p.mon or p.totalMon or 0) or 0
+  local rerollCost = tonumber(p.rerollCost or 1) or 1
 
-  -- 残回数：nil または 負数なら「無制限」
-  local remainingRaw = p.remainingRerolls
-  local remaining = (remainingRaw ~= nil) and tonumber(remainingRaw) or nil
-  local unlimited = (remaining == nil) or (remaining < 0)
-
-  print(("[SHOP][UI] render lang=%s items=%d mon=%d rerollCost=%d unlimited=%s remaining=%s")
-    :format(lang, #items, mon, rerollCost, tostring(unlimited), tostring(remaining)))
+  print(("[SHOP][UI] render lang=%s items=%d mon=%d rerollCost=%d")
+    :format(lang, #items, mon, rerollCost))
 
   -- タイトル・ボタン
   if nodes.title then
@@ -38,14 +34,15 @@ function M.render(self)
   end
   if nodes.rerollBtn then
     nodes.rerollBtn.Text = ShopI18n.t(lang, "reroll_btn_fmt", rerollCost)
-    local can = true
-    if p.canReroll == false then can = false end
-    if (not unlimited) and remaining == 0 then can = false end
-    if tonumber(mon or 0) < rerollCost then can = false end
-    if self._rerollBusy then can = false end
+
+    -- 可否は「所持金>=費用」だけで決定（_rerollBusy は wire 側で抑止）
+    local can = (p.canReroll ~= false) and (mon >= rerollCost)
     nodes.rerollBtn.Active = can
-    nodes.rerollBtn.TextTransparency = can and 0 or 0.4
-    nodes.rerollBtn.BackgroundTransparency = can and 0 or 0.2
+    nodes.rerollBtn.AutoButtonColor = can
+
+    -- 見た目は固定（無効時も色は薄くしない）
+    nodes.rerollBtn.TextTransparency = 0
+    nodes.rerollBtn.BackgroundTransparency = 0
   end
   if nodes.infoTitle then
     nodes.infoTitle.Text = ShopI18n.t(lang, "info_title")
@@ -75,6 +72,7 @@ function M.render(self)
 
   -- 左グリッド：全消し → 全作り直し
   local scroll = nodes.scroll
+  if not scroll then return end
   for _, ch in ipairs(scroll:GetChildren()) do
     if ch:IsA("GuiObject") and ch ~= nodes.grid then
       ch:Destroy()
@@ -108,7 +106,7 @@ function M.render(self)
     scroll.CanvasSize = UDim2.new(0, 0, 0, needed)
   end)
 
-  -- サマリ：基本情報（下段固定）
+  -- サマリ：基本情報のみ（残回数表示は撤去）
   local s = {}
   if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
     table.insert(s, ShopI18n.t(lang, "summary_cleared_fmt",
@@ -117,11 +115,6 @@ function M.render(self)
   end
   table.insert(s, ShopI18n.t(lang, "summary_items_fmt", #items))
   table.insert(s, ShopI18n.t(lang, "summary_money_fmt", mon))
-  if unlimited then
-    table.insert(s, ShopI18n.t(lang, "summary_unlimited_fmt", rerollCost))
-  else
-    table.insert(s, ShopI18n.t(lang, "summary_remaining_fmt", remaining or 0, rerollCost))
-  end
   nodes.summary.Text = table.concat(s, "\n")
 end
 
