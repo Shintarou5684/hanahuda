@@ -119,23 +119,23 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	-- ホバー：枠と背景をわずかに強調
 	local ti = TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 	local baseBg = btn.BackgroundColor3
-	btn.MouseEnter:Connect(function()
+
+	-- 共通処理を関数化（SignalをFireしない）
+	local function hoverIn()
 		if stroke then stroke.Thickness = 2 end
-		TweenService:Create(btn, ti, { BackgroundColor3 = baseBg:lerp(Color3.new(1,1,1), 0.06) }):Play()
-	end)
-	btn.MouseLeave:Connect(function()
+		TweenService:Create(btn, ti, { BackgroundColor3 = baseBg:Lerp(Color3.new(1,1,1), 0.06) }):Play()
+	end
+	local function hoverOut()
 		if stroke then stroke.Thickness = 1 end
 		TweenService:Create(btn, ti, { BackgroundColor3 = baseBg }):Play()
-	end)
-	priceBtn.MouseEnter:Connect(function()
-		if nodes and nodes.infoText then
-			-- price帯から載せても説明が出るように
-			btn.MouseEnter:Fire() -- 疑似的に本体と同じ見た目効果
-		end
-	end)
-	priceBtn.MouseLeave:Connect(function()
-		btn.MouseLeave:Fire()
-	end)
+	end
+
+	btn.MouseEnter:Connect(hoverIn)
+	btn.MouseLeave:Connect(hoverOut)
+	priceBtn.MouseEnter:Connect(hoverIn)   -- 価格帯から乗っても同じ見た目に
+	priceBtn.MouseLeave:Connect(hoverOut)
+
+	
 
 	-- 説明表示（Infoパネルへ）
 	local function showDesc()

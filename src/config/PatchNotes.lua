@@ -1,5 +1,5 @@
 -- ReplicatedStorage/Config/PatchNotes.lua
--- 履歴を積み上げ式で管理（RichText対応）
+-- 公開向けパッチノート（RichText対応）
 -- PatchNotesModal は title/body を読むだけ。このファイルを更新するだけでUIに反映されます。
 
 local M = {}
@@ -8,14 +8,14 @@ local M = {}
 local NOTICE = {
 	jp = [[<b>⚠ 注意（開発中）</b><br/>
 <font transparency="0.08">
-現在この作品は開発中です。プレイして遊ぶことはできますが、難易度やバランスは仮のものです。
-バグの発生、仕様の予告のない変更、到達履歴やセーブデータの削除が行われる可能性があります。
-あらかじめご理解のうえ、お楽しみください。
+現在この作品は開発中です。プレイは可能ですが、難易度やバランスは暫定です。
+不具合の発生、仕様の予告ない変更、到達履歴やセーブデータのリセットが行われる場合があります。
+ご了承のうえお楽しみください。
 </font>]],
 	en = [[<b>⚠ Notice (In Development)</b><br/>
 <font transparency="0.08">
-This project is under active development. It is playable, but difficulty and balance are provisional.
-Bugs may occur, features may change without notice, and your progress/save data may be reset.
+The game is in active development. It is playable, but difficulty and balance are provisional.
+Bugs may occur, features may change without notice, and progress/save data may be reset.
 Thank you for your understanding.
 </font>]],
 }
@@ -23,55 +23,93 @@ Thank you for your understanding.
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
 	{
+		ver  = "v0.9.5",
+		date = "2025-09-14",
+		changes = {
+			{ jp = "屋台UIの構造を整理し、操作の一貫性と安定性を向上。", 
+			  en = "Streamlined Shop UI structure for more consistent and stable interactions." },
+			{ jp = "屋台の見た目を微調整（角丸・淡い枠・価格帯の視認性・ホバー強調）。",
+			  en = "Visual polish in the Shop (rounded corners, subtle borders, clearer price bands, hover emphasis)." },
+			{ jp = "言語テキストの取り回しを改善。将来的な多言語対応に備えた下地を追加。",
+			  en = "Improved string handling in preparation for future multi-language support." },
+			{ jp = "画面切替の最適化により、屋台更新時のちらつきを軽減。",
+			  en = "Optimized screen transitions to reduce flicker when the Shop updates." },
+			{ jp = "リロールは“1文でいつでも”に整理（暫定）。残回数の表示は当面省略。",
+			  en = "Reroll clarified to 'anytime for 1 mon' (temporary). Remaining-count UI omitted for now." },
+			{ jp = "一部環境で発生していた屋台UIの読み込み不具合を修正。",
+			  en = "Fixed a Shop UI loading issue observed in certain environments." },
+			{ jp = "購入/リロール後の通知を調整し、結果が分かりやすくなるよう改善。",
+			  en = "Tuned notifications after purchases and rerolls for clearer feedback." },
+		}
+	},
+	{
 		ver  = "v0.9.4",
 		date = "2025-09-13",
 		changes = {
-			{ jp = "パッチノートを別モジュール化（PatchNotesModal.lua）。Homeはボタンだけに簡素化。", en = "Split patch notes into a dedicated module (PatchNotesModal.lua). Home now only triggers the modal." },
-			{ jp = "パッチ本文を Config/PatchNotes.lua に集約（このファイル）。",                    en = "Centralized patch content in Config/PatchNotes.lua (this file)." },
-			{ jp = "短冊10枚（0102/0202/0302/0402/0502/0602/0702/0902/1002/1103）を定義修正。",     en = "Fixed ribbon definitions to total 10 cards (0102/0202/0302/0402/0502/0602/0702/0902/1002/1103)." },
-			{ jp = "役：赤短・青短の判定を実装（各+5文）。",                                       en = "Implemented Akatan & Aotan yaku detection (+5 mon each)." },
-			{ jp = "こいこい式：カス/タネ/短冊は閾値超過で+1文ずつの“超過文”方式に変更。",         en = "Koi-koi style: introduced overflow mon (+1 mon per extra card) for Kasu/Seed/Ribbon." },
-			{ jp = "干支：寅の仕様を“基本点(pts)に +1/Lv”で確定。",                                 en = "Kito (Tiger): finalized as +1 to base pts per level." },
-			{ jp = "BalanceDev.lua（理論値とノブ感度の簡易計測ツール）を追加。",                    en = "Added BalanceDev.lua (quick tool for theoretical max & knob sensitivity)." },
+			{ jp = "ホームからパッチノートを開けるように改善。", 
+			  en = "Patch Notes are now accessible from Home." },
+			{ jp = "短冊の定義を見直し、役判定が期待通りになるよう修正。",
+			  en = "Reviewed ribbon definitions to ensure expected yaku detection." },
+			{ jp = "役：赤短・青短の判定を実装（各+5文）。",
+			  en = "Implemented Akatan and Aotan yaku (+5 mon each)." },
+			{ jp = "こいこい式の“超過文”を導入（カス/タネ/短冊の閾値超過で+1文）。",
+			  en = "Introduced koi-koi style overflow mon (+1 per extra Kasu/Seed/Ribbon)." },
+			{ jp = "干支：寅の効果を“基本点に+1/レベル”で確定。",
+			  en = "Kito (Tiger) finalized as +1 to base points per level." },
+			{ jp = "内部のバランス調整作業を効率化（将来の調整速度を向上）。",
+			  en = "Improved internal balancing workflow for faster future tuning." },
 		}
 	},
 	{
 		ver  = "v0.9.3",
 		date = "2025-09-12",
 		changes = {
-			{ jp = "Homeにパッチノート（暫定）を追加：ボタン→前面モーダル表示の原型。",            en = "Added provisional Patch Notes in Home: button opens a front modal (prototype)." },
-			{ jp = "採点：全取りケースの検証（38文×86点=3268）→ 定義修正後は3306に更新。",          en = "Scoring: validated all-taken case (38 mon × 86 pts = 3268) → updated to 3306 after fixes." },
-			{ jp = "言語切替のグローバル反映（Locale.setGlobal）を改善。",                           en = "Improved global language propagation via Locale.setGlobal." },
-			{ jp = "オプション：クラシックこいこい互換の“文のみ”モードの準備。",                    en = "Prepared optional classic koi-koi 'mon-only' scoring mode." },
+			{ jp = "ホームのパッチノート導線を追加（前面モーダル）。",
+			  en = "Added Patch Notes entry on Home (front modal)." },
+			{ jp = "スコア算出の端ケースを見直し、想定値に合わせて調整。",
+			  en = "Reviewed edge cases in scoring and aligned with expected values." },
+			{ jp = "言語切替の反映を改善し、画面間の一貫性を向上。",
+			  en = "Improved language propagation for consistent UI across screens." },
+			{ jp = "オプション準備：クラシックこいこい互換の“文のみ”モード。",
+			  en = "Preparation for an optional classic koi-koi 'mon-only' mode." },
 		}
 	},
 	{
 		ver  = "v0.9.2",
 		date = "2025-09-11",
 		changes = {
-			{ jp = "NEW/CONTINUEを「START GAME」に統合。旧CONTINUE枠はパッチノートに変更。",        en = "Unified NEW/CONTINUE into START GAME; repurposed old slot as Patch Notes." },
-			{ jp = "言語チップ（EN/JP）を追加：保存言語を優先、無ければOS言語で初期化。",            en = "Added language chips (EN/JP): prefer saved language, otherwise use OS locale." },
-			{ jp = "ショップに“スペクタル”カテゴリ追加。黒天（祭事Lvを一括+1）を実装。",           en = "Added 'Spectral' shop category. Implemented Blackhole (all festival levels +1)." },
-			{ jp = "ShopEffects：カテゴリ別ディスパッチを実装（kito_/sai_/spectral_）。",            en = "ShopEffects: implemented category dispatch for kito_/sai_/spectral_." },
+			{ jp = "スタート導線を整理（NEW/CONTINUEの統合）。",
+			  en = "Unified start flow (NEW/CONTINUE integration)." },
+			{ jp = "言語チップ（EN/JP）を追加。保存言語を優先、無ければOS言語で初期化。",
+			  en = "Added EN/JP language chips. Prefer saved language; fallback to OS locale." },
+			{ jp = "屋台にレア枠を追加。全祭事に影響する強力な効果を実装。",
+			  en = "Added a rare Shop category with a powerful effect impacting all festivals." },
+			{ jp = "効果処理の安定性を向上（将来拡張に備えた土台）。",
+			  en = "Hardened effect handling to support future expansions." },
 		}
 	},
 	{
 		ver  = "v0.9.1",
 		date = "2025-09-10",
 		changes = {
-			{ jp = "採点に干支（寅）の上乗せを追加（初期案+1pts/Lv → 後に仕様確定）。",            en = "Added Kito (Tiger) to scoring (initial +1 pts/Lv design → later finalized)." },
-			{ jp = "Kito：丑=所持文2倍 / 寅=取り札得点+1スタック / 酉=構成から非brightをbright化。", en = "Kito: Ushi=double current mon / Tora=stackable taken pts +1 / Tori=convert a non-bright to bright." },
-			{ jp = "ShopDefsに祈祷（kito_）基本3種を追加。",                                         en = "ShopDefs: added the three base Kito items." },
+			{ jp = "干支の効果を追加：丑（所持文2倍）／寅（取り札の得点+1, スタック可）／酉（1枚を光札化）。",
+			  en = "Added Kito effects: Ushi (double current mon) / Tora (+1 taken pts, stackable) / Tori (convert one card to bright)." },
+			{ jp = "屋台の品揃えに上記効果を追加。",
+			  en = "These effects are now available in the Shop lineup." },
 		}
 	},
 	{
 		ver  = "v0.9.0",
 		date = "2025-09-06",
 		changes = {
-			{ jp = "基礎採点を実装：役→文 / 札→点。総スコア=文×点。",                                en = "Implemented base scoring: yaku → mon / card → pts. Total = mon × pts." },
-			{ jp = "祭事（Matsuri）係数テーブルと役→祭事マッピングを追加。",                         en = "Added Matsuri coefficient table and yaku → festival mapping." },
-			{ jp = "CardEngine：48枚デッキ定義・スナップショット機能を実装。",                        en = "CardEngine: added 48-card definitions and snapshot utility." },
-			{ jp = "ShopEffects初版：安全な pcall require と委譲ラッパを整備。",                      en = "ShopEffects v1: safe pcall-require and a delegate wrapper." },
+			{ jp = "基礎採点を実装：役→文、札→点。総スコア＝文×点。",
+			  en = "Implemented base scoring: yaku → mon, cards → pts. Total = mon × pts." },
+			{ jp = "祭事ボーナスと役→祭事の紐づけを追加。",
+			  en = "Added festival bonuses and yaku-to-festival mapping." },
+			{ jp = "デッキ定義と内部ツールを整備（安定性と測定性の向上）。",
+			  en = "Refined deck definitions and internal tooling for stability and measurability." },
+			{ jp = "屋台効果の処理を堅牢化。",
+			  en = "Hardened Shop effect processing." },
 		}
 	},
 }

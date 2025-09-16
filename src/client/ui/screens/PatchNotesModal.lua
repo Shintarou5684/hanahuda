@@ -165,9 +165,10 @@ end
 function Patch:_getStrings()
 	-- 既定値（Locale辞書）
 	local title = Dget(self.Dict, "PATCH_TITLE", "Patch Notes")
-	local body  = Dget(self.Dict, "PATCH_BODY",
-[[<b>Coming soon...</b>
+			local body  = Dget(self.Dict, "PATCH_BODY", [[<b>Coming soon...</b>
 We’ll post detailed changes here.]])
+
+
 	-- Config/PatchNotes.lua があれば優先
 	-- return { title = {jp=..., en=...}, body={jp=..., en=...} } を想定
 	if self.PatchNotes then
