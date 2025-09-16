@@ -1,9 +1,12 @@
--- src/client/ui/components/ShopCells.lua
+-- StarterPlayerScripts/UI/components/ShopCells.lua
 -- v0.9.H ShopCells：商品カードのUIリファイン（Theme薄適用 + 軽いホバー）
 -- - 角丸/ストローク/色を Theme から適用
 -- - 価格バンドをダーク帯（Badge系）に
 -- - ホバーでカードのストロークを少し強調
 -- - 既存のクリック/説明表示/購入フローは据え置き
+-- P0-12: 二重クリック対策
+--  - 価格帯を TextLabel 化 + InputTransparent=true（入力は親ボタンへ）
+--  - Activated は本体ボタンのみ接続
 
 local RS = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -93,26 +96,26 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	addCorner(btn, Theme.PANEL_RADIUS)
 	local stroke = addStroke(btn, Theme.COLORS.PanelStroke, 1, 0)
 
-	-- 価格バンド（ダーク帯＋白字）
-	local priceBtn = Instance.new("TextButton")
-	priceBtn.Name = "Price"
-	priceBtn.AutoButtonColor = false
-	priceBtn.BackgroundColor3 = Theme.COLORS.BadgeBg
-	priceBtn.Size = UDim2.new(1,0,0,20)
-	priceBtn.Position = UDim2.new(0,0,1,-20)
-	priceBtn.Text = fmtPrice(it.price)
-	priceBtn.TextSize = 14
-	priceBtn.TextColor3 = Color3.fromRGB(245,245,245)
-	priceBtn.ZIndex = 11
-	priceBtn.Selectable = false
-	priceBtn.Parent = btn
-	addStroke(priceBtn, Theme.COLORS.BadgeStroke, 1, 0.2)
+	-- 価格バンド（入力は親に透過させる）
+	local priceBand = Instance.new("TextLabel")
+	priceBand.Name = "Price"
+	priceBand.BackgroundColor3 = Theme.COLORS.BadgeBg
+	priceBand.Size = UDim2.new(1,0,0,20)
+	priceBand.Position = UDim2.new(0,0,1,-20)
+	priceBand.Text = fmtPrice(it.price)
+	priceBand.TextSize = 14
+	priceBand.Font = Enum.Font.Gotham
+	priceBand.TextColor3 = Color3.fromRGB(245,245,245)
+	priceBand.ZIndex = 11
+	priceBand.InputTransparent = true -- ★ ここがポイント：クリックは親ボタンへ通す
+	priceBand.Parent = btn
+	addStroke(priceBand, Theme.COLORS.BadgeStroke, 1, 0.2)
 
 	-- 購入可否の視覚
 	local affordable = (tonumber(mon or 0) >= tonumber(it.price or 0))
 	if not affordable then
-		priceBtn.Text = fmtPrice(it.price) .. ShopI18n.t(lang, "insufficient_suffix")
-		priceBtn.BackgroundTransparency = 0.15
+		priceBand.Text = fmtPrice(it.price) .. ShopI18n.t(lang, "insufficient_suffix")
+		priceBand.BackgroundTransparency = 0.15
 		btn.AutoButtonColor = true -- クリックは許可（従来通りサーバ側で弾く）
 	end
 
@@ -120,7 +123,6 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	local ti = TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 	local baseBg = btn.BackgroundColor3
 
-	-- 共通処理を関数化（SignalをFireしない）
 	local function hoverIn()
 		if stroke then stroke.Thickness = 2 end
 		TweenService:Create(btn, ti, { BackgroundColor3 = baseBg:Lerp(Color3.new(1,1,1), 0.06) }):Play()
@@ -132,10 +134,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 
 	btn.MouseEnter:Connect(hoverIn)
 	btn.MouseLeave:Connect(hoverOut)
-	priceBtn.MouseEnter:Connect(hoverIn)   -- 価格帯から乗っても同じ見た目に
-	priceBtn.MouseLeave:Connect(hoverOut)
-
-	
+	-- priceBand は InputTransparent のため、MouseEnter/Leave は不要（親で拾える）
 
 	-- 説明表示（Infoパネルへ）
 	local function showDesc()
@@ -152,15 +151,16 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 		end
 	end
 	btn.MouseEnter:Connect(showDesc)
-	priceBtn.MouseEnter:Connect(showDesc)
+	-- priceBand からの説明表示も、InputTransparent により btn.MouseEnter で一貫化
 
-	-- 購入（従来フロー）
+	-- 購入（Activated は本体のみ）
 	local function doBuy()
 		if not handlers or type(handlers.onBuy) ~= "function" then return end
 		handlers.onBuy(it)
 	end
 	btn.Activated:Connect(doBuy)
-	priceBtn.Activated:Connect(doBuy)
+	-- ★ 削除: priceBand.Activated（Label化 + 入力透過で二重送出を根絶）
+
 end
 
 return M

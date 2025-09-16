@@ -3,6 +3,7 @@
 -- v0.9.5 ResultModal final文言をLocale化（英語フォールバックあり）＋Nav統一
 --        MisleadingAndOr を if-then-else に置換（静的解析対応）
 --        P0-8: no-op削除／_G依存排除／役なしは Locale.t("ROLES_NONE")
+-- v0.9.6-P0-11 goal 数値を payload から参照（情報行パースは撤廃）
 
 local Run = {}
 Run.__index = Run
@@ -50,22 +51,13 @@ local function normLangJa(lang: string?)
 	return nil
 end
 
--- "目標:123" / "Target:123" / "Goal:123" の数値だけ抜く
-local function extractGoalFromInfoText(text)
-	if type(text) ~= "string" then return nil end
-	local n = string.match(text, "目標:%s*(%d+)")
-	          or string.match(text, "Target:%s*(%d+)")
-	          or string.match(text, "Goal:%s*(%d+)")
-	return n
-end
-
 -- Runは "ja"/"en" を使用。役パネルも "ja"/"en" 前提。
 local function mapLangForPanel(lang)
 	local n = normLangJa(lang)
 	return (n == "ja") and "ja" or "en"
 end
 
--- JPの情報ラインをENに置換する簡易マッパ
+-- JPの情報ラインをENに置換する簡易マッパ（HUDの表示用。数値ロジックでは使用しない）
 local function jpLineToEn(lineJP)
 	if type(lineJP) ~= "string" then return "" end
 	local s = lineJP
@@ -258,14 +250,14 @@ end
 	end
 
 	local function onState(st)
-		-- 情報パネル（JP→EN 変換）
+		-- 情報パネル（JP→EN 変換）※表示専用、数値は payload を参照
 		local lineJP = Format.stateLineText(st)
 		local line = (self._lang == "en") and jpLineToEn(lineJP) or lineJP
 		self.info.Text = line
 
-		-- 目標表示（Goal/Target/目標 どれでも拾う）
+		-- 目標表示：payload の数値 goal のみ使用（P0-11 完了）
 		if self.goalText then
-			local g = extractGoalFromInfoText(line)
+			local g = (typeof(st) == "table") and tonumber(st.goal) or nil
 			local label = (self._lang == "en") and "Goal:" or "目標："
 			self.goalText.Text = g and (label .. tostring(g)) or (label .. "—")
 		end

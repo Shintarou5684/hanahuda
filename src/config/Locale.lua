@@ -5,6 +5,9 @@
 --  2) Locale.t(lang, key) / Locale.get(lang) / Locale.pick(forced)
 --  3) Locale.setGlobal(lang) / Locale.getGlobal() / Locale.changed (Signal)
 --  4) jp入力時は warn を一度だけ出す（内部では常に ja に変換）
+-- P0-10: OSロケール検出のスタイルを簡素化
+--  - 変更点: pcall(game.GetService, game, "Players") → local Players = game:GetService("Players")
+--  - 目的: 可読性向上（挙動は不変。LocalPlayer が無い場合は "en" フォールバック）
 
 local Locale = {}
 
@@ -39,16 +42,19 @@ local function _norm(lang:string?)
 	return nil
 end
 
--- ===== OS言語検出 =====
+-- ===== OS言語検出（P0-10改修） =====
+local Players = game:GetService("Players")
+
 local function detectLang()
-	local ok, players = pcall(game.GetService, game, "Players")
-	if ok and players and players.LocalPlayer and players.LocalPlayer.LocaleId then
-		local lid = string.lower(players.LocalPlayer.LocaleId)
+	-- Client 以外（サーバ/テスト環境）では LocalPlayer は nil → "en" フォールバック
+	local lp = Players.LocalPlayer
+	if lp and lp.LocaleId then
+		local lid = string.lower(lp.LocaleId)
 		local res = (string.sub(lid, 1, 2) == "ja") and "ja" or "en"
 		L("detectLang", "OS locale detected", {LocaleId=lid, resolved=res})
 		return res
 	end
-	L("detectLang", "OS locale fallback to EN", {ok=ok})
+	L("detectLang", "OS locale fallback to EN", {hasLocalPlayer=tostring(lp ~= nil)})
 	return "en"
 end
 

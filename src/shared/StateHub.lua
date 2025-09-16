@@ -1,5 +1,6 @@
 -- ReplicatedStorage/SharedModules/StateHub.lua
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
+-- P0-11: StatePush の payload に goal:number を追加（UI側の文字列パース依存を排除）
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -139,11 +140,13 @@ function StateHub.pushState(plr: Player)
 
 	-- 状態（HUD/UI用）
 	if Remotes.StatePush then
+		local goalVal = targetForSeason(s.season) -- ★P0-11: 数値ゴールを一度だけ算出
 		Remotes.StatePush:FireClient(plr, {
 			-- 基本
 			season      = s.season,
 			seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
-			target      = targetForSeason(s.season),
+			target      = goalVal,                    -- 既存フィールド（互換維持）
+			goal        = goalVal,                    -- ★追加：UIが直接参照する数値ゴール
 
 			-- 残り系
 			hands       = s.handsLeft or 0,
@@ -161,7 +164,7 @@ function StateHub.pushState(plr: Player)
 			homeReturns = s.homeReturns or 0,
 
 			-- 言語（UIで利用）
-			lang        = s.lang,                     -- ★追加
+			lang        = s.lang,                     -- ★任意
 
 			-- 祭事レベル（YakuPanel 等のUIで利用）
 			matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
