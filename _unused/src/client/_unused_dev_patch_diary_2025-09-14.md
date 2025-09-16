@@ -1,10 +1,3 @@
-# 開発日誌（内部・AI同期用）
-更新: 2025-09-14 22:28 JST
-
-> このファイルは **更新記録のみ** を記載する簡易テキスト（Markdown）です。  
-> 社外公開は想定していません。内部ファイル名・実装名の記載OK。
-
----
 
 ## 注意（社内・開発向け）
 この文書には内部ファイル名や実装詳細が含まれます。外部共有前に公開用パッチノートへ要サニタイズ。
@@ -12,6 +5,22 @@
 ---
 
 ## 更新記録 / Change Log
+
+### v0.9.5 — 2025-09-17
+- **Fix-All P0 完了**：P0-1〜P0-12 を一括修正 — (Completed all P0 blockers).
+- **ResultModal / Nav 統一**：UI は `Nav.next("home"|"next"|"save")` のみ呼ぶ。内部は `DecideNext` に集約 — (Unified navigation on client; single remote).
+- **Router のちらつき解消**：同一画面の `show` は `Enabled/Visible` を変更せず、表示更新のみ実行 — (No disable/enable loop on same screen).
+- **Enabled/Visible の安全切替**：`ScreenGui.Enabled` / `GuiObject.Visible` を型で分岐 — (Safe toggling across types).
+- **ResultModal 文言の i18n**：`Locale.t` キー（`RESULT_FINAL_*`）で切替、英語フォールバック — (Final dialog localized).
+- **ShopOpen リスナーを1本化**：`ClientMain` に集約し、二重描画・二重遷移を排除 — (Consolidated ShopOpen handling).
+- **Home Start の同期待ち**：`HomeOpen` 着弾まで Start を無効化（「同期中…」表示）— (Gate Start until payload arrives).
+- **トーストのタイトル i18n**：`Locale.t(lang, "TOAST_TITLE")` — (Toast title localized).
+- **Run の負債返済**：no-op 削除、空役は `Locale.t("ROLES_NONE")` に統一 — (Removed no-ops; empty roles string via Locale).
+- **言語コード統一**：外部 I/F は `ja/en`。`jp` 受信時は警告の上 `ja` に正規化 — (Normalize `jp` → `ja`).
+- **OSロケール検出の簡素化**：`game:GetService("Players")` を素直に使用 — (Simpler, clear detection code).
+- **Run の目標スコア**：`StatePush` に `goal:number` を追加。Run は `st.goal` のみ参照（文字列パース撤廃）— (Robust goal display).
+- **ShopCells 二重クリック対策**：価格帯を `TextLabel` 化し `Active=false/Selectable=false`。`Activated` は本体のみ — (1 click = 1 send).
+- **その他**：Start/Continue の表示不具合を修正 — (Fixed Start/Continue visibility issue).
 
 ### v0.9.4 — 2025-09-14
 - SHOP UI **4分割**：`ShopScreen` / `ShopCells` / `ShopRenderer` / `ShopWires` へ分離 — (SHOP UI split into four files).
@@ -52,4 +61,3 @@
 ### 追記ルール（メモ）
 - 先頭が最新。新しい更新は上に追記。
 - 社外公開が必要になったら、公開用 `PatchNotes.lua` へ転記＆サニタイズ。
-
