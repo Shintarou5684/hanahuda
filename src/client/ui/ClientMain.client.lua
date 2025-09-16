@@ -1,11 +1,18 @@
--- v0.9.3 Router＋Remote結線（NavClient注入／vararg不使用）
+-- StarterPlayerScripts/UI/ClientMain.client.lua
+-- v0.9.6-P0-9 Router＋Remote結線（NavClient注入／vararg不使用）
+-- 仕様メモ:
+--   * <ShopOpen> は **ClientMainのみ** で受信し、Router.show("shop", payload) に一本化。
+--   * 言語コードは外部公開を "ja"/"en" に統一（"jp" を受信した場合は "ja" へ正規化して警告）
+
 print("[ClientMain] boot")
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local Remotes = RS:WaitForChild("Remotes")
 
--- Locale
+--========================
+-- Locale（存在しない場合のフォールバック込み）
+--========================
 local okLocale, Locale = pcall(function()
 	return require(RS:WaitForChild("Config"):WaitForChild("Locale"))
 end)
@@ -14,13 +21,32 @@ if not okLocale or type(Locale) ~= "table" then
 	local _g = "en"
 	Locale = {}
 	function Locale.getGlobal() return _g end
-	function Locale.setGlobal(v) _g = (v=="ja" or v=="jp") and "jp" or "en" end
+	function Locale.setGlobal(v) _g = (v=="ja" or v=="jp") and "ja" or "en" end
+	function Locale.t(_, key)
+		if key == "TOAST_TITLE" then
+			return (_g == "ja") and "通知" or "Notice"
+		end
+		return key
+	end
+end
+
+-- 受け取った言語コードを "ja"/"en" に正規化（"jp" は "ja" へ変換）
+local function normLang(v)
+	v = tostring(v or ""):lower()
+	if v == "ja" or v == "en" then return v end
+	if v == "jp" then
+		warn("[Locale] ClientMain: received legacy 'jp'; normalizing to 'ja'")
+		return "ja"
+	end
+	return nil
 end
 
 -- ▼ 追加：NavClient
 local NavClient = require(RS:WaitForChild("SharedModules"):WaitForChild("NavClient"))
 
+--========================
 -- S→C
+--========================
 local HomeOpen    = Remotes:WaitForChild("HomeOpen")
 local ShopOpen    = Remotes:WaitForChild("ShopOpen")
 local StatePush   = Remotes:WaitForChild("StatePush")
@@ -31,7 +57,9 @@ local ScorePush   = Remotes:WaitForChild("ScorePush")
 local RoundReady  = Remotes:WaitForChild("RoundReady")
 local StageResult = Remotes:WaitForChild("StageResult")
 
+--========================
 -- C→S
+--========================
 local ReqStartNewRun = Remotes:WaitForChild("ReqStartNewRun")
 local ReqContinueRun = Remotes:WaitForChild("ReqContinueRun")
 local Confirm        = Remotes:WaitForChild("Confirm")
@@ -61,6 +89,9 @@ local Nav = NavClient.new(DecideNext, {
 	SaveQuit = SaveQuit,
 })
 
+--========================
+-- Router 準備
+--========================
 local uiRoot = script.Parent:FindFirstChild("UI") or script.Parent
 local ScreenRouterModule = uiRoot:FindFirstChild("ScreenRouter") or uiRoot:WaitForChild("ScreenRouter")
 local ScreensFolder      = uiRoot:FindFirstChild("screens")      or uiRoot:WaitForChild("screens")
@@ -100,9 +131,18 @@ Router.setDeps({
 	-- ▼ 追加：UI層へ Nav を配布（ResultModal → Nav.next("home"|"next"|"save")）
 	Nav = Nav,
 
+	-- ★ P0-7: トーストタイトルをロケールで切替（"jp" は受けたら "ja" として扱う）
 	toast = function(msg, dur)
 		pcall(function()
-			game.StarterGui:SetCore("SendNotification", { Title = "通知", Text = msg, Duration = dur or 2 })
+			local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+			local lang = normLang(gl) or "en"
+			local title = (type(Locale.t)=="function" and Locale.t(lang, "TOAST_TITLE"))
+			              or ((lang=="ja") and "通知" or "Notice")
+			game.StarterGui:SetCore("SendNotification", {
+				Title    = title,
+				Text     = msg,
+				Duration = dur or 2,
+			})
 		end)
 	end,
 
@@ -119,21 +159,32 @@ Router.setDeps({
 	},
 })
 
+--========================================
+-- S→C 配線（P0-5: ShopOpenはここだけ）
+--========================================
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
-		Locale.setGlobal(payload.lang)
+		Locale.setGlobal(payload.lang) -- Locale側で "jp"→"ja" 正規化される想定
 	end
 	Router.show("home", payload)
 end)
 
 ShopOpen.OnClientEvent:Connect(function(payload)
+	-- P0-5: ClientMain が唯一の <ShopOpen> 受口
 	local p = payload or {}
-	if p.lang == nil then p.lang = Locale.getGlobal and Locale.getGlobal() or "en" end
+	-- 言語が来ていない場合は共有言語、"jp" が来たら "ja" に正規化
+	if p.lang == nil then
+		p.lang = (Locale.getGlobal and Locale.getGlobal()) or "en"
+	end
+	local nl = normLang(p.lang)
+	if nl and nl ~= p.lang then p.lang = nl end
 	Router.show("shop", p)
+	print("[SHOP][ClientMain] <ShopOpen> routed once")
 end)
 
 RoundReady.OnClientEvent:Connect(function()
-	local lang = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+	local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+	local lang = normLang(gl) or "en"
 	Router.show("run")
 	if Router and type(Router.call)=="function" then
 		Router.call("run", "setLang", lang)
@@ -143,10 +194,12 @@ end)
 
 StatePush.OnClientEvent:Connect(function(st)
 	if st and st.lang and type(Locale.setGlobal)=="function" then
-		local l = tostring(st.lang)
-		if l == "ja" or l == "jp" or l == "en" then Locale.setGlobal(l) end
+		local l = normLang(st.lang)
+		if l then Locale.setGlobal(l) end
 	end
-	if Router and type(Router.call)=="function" then Router.call("run", "onState", st) end
+	if Router and type(Router.call)=="function" then
+		Router.call("run", "onState", st)
+	end
 end)
 
 HandPush.OnClientEvent:Connect(function(hand)

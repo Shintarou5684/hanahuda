@@ -1,9 +1,10 @@
 -- src/client/ui/components/controllers/ShopWires.lua
--- v0.9.SIMPLE ShopWires：Shop画面のイベント配線・Remotes・プレースホルダ適用
+-- v0.9.3-P0-5 ShopWires：Shop画面のイベント配線・UI更新のみ
 -- ポリシー:
 --  - リロールは「所持金>=費用」でのみ可否判定（残回数は見ない）
 --  - 二重送出防止：UIを即時無効化し、nonce を付与してサーバへ送信
 --  - UIの再有効化はサーバからの ShopOpen ペイロード受信時に判定して行う
+--  - （重要/P0-5）ShopOpen の受信は ClientMain に一本化。本モジュールはリスナーを持たない。
 
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -14,6 +15,18 @@ local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 local ShopI18n  = require(script.Parent.Parent:WaitForChild("i18n"):WaitForChild("ShopI18n"))
 
 local M = {}
+
+-- 内部: リロールボタン状態を payload から再評価して反映
+local function applyRerollButtonState(self, payload)
+  local p = payload or self._payload or {}
+  local money = tonumber(p.mon or p.totalMon or 0) or 0
+  local cost  = tonumber(p.rerollCost or 1) or 1
+  local can   = (p.canReroll ~= false) and (money >= cost)
+  if self._nodes and self._nodes.rerollBtn then
+    self._nodes.rerollBtn.Active = can
+    self._nodes.rerollBtn.AutoButtonColor = can
+  end
+end
 
 function M.applyInfoPlaceholder(self)
   if not (self and self._nodes and self._nodes.infoText) then return end
@@ -73,33 +86,21 @@ function M.wireButtons(self)
   end)
 end
 
+-- ⚠ 非推奨：ShopOpenのリスナー接続は行わない。ClientMainが単独で受ける。
+-- 互換用に「payloadを渡すとUIだけ更新する」関数を返す。
 function M.attachRemotes(self, remotes, router)
-  if not remotes or not remotes.ShopOpen then
-    warn("[SHOP][UI] attachRemotes: invalid remotes")
-    return
-  end
-  remotes.ShopOpen.OnClientEvent:Connect(function(payload)
-    print("[SHOP][UI] <ShopOpen> received payload, items=",
-      (payload and (payload.items and #payload.items or payload.stock and #payload.stock)) or 0)
-
-    -- 画面遷移（ルータ併用時）
-    if router and type(router.show) == "function" then
-      router:show("shop", payload)
+  warn("[SHOP][UI] attachRemotes is deprecated; ClientMain handles <ShopOpen>. UI will only refresh.")
+  -- 互換クロージャ：外部で新payloadを受け取ったときに UI を更新するための関数
+  return function(payload)
+    -- 言語の注入（payload優先→既存→"en"）
+    if payload and payload.lang and type(payload.lang) == "string" then
+      self._lang = ShopFormat.normLang(payload.lang)
     end
-
-    -- 画面表示＆描画
+    -- 画面表示＆描画（遷移はしない／Routerは使わない）
     self:show(payload)
-
-    -- ★ サーバ応答時にリロールボタンの押下可否を“所持金>=費用”で再評価
-    local money = tonumber(payload and (payload.mon or payload.totalMon) or 0) or 0
-    local cost  = tonumber(payload and payload.rerollCost or 1) or 1
-    local can   = (payload and payload.canReroll ~= false) and (money >= cost)
-    if self._nodes and self._nodes.rerollBtn then
-      self._nodes.rerollBtn.Active = can
-      self._nodes.rerollBtn.AutoButtonColor = can
-    end
-  end)
-  print("[SHOP][UI] attachRemotes: OK")
+    -- リロール可否の再評価
+    applyRerollButtonState(self, payload)
+  end
 end
 
 return M

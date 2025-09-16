@@ -1,10 +1,12 @@
 -- ServerScriptService/GameInit.server.lua
 -- エントリポイント：Remotes生成／各Service初期化／永続（SaveService）連携
--- v0.9.2:
---  - ★ STARTGAME に統合（セーブがあればCONTINUE / なければNEW）
+-- v0.9.2 → v0.9.2-langfix2:
+--  - STARTGAME に統合（セーブがあればCONTINUE / なければNEW）
 --  - SaveService.activeRun（季節開始/屋台入場）スナップからの復帰に対応
 --  - HomeOpen.hasSave を正しく反映
 --  - 言語保存 ReqSetLang を実装
+--  - ★ 言語コードを外部公開 "ja/en" に統一（"jp" は受け取ったら "ja" に正規化）
+--  - ★ 冬クリア→HOME/保存→HOME 時は“春スナップ”を残さない（hasSave=false を返す）
 
 --==================================================
 -- Services
@@ -131,13 +133,21 @@ DevGrantRole.OnServerEvent:Connect(function(plr)
 	takeByPredOrStub(s, function(c) return c.month==8 and c.kind=="bright" end, {month=8, kind="bright", name="芒に月"})
 	takeByPredOrStub(s, function(c) return c.month==3 and c.kind=="bright" end, {month=3, kind="bright", name="桜に幕"})
 
-	-- ★ 修正ポイント：未定義の takenCards/state ではなく、s.taken と s を渡す
+	-- ★ 修正：s.taken と s を渡す
 	local total, roles, detail = Scoring.evaluate(s.taken or {}, s)
-
 	s.lastScore = { total = total or 0, roles = roles, detail = detail }
 	StateHub.pushState(plr)
 end)
 
+--==================================================
+-- 言語ユーティリティ（ja/en 正規化）
+--==================================================
+local function normLang(v:string?): string?
+	v = tostring(v or ""):lower()
+	if v == "ja" or v == "jp" then return "ja" end
+	if v == "en" then return "en" end
+	return nil
+end
 
 --==================================================
 -- 初期化／バインド
@@ -177,7 +187,6 @@ end
 
 -- 共有ミニロガー（サーバ用）
 local function S(tag, msg, kv)
-	-- kv は {k=v, ...} or nil
 	local parts = {}
 	if type(kv)=="table" then
 		for k,v in pairs(kv) do
@@ -188,10 +197,8 @@ local function S(tag, msg, kv)
 end
 
 Players.PlayerAdded:Connect(function(plr)
-	-- 1) 入力：ロード直前
 	S("PlayerAdded", "begin load profile", {user=plr.Name, userId=plr.UserId})
 
-	-- 2) プロファイルをロード（保存>OS で lang 決定）
 	local prof = SaveService.load(plr)
 	S("load.done", "profile loaded", {
 		user=plr.Name,
@@ -202,23 +209,21 @@ Players.PlayerAdded:Connect(function(plr)
 		lang=prof and prof.lang
 	})
 
-	-- 3) State に bank/year/clears/lang をマージして確定
 	local s = StateHub.get(plr) or {}
-	local beforeLang = s.lang
+	local savedLang = normLang(SaveService.getLang(plr)) or "en"
+
 	s.bank        = prof.bank   or 0
 	s.year        = prof.year   or 0
 	s.totalClears = prof.clears or 0
-	s.lang        = (prof.lang == "jp" and "jp") or "en"
+	s.lang        = savedLang
 	StateHub.set(plr, s)
 
 	S("state.set", "state merged & set", {
 		user=plr.Name,
-		beforeLang=beforeLang,
 		stateLang=s.lang,
 		bank=s.bank, year=s.year, clears=s.totalClears
 	})
 
-	-- 4) HomeOpen（トップ表示）に保存言語＆hasSaveを必ず同梱
 	local hasSave = SaveService.getActiveRun(plr) ~= nil
 	S("HomeOpen→C", "send payload to client", {
 		user=plr.Name,
@@ -231,18 +236,18 @@ Players.PlayerAdded:Connect(function(plr)
 		bank    = s.bank,
 		year    = s.year,
 		clears  = s.totalClears or 0,
-		lang    = s.lang,
+		lang    = s.lang, -- "ja" or "en"
 	})
 end)
 
 Players.PlayerRemoving:Connect(function(plr)
 	S("PlayerRemoving", "flush profile", {user=plr.Name})
-	SaveService.flush(plr) -- 退室時の保存（失敗時は内部でwarn）
+	SaveService.flush(plr)
 end)
 
 game:BindToClose(function()
 	S("BindToClose", "flushAll begin")
-	pcall(function() SaveService.flushAll() end) -- サーバ終了時の保険
+	pcall(function() SaveService.flushAll() end)
 	S("BindToClose", "flushAll end")
 end)
 
@@ -250,12 +255,18 @@ end)
 -- 言語保存（C→S）
 --==================================================
 ReqSetLang.OnServerEvent:Connect(function(plr, lang)
-	if lang ~= "jp" and lang ~= "en" then return end
-	SaveService.setLang(plr, lang)
+	local n = normLang(lang)
+	if not n then
+		warn(("[LANG_FLOW][S] ReqSetLang invalid | from=%s"):format(tostring(lang)))
+		return
+	end
+	SaveService.setLang(plr, n)
+
 	local s = StateHub.get(plr) or {}
-	s.lang = lang
+	s.lang = n
 	StateHub.set(plr, s)
-	-- ここでは即時UI再構築までは行わず、次の HomeOpen/StatePush で反映
+
+	S("setLang", "saved & state updated", {user=plr.Name, lang=n})
 end)
 
 --==================================================
@@ -268,31 +279,25 @@ local function fireReadySoon(plr)
 end
 
 local function startNewRun(plr)
-	-- NEW は既存スナップを破棄してから開始
 	if SaveService.clearActiveRun then pcall(function() SaveService.clearActiveRun(plr) end) end
-	Round.resetRun(plr)   -- 内部で newRound(1) → RoundReady はここでは投げない
+	Round.resetRun(plr)
 	fireReadySoon(plr)
 end
 
 local function continueFromSnapshot(plr, snap:any)
-	-- snap = {version=1, season, atShop, bank, mon, deckSeed?, effects?, shopStock?}
 	local s = StateHub.get(plr) or {}
 	s.bank = tonumber(snap.bank or s.bank or 0) or 0
 	s.mon  = tonumber(snap.mon  or s.mon  or 0) or 0
-	-- 役/効果系メタ（存在すれば）
 	if snap.effects then
 		s.effects = snap.effects
 	end
 	StateHub.set(plr, s)
 
-	-- ★ 季節開始スナップに揃えて当該季節を開始（seedはMVPでは再現しない）
 	local season = tonumber(snap.season or 1) or 1
 	Round.newRound(plr, season)
 
-	-- 画面準備
 	fireReadySoon(plr)
 
-	-- ★ 屋台入場スナップだった場合は、Run表示後に屋台を即時オープン
 	if snap.atShop and ShopService and typeof(ShopService.open)=="function" then
 		task.delay(0.08, function()
 			local cur = StateHub.get(plr); if not cur then return end
@@ -338,16 +343,14 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	local s = StateHub.get(plr); if not s then return end
 	if s.phase ~= "shop" then return end
 
-	-- 前季スコアの残留を防ぐ
 	s.lastScore = nil
 	s.phase = "play"
 
 	local nextSeason = (s.season or 1) + 1
 	if nextSeason > 4 then
-		-- 冬→春はランリセット（Round.resetRun 内で春スナップが再生成される）
+		-- 冬→春はランリセット（ここは継続プレイのためスナップ維持でOK）
 		Round.resetRun(plr)
 	else
-		-- 同一ラン内の季節遷移（Round.newRound 内で季節開始スナップ作成）
 		Round.newRound(plr, nextSeason)
 		StateHub.set(plr, s)
 	end
@@ -359,6 +362,15 @@ end)
 -- 達成後：冬専用 3択（StageResult）→ DecideNext
 --==================================================
 -- DecideNext の引数：op = "home" | "next" | "save"
+
+-- ★補助：HOMEに戻すためのリセット（“春スナップ”は必ず消す）
+local function resetRunForHome(plr)
+	Round.resetRun(plr) -- これが春スナップを作る実装のため
+	if typeof(SaveService.clearActiveRun) == "function" then
+		pcall(function() SaveService.clearActiveRun(plr) end)
+	end
+end
+
 Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 	local s = StateHub.get(plr); if not s then return end
 	if (s.season or 1) ~= 4 then return end
@@ -375,20 +387,19 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 	end
 
 	if op == "home" then
-		-- トップへ戻す（新ランに初期化）※春スナップができるため Home にも hasSave=true が出る
-		Round.resetRun(plr)
-		local hasSave = SaveService.getActiveRun(plr) ~= nil
-		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = hasSave,
+		-- トップへ戻す：春スナップは消去 → hasSave=false（START表示）
+		resetRunForHome(plr)
+		HomeOpen:FireClient(plr, {
+			hasSave = false,
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
-			lang    = SaveService.getLang(plr),
+			lang    = normLang(SaveService.getLang(plr)) or "en",
 		})
 		return
 
 	elseif op == "next" then
-		-- 25年進行＋屋台
+		-- 25年進行＋屋台（継続プレイ）
 		s.year = (s.year or 0) + 25
 		if typeof(SaveService.bumpYear) == "function" then
 			SaveService.bumpYear(plr, 25)
@@ -404,20 +415,19 @@ Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
 		return
 
 	elseif op == "save" then
-		-- 永続保存→トップへ（プロフィールflushのみ。activeRunはそのまま）
+		-- 永続保存→トップへ：プロフィール保存のみ／春スナップは消す→hasSave=false
 		local ok = true
 		if typeof(SaveService.flush) == "function" then
 			ok = SaveService.flush(plr) == true
 		end
-		local hasSave = SaveService.getActiveRun(plr) ~= nil
-		Round.resetRun(plr) -- 新ランを作る（春スナップ作成）
-		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = hasSave or true,
+		resetRunForHome(plr)
+		HomeOpen:FireClient(plr, {
+			hasSave = false, -- ★強制的に START 表示にする
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
 			saved   = ok,
-			lang    = SaveService.getLang(plr),
+			lang    = normLang(SaveService.getLang(plr)) or "en",
 		})
 		return
 	end

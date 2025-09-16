@@ -13,8 +13,8 @@
 --   SaveService.getClears(player)                 -- 通算クリア回数を取得
 --   SaveService.setClears(player, n)              -- 通算クリア回数を設定
 --   SaveService.bumpClears(player, 1)             -- 通算クリア回数を加算
---   SaveService.getLang(player)                   -- 保存言語("jp"|"en")を取得（保存>OS）
---   SaveService.setLang(player, "jp"|"en")        -- 保存言語を設定（dirty化）
+--   SaveService.getLang(player)                   -- 保存言語("ja"|"en")を取得（保存>OS）
+--   SaveService.setLang(player, "ja"|"en")        -- 保存言語を設定（dirty化）
 --   SaveService.mergeIntoState(player, state)     -- bank/year/asc/clears/lang を state に反映
 --   -- ★ アクティブ・ラン（続き用スナップ）
 --   SaveService.getActiveRun(player)              -- 現在のスナップを取得（nil可）
@@ -53,14 +53,21 @@ local function keyForUserId(userId:number): string
 	return "u:" .. tostring(userId)
 end
 
---=== デフォルト（version 4：lang 追加 / activeRun 追加） =========
+--=== 言語正規化（外部I/Fは "ja" / "en" に統一） ==================
+local function normLang(s:any): string
+	s = tostring(s or ""):lower()
+	if s == "jp" or s == "ja" then return "ja" end
+	return "en"
+end
+
+--=== デフォルト（version 4：lang / activeRun を含む） =============
 local DEFAULT_PROFILE = {
 	version = 4,
 	bank = 0,       -- 両（永続通貨）
 	year = 1000,    -- 初期年（アセンション 0 なら 1000）
 	asc  = 0,       -- アセンション（0以上の整数）
 	clears = 0,     -- 通算クリア回数
-	lang = "en",    -- 保存言語（"jp"|"en"）
+	lang = "en",    -- 保存言語（"ja"|"en"）
 	activeRun = nil,-- ★ 続き用スナップ（{version,season,atShop,bank,mon,deckSeed,shopStock?,effects?}）
 }
 
@@ -75,12 +82,12 @@ local Save = {
 	_dirty    = {} :: {[Player]: boolean},
 }
 
---=== 補助：OSロケール→"jp"/"en" 推定 =============================
+--=== 補助：OSロケール→"ja"/"en" 推定 =============================
 local function detectLangFromLocaleId(plr: Player?): string
 	local ok, lid = pcall(function()
 		return (plr and plr.LocaleId or "en-us"):lower()
 	end)
-	if ok and string.sub(lid,1,2) == "ja" then return "jp" end
+	if ok and string.sub(lid,1,2) == "ja" then return "ja" end
 	return "en"
 end
 
@@ -96,9 +103,8 @@ local function normalizeProfile(p:any): Profile
 	out.asc    = math.max(0, math.floor(tonumber(p and p.asc) or 0))
 	out.clears = math.max(0, math.floor(tonumber(p and p.clears) or 0))
 
-	local l = tostring(p and p.lang or ""):lower()
-	if l ~= "jp" and l ~= "en" then l = "en" end
-	out.lang = l
+	local rawL = tostring(p and p.lang or ""):lower()
+	out.lang = normLang(rawL) -- "jp" 既存値は "ja" に正規化
 
 	-- ★ activeRun はテーブルなら素通し、それ以外は nil
 	out.activeRun = (type(p and p.activeRun) == "table") and p.activeRun or nil
@@ -140,7 +146,8 @@ function Save.load(plr: Player): Profile
 	-- - version < 4 なら 4 に引き上げ
 	-- - year <= 0 の場合は、asc に応じた基準年に補正
 	-- - clears 欠損は 0 補完
-	-- - lang 欠損は OS ロケールから初期化
+	-- - lang 欠損は OS ロケールから初期化（"ja"/"en"）
+	-- - "jp" が残っていたら "ja" に正規化
 	-- - activeRun は既存値を尊重（nil可）
 	local migrated = false
 	if prof.version < 4 then
@@ -155,8 +162,14 @@ function Save.load(plr: Player): Profile
 		prof.clears = 0
 		migrated = true
 	end
-	if prof.lang == nil or (prof.lang ~= "jp" and prof.lang ~= "en") then
-		prof.lang = detectLangFromLocaleId(plr) -- ★保存なし→OSで初期化
+	if not prof.lang or (prof.lang ~= "ja" and prof.lang ~= "en") then
+		prof.lang = detectLangFromLocaleId(plr)
+		migrated = true
+	end
+	-- 旧データが "jp" だった場合に備えてもう一度正規化（上の分岐を通らない可能性に備える）
+	local nlang = normLang(prof.lang)
+	if nlang ~= prof.lang then
+		prof.lang = nlang
 		migrated = true
 	end
 
@@ -232,14 +245,14 @@ end
 --=== lang =========================================================
 function Save.getLang(plr: Player): string
 	local p = Save._profiles[plr]
-	if p and (p.lang == "jp" or p.lang == "en") then
+	if p and (p.lang == "ja" or p.lang == "en") then
 		return p.lang                      -- ★保存があれば保存優先
 	end
 	return detectLangFromLocaleId(plr)     -- 保存が無い/不正なら OS 推定
 end
 
 function Save.setLang(plr: Player, lang:string)
-	if lang ~= "jp" and lang ~= "en" then return end
+	lang = normLang(lang) -- "jp" 受信時も "ja" へ正規化
 	local p = Save._profiles[plr]; if not p then return end
 	if p.lang ~= lang then
 		p.lang = lang
@@ -274,7 +287,7 @@ function Save.mergeIntoState(plr: Player, state:any)
 	state.asc         = p.asc
 	state.clears      = p.clears
 	state.totalClears = p.clears
-	state.lang        = (p.lang == "jp" and "jp") or "en" -- ★有効化
+	state.lang        = (p.lang == "ja") and "ja" or "en"
 	return state
 end
 
@@ -359,7 +372,7 @@ function Save.flush(plr: Player)
 				base.year      = p.year    or 0
 				base.asc       = p.asc     or 0
 				base.clears    = p.clears  or 0
-				base.lang      = (p.lang == "jp" and "jp") or "en"
+				base.lang      = (p.lang == "ja") and "ja" or "en"
 				base.activeRun = p.activeRun -- ★ 続きスナップも保存（nil可）
 				return base
 			end)

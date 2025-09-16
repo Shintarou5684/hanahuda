@@ -1,10 +1,10 @@
 -- src/client/ui/screens/ShopScreen.lua
--- v0.9.SIMPLE ShopScreen（残回数系の型定義を撤去）
+-- v0.9.6-P0-9 ShopScreen（言語コードを "ja"/"en" に正規化・"jp" は警告して "ja" へ）
 --  - [A] ShopFormat
 --  - [B] ShopCells
 --  - [C] ShopUI
 --  - [D] ShopRenderer
---  - [E] ShopWires（配線・Remotes委譲）
+--  - [E] ShopWires（ボタン配線／ShopOpenリスナーは持たない＝ClientMainに一本化）
 
 local Shop = {}
 Shop.__index = Shop
@@ -31,10 +31,23 @@ export type Payload = {
 	seasonSum: number?,    -- クリア合計
 	target: number?,       -- 目標
 	rewardMon: number?,    -- 報酬
-	lang: string?,         -- "ja"/"en"
+	lang: string?,         -- "ja"/"en"（※"jp" は受けたら "ja" に正規化）
 	notice: string?,       -- UI通知文
 	currentDeck: any?,     -- {v=2, codes, histogram, entries[{code,kind}], count}
 }
+
+--==================================================
+-- helpers
+--==================================================
+
+local function normToJa(lang: string?)
+	local v = ShopFormat.normLang(lang)
+	if v == "jp" then
+		warn("[Locale] ShopScreen: received legacy 'jp'; normalizing to 'ja'")
+		return "ja"
+	end
+	return v
+end
 
 --==================================================
 -- class
@@ -67,16 +80,31 @@ end
 --==================================================
 
 function Shop:setData(payload: Payload)
+	-- 言語正規化（"jp" → "ja"）
+	if payload and payload.lang then
+		local nl = normToJa(payload.lang)
+		if nl and nl ~= payload.lang then payload.lang = nl end
+		self._lang = nl or self._lang
+	end
 	print("[SHOP][UI] setData items=", (payload and (payload.items and #payload.items or payload.stock and #payload.stock)) or 0)
 	self._payload = payload
 	self:_render()
 end
 
 function Shop:show(payload: Payload?)
-	if payload then self._payload = payload end
+	if payload then
+		-- 言語正規化（"jp" → "ja"）
+		if payload.lang then
+			local nl = normToJa(payload.lang)
+			if nl and nl ~= payload.lang then payload.lang = nl end
+			self._lang = nl or self._lang
+		end
+		self._payload = payload
+	end
 	self.gui.Enabled = true
 	print("[SHOP][UI] show (enabled=true)")
 	self:_render()
+	self:_applyRerollButtonState() -- ★ P0-5: 受信後にボタン可否を再評価
 end
 
 function Shop:hide()
@@ -87,20 +115,31 @@ function Shop:hide()
 end
 
 function Shop:update(payload: Payload?)
-	if payload then self._payload = payload end
+	if payload then
+		-- 言語正規化（"jp" → "ja"）
+		if payload.lang then
+			local nl = normToJa(payload.lang)
+			if nl and nl ~= payload.lang then payload.lang = nl end
+			self._lang = nl or self._lang
+		end
+		self._payload = payload
+	end
 	print("[SHOP][UI] update")
 	self:_render()
+	self:_applyRerollButtonState() -- ★ P0-5: 差分更新時も評価
 end
 
 function Shop:setLang(lang: string?)
-	self._lang = ShopFormat.normLang(lang)
+	self._lang = normToJa(lang)
 	print("[SHOP][UI] setLang ->", self._lang)
 	ShopWires.applyInfoPlaceholder(self)
-	self:_render()
+	-- ★ P0-8対応: setLang ではフルレンダしない（旧payloadでの再有効化を防ぐ）
 end
 
--- Remotes配線（委譲）
+-- Remotes配線（委譲／非推奨フックを返すだけ）
 function Shop:attachRemotes(remotes: any, router: any?)
+	-- ShopWires.attachRemotes は警告を出しつつ「UIだけ更新する関数」を返す
+	-- （ClientMain が唯一 <ShopOpen> を受け、Router.show("shop", payload) まで行う想定）
 	return ShopWires.attachRemotes(self, remotes, router)
 end
 
@@ -110,6 +149,21 @@ end
 
 function Shop:_render()
 	return ShopRenderer.render(self)
+end
+
+--==================================================
+-- internal utils
+--==================================================
+
+function Shop:_applyRerollButtonState()
+	local p = self._payload or {}
+	local money = tonumber(p.mon or p.totalMon or 0) or 0
+	local cost  = tonumber(p.rerollCost or 1) or 1
+	local can   = (p.canReroll ~= false) and (money >= cost)
+	if self._nodes and self._nodes.rerollBtn then
+		self._nodes.rerollBtn.Active = can
+		self._nodes.rerollBtn.AutoButtonColor = can
+	end
 end
 
 return Shop

@@ -1,20 +1,16 @@
 -- ReplicatedStorage/Config/Locale.lua
--- Home/Run 共通の簡易ローカライズ（レガシー互換あり）
---  1) Locale.en / Locale.jp を公開
+-- Home/Run 共通の簡易ローカライズ
+-- P0-9: 外部I/Fの言語コードを ja/en に統一。jp は警告を出して ja に正規化。
+--  1) Locale.en / Locale.ja を公開（Locale.jp は非推奨 alias）
 --  2) Locale.t(lang, key) / Locale.get(lang) / Locale.pick(forced)
 --  3) Locale.setGlobal(lang) / Locale.getGlobal() / Locale.changed (Signal)
---  4) ログ: Locale._verbose = true で詳細
+--  4) jp入力時は warn を一度だけ出す（内部では常に ja に変換）
 
 local Locale = {}
 
 Locale._verbose = false
 
-local function _norm(lang:string?)
-	lang = tostring(lang or ""):lower()
-	if lang == "jp" or lang == "ja" then return "jp" end
-	return (lang == "en") and "en" or nil
-end
-
+-- ===== ログユーティリティ =====
 local function L(tag, msg, kv)
 	if not Locale._verbose then return end
 	local parts = {}
@@ -24,11 +20,31 @@ local function L(tag, msg, kv)
 	print(("[LANG] %-14s | %s%s"):format(tag, msg or "", (#parts>0) and (" | "..table.concat(parts," ")) or ""))
 end
 
+-- ===== jp→ja 統一のための正規化 =====
+local _warnedJP = false
+local function _warnOnceJP(where)
+	if _warnedJP then return end
+	_warnedJP = true
+	warn(("[Locale] '%s': language code 'jp' is DEPRECATED; using 'ja' instead."):format(where or "norm"))
+end
+
+local function _norm(lang:string?)
+	local s = tostring(lang or ""):lower()
+	if s == "jp" then
+		_warnOnceJP("norm")
+		return "ja"
+	end
+	if s == "ja" then return "ja" end
+	if s == "en" then return "en" end
+	return nil
+end
+
+-- ===== OS言語検出 =====
 local function detectLang()
 	local ok, players = pcall(game.GetService, game, "Players")
 	if ok and players and players.LocalPlayer and players.LocalPlayer.LocaleId then
 		local lid = string.lower(players.LocalPlayer.LocaleId)
-		local res = (string.sub(lid, 1, 2) == "ja") and "jp" or "en"
+		local res = (string.sub(lid, 1, 2) == "ja") and "ja" or "en"
 		L("detectLang", "OS locale detected", {LocaleId=lid, resolved=res})
 		return res
 	end
@@ -57,6 +73,7 @@ local en = {
 	BTN_SETTINGS = "Settings (WIP)",
 	BTN_PATCH    = "PATCH NOTES",
 	BTN_CONT     = "CONTINUE (WIP)",
+	BTN_SYNCING  = "Syncing…",
 
 	NOTIFY_SHRINE_TITLE   = "Shrine",
 	NOTIFY_SHRINE_TEXT    = "Work in progress: Permanent upgrades",
@@ -79,19 +96,24 @@ local en = {
 	RUN_BTN_YAKU         = "Yaku",
 	RUN_HELP_LINE        = "Click hand → field to take. Confirm to finish.",
 	RUN_INFO_PLACEHOLDER = "Year:----  Season:--  Target:--  Total:--  Hands:--  Rerolls:--  Mult:--  Bank:--",
-	-- ↓ 3 lines: Score / Mon×Pts / Roles
 	RUN_SCOREBOX_INIT    = "Score: 0\n0Mon × 0Pts\nRoles: --",
 
-	-- ▼ NEW: Result Final modal
+	-- Result
 	RESULT_FINAL_TITLE = "Congrats!",
 	RESULT_FINAL_DESC  = "Run finished. Returning to menu.",
 	RESULT_FINAL_BTN   = "Back to Menu",
+
+	-- Toast
+	TOAST_TITLE = "Notice",
+
+	-- 空役（P0-8）
+	ROLES_NONE = "No roles",
 }
 
-local jp = {
+local ja = {
 	-- Home
 	MAIN_TITLE   = "極楽蝶",
-		SUBTITLE     = "Hanafuda Rogue",
+	SUBTITLE     = "Hanafuda Rogue",
 	STATUS_FMT   = "年:%s  両:%d  進捗: 通算 %d/3 クリア",
 	BETA_BADGE   = "BETA TEST",
 
@@ -101,6 +123,7 @@ local jp = {
 	BTN_SETTINGS = "設定（開発中）",
 	BTN_PATCH    = "パッチノート",
 	BTN_CONT     = "CONTINUE（開発中）",
+	BTN_SYNCING  = "同期中…",
 
 	NOTIFY_SHRINE_TITLE   = "神社",
 	NOTIFY_SHRINE_TEXT    = "開発中：恒久強化ショップ",
@@ -123,18 +146,43 @@ local jp = {
 	RUN_BTN_YAKU         = "役一覧",
 	RUN_HELP_LINE        = "手札→場札をクリックで取得。Confirmで確定。",
 	RUN_INFO_PLACEHOLDER = "年:----  季節:--  目標:--  合計:--  残ハンド:--  残リロール:--  倍率:--  Bank:--",
-	-- ↓ 3行表示：得点 / 文×点 / 役
 	RUN_SCOREBOX_INIT    = "得点：0\n文0×0点\n役：--",
 
-	-- ▼ NEW: Result Final modal
+	-- Result
 	RESULT_FINAL_TITLE = "クリアおめでとう！",
 	RESULT_FINAL_DESC  = "このランは終了です。メニューに戻ります。",
 	RESULT_FINAL_BTN   = "メニューに戻る",
+
+	-- Toast
+	TOAST_TITLE = "通知",
+
+	-- 空役（P0-8）
+	ROLES_NONE = "役なし",
 }
 
-Locale._data = { en = en, jp = jp }
+Locale._data = { en = en, ja = ja }
 Locale.en = en
-Locale.jp = jp
+Locale.ja = ja
+
+-- ▼ 非推奨 alias: Locale.jp
+do
+	local proxy = {}
+	setmetatable(proxy, {
+		__index = function(_, k)
+			_warnOnceJP("Locale.jp.__index")
+			return ja[k]
+		end,
+		__newindex = function(_, k, v)
+			_warnOnceJP("Locale.jp.__newindex")
+			ja[k] = v
+		end,
+		__pairs = function()
+			_warnOnceJP("Locale.jp.__pairs")
+			return next, ja, nil
+		end,
+	})
+	Locale.jp = proxy
+end
 
 --=== 共有言語と変更通知 ================================================
 local _current = nil
@@ -143,7 +191,11 @@ Locale.changed = _changed.Event  -- :Fire(newLang)
 
 function Locale.setGlobal(lang)
 	local before = _current
-	_current = _norm(lang) or detectLang()
+	local normalized = _norm(lang)
+	if not normalized then
+		normalized = detectLang()
+	end
+	_current = normalized
 	L("setGlobal", "set shared language", {in_lang=lang, from=before, to=_current})
 	if _current ~= before then
 		_changed:Fire(_current)
@@ -170,6 +222,11 @@ function Locale.t(lang, key)
 	end
 	local d = Locale.get(use)
 	return (d[key] or Locale._data.en[key] or key)
+end
+
+-- 明示的に正規化を呼びたい場合の補助（ShopFormat 等で使用可）
+function Locale.normalize(lang)
+	return _norm(lang) or "en"
 end
 
 return Locale

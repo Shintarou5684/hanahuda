@@ -1,8 +1,7 @@
 -- StarterPlayerScripts/UI/screens/PatchNotesModal.lua
--- v0.9.4 Patch Notes: 前面フルスクリーンモーダル（スクロール）
--- ・Config/PatchNotes.lua があればそれを優先（RichText対応）
--- ・Locale辞書の PATCH_TITLE / PATCH_BODY をフォールバックで使用
--- ・Home からは new() → :show() / :hide() / :setLanguage() を呼ぶだけ
+-- v0.9.7  Patch Notes: 前面フルスクリーンモーダル（スクロール）
+-- * 外部I/F言語コードを 'ja'/'en' に統一（'jp' 受信時は 'ja' に正規化）
+-- * Locale.get() を優先利用（辞書取得の堅牢化）
 
 local Patch = {}
 Patch.__index = Patch
@@ -26,16 +25,30 @@ end
 local function makeL(dict) return function(k) return dict[k] or k end end
 local function Dget(dict, key, fallback) return (dict and dict[key]) or fallback end
 
+-- 言語コード正規化: 'jp' は 'ja' に、その他は 'en' フォールバック
+local function normLang(lang)
+	local s = tostring(lang or ""):lower()
+	if s == "jp" then
+		warn("[Locale] PatchNotesModal: received 'jp'; normalizing to 'ja'")
+		return "ja"
+	end
+	if s == "ja" or s == "en" then return s end
+	return "en"
+end
+
 --========================
 -- Ctor
 --========================
--- opts = { parentGui:ScreenGui, lang:"jp"|"en", Locale:table }
+-- opts = { parentGui:ScreenGui, lang:"ja"|"en" (legacy "jp" accepted), Locale:table }
 function Patch.new(opts)
 	local self = setmetatable({}, Patch)
 
 	self.Locale = (opts and opts.Locale) or require(RS:WaitForChild("Config"):WaitForChild("Locale"))
-	self.lang   = (opts and opts.lang == "jp") and "jp" or "en"
-	self.Dict   = self.Locale[self.lang] or self.Locale.en
+	self.lang   = normLang(opts and opts.lang)
+	-- Locale.get を優先（無ければテーブル直参照 → en フォールバック）
+	local dict = (type(self.Locale.get)=="function" and self.Locale.get(self.lang))
+		or self.Locale[self.lang] or self.Locale.en
+	self.Dict   = dict
 	self._L     = makeL(self.Dict)
 	self.parent = opts and opts.parentGui
 
@@ -61,8 +74,6 @@ function Patch.new(opts)
 	blocker.AutoButtonColor        = false
 	blocker.ZIndex                 = 50
 	blocker.Parent                 = root
-	-- 背景クリックで閉じたい時はコメントアウト解除
-	-- blocker.Activated:Connect(function() self:hide() end)
 
 	-- パネル
 	local panel = Instance.new("Frame")
@@ -165,14 +176,13 @@ end
 function Patch:_getStrings()
 	-- 既定値（Locale辞書）
 	local title = Dget(self.Dict, "PATCH_TITLE", "Patch Notes")
-			local body  = Dget(self.Dict, "PATCH_BODY", [[<b>Coming soon...</b>
+	local body  = Dget(self.Dict, "PATCH_BODY", [[<b>Coming soon...</b>
 We’ll post detailed changes here.]])
 
-
 	-- Config/PatchNotes.lua があれば優先
-	-- return { title = {jp=..., en=...}, body={jp=..., en=...} } を想定
+	-- return { title = {ja=..., en=...}, body={ja=..., en=...} } もしくは title_ja/title_en を想定
 	if self.PatchNotes then
-		local lang = (self.lang == "jp") and "jp" or "en"
+		local lang = self.lang -- 'ja' or 'en'
 		local t = self.PatchNotes.title
 		if type(t) == "table" and type(t[lang]) == "string" then
 			title = t[lang]
@@ -201,10 +211,13 @@ end
 -- API
 --========================
 function Patch:setLanguage(lang)
-	if lang ~= "jp" and lang ~= "en" then return end
-	if self.lang == lang then return end
-	self.lang = lang
-	self.Dict = self.Locale[self.lang] or self.Locale.en
+	local nl = normLang(lang)
+	if self.lang == nl then return end
+	self.lang = nl
+	-- Locale.get を優先
+	local dict = (type(self.Locale.get)=="function" and self.Locale.get(self.lang))
+		or self.Locale[self.lang] or self.Locale.en
+	self.Dict = dict
 	self._L   = makeL(self.Dict)
 	self:_applyText()
 end

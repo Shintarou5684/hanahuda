@@ -1,6 +1,8 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
+-- v0.9.6-P0-9 言語コード外部I/Fを "ja"/"en" に統一（受信 "jp" は警告して "ja" へ正規化）
 -- v0.9.5 ResultModal final文言をLocale化（英語フォールバックあり）＋Nav統一
 --        MisleadingAndOr を if-then-else に置換（静的解析対応）
+--        P0-8: no-op削除／_G依存排除／役なしは Locale.t("ROLES_NONE")
 
 local Run = {}
 Run.__index = Run
@@ -31,6 +33,23 @@ local screensDir = script.Parent
 local UIBuilder  = require(screensDir:WaitForChild("RunScreenUI"))
 local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 
+--==================================================
+-- Lang helpers (P0-9)
+--==================================================
+
+local function normLangJa(lang: string?)
+	local v = tostring(lang or ""):lower()
+	if v == "jp" then
+		warn("[Locale] RunScreen: received legacy 'jp'; normalizing to 'ja'")
+		return "ja"
+	elseif v == "ja" then
+		return "ja"
+	elseif v == "en" then
+		return "en"
+	end
+	return nil
+end
+
 -- "目標:123" / "Target:123" / "Goal:123" の数値だけ抜く
 local function extractGoalFromInfoText(text)
 	if type(text) ~= "string" then return nil end
@@ -40,8 +59,10 @@ local function extractGoalFromInfoText(text)
 	return n
 end
 
-local function mapLangForPanel(lang) -- Runは "jp"/"en"、パネルは "ja"/"en"
-	return (lang == "jp") and "ja" or "en"
+-- Runは "ja"/"en" を使用。役パネルも "ja"/"en" 前提。
+local function mapLangForPanel(lang)
+	local n = normLangJa(lang)
+	return (n == "ja") and "ja" or "en"
 end
 
 -- JPの情報ラインをENに置換する簡易マッパ
@@ -62,12 +83,15 @@ local function jpLineToEn(lineJP)
 	return s
 end
 
--- Locale.getGlobal() を安全取得（"jp"/"en" 以外は nil を返す）
+-- Locale.getGlobal() を安全取得（"ja"/"en" 以外は nil を返す／"jp" は "ja" に正規化）
 local function safeGetGlobalLang()
 	if typeof(Locale.getGlobal) == "function" then
 		local ok, v = pcall(Locale.getGlobal)
-		if ok and (v == "jp" or v == "en") then
-			return v
+		if ok then
+			local n = normLangJa(v)
+			if n == "ja" or n == "en" then
+				return n
+			end
 		end
 	end
 	return nil
@@ -75,13 +99,18 @@ end
 
 -- フォールバック付きの言語解決（self._lang→Locale.getGlobal→"en"）
 local function resolveLangOrDefault(current)
-	if current == "jp" or current == "en" then
-		return current
+	local n = normLangJa(current)
+	if n == "ja" or n == "en" then
+		return n
 	end
 	local g = safeGetGlobalLang()
 	if g then return g end
 	return "en"
 end
+
+--==================================================
+-- Class
+--==================================================
 
 function Run.new(deps)
 	local self = setmetatable({}, Run)
@@ -90,11 +119,11 @@ function Run.new(deps)
 	self._resultShown = false
 	self._langConn = nil
 
-	-- 言語初期値（安全取得 → Locale.pick() → "en"）
+	-- 言語初期値（安全取得 → Locale.pick() → "en"）※"jp" は "ja" に正規化
 	local initialLang = safeGetGlobalLang()
 	if not initialLang then
 		if type(Locale.pick) == "function" then
-			initialLang = Locale.pick()
+			initialLang = normLangJa(Locale.pick()) or "en"
 		else
 			initialLang = "en"
 		end
@@ -117,7 +146,7 @@ function Run.new(deps)
 	self.buttons  = ui.buttons
 	self._ui_setLang = ui.setLang
 	self._fmtScore   = ui.formatScore or function(score, mons, pts, rolesText)
-		if self._lang == "jp" then
+		if self._lang == "ja" then
 			return string.format("得点：%d\n文%d×%d点\n%s", score or 0, mons or 0, pts or 0, rolesText or "役：--")
 		else
 			return string.format("Score: %d\n%dMon × %dPts\n%s", score or 0, mons or 0, pts or 0, rolesText or "Roles: --")
@@ -163,10 +192,18 @@ function Run.new(deps)
 	-- 役倍率パネル
 	self._yakuPanel = YakuPanel.mount(self.gui)
 
-	-- Studio専用 DevTools
-	if RunService:IsStudio() and (self.deps.DevGrantRyo or self.deps.DevGrantRole) then
-		DevTools.create(self.frame, self.deps, { grantRyoAmount = 1000, offsetX = 10, offsetY = 10, width = 160, height = 32 })
-	end
+	--- Studio専用 DevTools
+if RunService:IsStudio() then
+    local r = self.deps and self.deps.remotes
+    local grantRyo  = (self.deps and self.deps.DevGrantRyo)  or (r and r.DevGrantRyo)
+    local grantRole = (self.deps and self.deps.DevGrantRole) or (r and r.DevGrantRole)
+
+    if grantRyo or grantRole then
+        DevTools.create(self.frame, { DevGrantRyo = grantRyo, DevGrantRole = grantRole }, {
+            grantRyoAmount = 1000, offsetX = 10, offsetY = 10, width = 160, height = 32
+        })
+    end
+end
 
 	-- 内部状態
 	self._selectedHandIdx = nil
@@ -206,7 +243,7 @@ function Run.new(deps)
 		TakenRenderer.renderTaken(self.takenBox, cards or {})
 	end
 
-	-- ★ 言語対応したスコア更新
+	-- ★ 言語対応したスコア更新（P0-8: _G依存排除／空役はLocaleで安定化）
 	local function onScore(total, roles, detail)
 		if typeof(roles) ~= "table" then roles = {} end
 		if typeof(detail) ~= "table" then detail = { mon = 0, pts = 0 } end
@@ -214,8 +251,7 @@ function Run.new(deps)
 		local pts = tonumber(detail.pts) or 0
 		local tot = tonumber(total) or 0
 		if self._scoreBox then
-			local rolesBody = Format.rolesToLines(roles)
-			if not rolesBody or rolesBody == "" then rolesBody = (_G and _G.EMPTY_ROLES_TEXT) or "--" end
+			local rolesBody  = Format.rolesToLines(roles, self._lang) -- 空なら Locale.t(lang,"ROLES_NONE")
 			local rolesLabel = (self._lang == "en") and "Roles: " or "役："
 			self._scoreBox.Text = self._fmtScore(tot, mon, pts, rolesLabel .. rolesBody)
 		end
@@ -244,7 +280,6 @@ function Run.new(deps)
 
 		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
 		self._resultShown = false
-		if self.notice and self.notice.Text == "" then self.notice.Text = "" end
 	end
 
 	local function onStageResult(a, b, _c, _d, _e)
@@ -338,29 +373,33 @@ function Run.new(deps)
 	return self
 end
 
--- 言語切替
+-- 言語切替（"ja"/"en" のみ受理。受信 "jp" は "ja" に正規化）
 function Run:setLang(lang)
-	if lang ~= "jp" and lang ~= "en" then return end
-	if self._lang == lang then
-		print("[LANG_FLOW] Run.setLang ignored(same) | lang=", lang)
+	local n = normLangJa(lang)
+	if n ~= "ja" and n ~= "en" then return end
+	if self._lang == n then
+		print("[LANG_FLOW] Run.setLang ignored(same) | lang=", n)
 		return
 	end
-	print("[LANG_FLOW] Run.setLang apply | from=", self._lang, "to=", lang)
-	self._lang = lang
+	print("[LANG_FLOW] Run.setLang apply | from=", self._lang, "to=", n)
+	self._lang = n
 	if type(self._ui_setLang) == "function" then
-		self._ui_setLang(lang)
+		self._ui_setLang(n)
 	end
 	-- 役パネルは ja/en
 	if self._yakuPanel then
-		self._yakuPanel:update({ lang = mapLangForPanel(lang) })
+		self._yakuPanel:update({ lang = mapLangForPanel(n) })
 	end
 end
 
 function Run:show(payload)
-	-- payload?.lang があれば最優先で UI に適用
-	if payload and (payload.lang == "jp" or payload.lang == "en") then
-		print("[LANG_FLOW] Run.show payload.lang=", payload.lang, "(cur=", self._lang,")")
-		self:setLang(payload.lang)
+	-- payload?.lang があれば最優先で UI に適用（"jp" は "ja" に正規化）
+	if payload and payload.lang then
+		local n = normLangJa(payload.lang)
+		if n and n ~= self._lang then
+			print("[LANG_FLOW] Run.show payload.lang=", n, "(cur=", self._lang,")")
+			self:setLang(n)
+		end
 	else
 		local g = self._lang
 		local gg = safeGetGlobalLang()

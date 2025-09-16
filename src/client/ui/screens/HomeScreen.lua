@@ -1,11 +1,12 @@
 -- StarterPlayerScripts/UI/screens/HomeScreen.lua
 -- START GAME / 神社 / 持ち物 / 設定 / パッチノート（別モジュール化）
--- 言語切替（EN/JP）対応：保存(lang)があればそれを優先、無ければOS基準
--- v0.9.4:
---  - パッチノートのUI/取得ロジックを PatchNotesModal.lua へ分離
---  - Home はボタン→モーダル呼び出しのみ
---  - ★ 右端の安全余白を追加（LangBox/BETA の位置を内側へ）
---  - ★ Start ボタン文言は BTN_START に統一（BTN_NEW フォールバックを撤廃）
+-- 言語切替（EN/JA）対応：保存(lang)があればそれを優先、無ければOS基準
+-- v0.9.5-P0-6/10:
+--  - HomeOpen 到着まで START を無効化（ラベル「同期中…/Syncing…」）
+--  - HomeOpen 受信後に hasSave を反映して START を有効化
+--  - 言語コードは外部公開を "ja" / "en" に統一（"jp" を使わない）
+--  - START文言は言語切替時に「同期中…」へ戻さない（_refreshStartButtonで一元管理）
+--  - 右端の安全余白、PatchNotes分離 など従来機能は維持
 
 local Home = {}
 Home.__index = Home
@@ -25,15 +26,15 @@ local RIGHT_SAFE_PAD = 32 -- px 例: 32/40/48 に調整可
 local function detectOSLang()
 	local lp  = Players.LocalPlayer
 	local lid = (lp and lp.LocaleId) and string.lower(lp.LocaleId) or "en-us"
-	return (string.sub(lid, 1, 2) == "ja") and "jp" or "en"
+	return (string.sub(lid, 1, 2) == "ja") and "ja" or "en"
 end
 
 local function pickLang(forced)
 	-- 優先: 明示指定 → Locale.pick() → OS
-	if forced == "jp" or forced == "en" then return forced end
+	if forced == "ja" or forced == "en" then return forced end
 	if typeof(Locale.pick) == "function" then
 		local ok, v = pcall(Locale.pick)
-		if ok and (v == "jp" or v == "en") then return v end
+		if ok and (v == "ja" or v == "en") then return v end
 	end
 	return detectOSLang()
 end
@@ -65,6 +66,15 @@ local function notify(title: string, text: string, duration: number?)
 	end)
 end
 
+-- ★ HomeOpen前のSTARTラベル
+local function syncingLabel(lang: string, dict)
+	if lang == "ja" then
+		return Dget(dict, "BTN_SYNCING", "同期中…")
+	else
+		return Dget(dict, "BTN_SYNCING", "Syncing…")
+	end
+end
+
 --========================
 -- Class
 --========================
@@ -74,9 +84,10 @@ function Home.new(deps)
 	self.hasSave = false -- HomeOpen から受け取って保持（STARTラベル切替に使用）
 
 	-- 言語（初期は保存/明示→OSの順）
-	self.lang   = pickLang(deps and deps.lang)
-	self.Dict   = Locale[self.lang] or Locale.en
-	self._L     = makeL(self.Dict)
+	self.lang = pickLang(deps and deps.lang)
+	-- Locale.get を優先（ja/en の内部正規化を尊重）
+	self.Dict = (typeof(Locale.get)=="function" and Locale.get(self.lang)) or Locale[self.lang] or Locale.en
+	self._L   = makeL(self.Dict)
 	-- ★ 現在言語をクライアント全体にも共有（Router/Run/Shopでも使う）
 	if typeof(Locale.setGlobal) == "function" then
 		Locale.setGlobal(self.lang)
@@ -224,7 +235,7 @@ function Home.new(deps)
 	end
 
 	-- ★ ボタン構成（START / SHRINE / ITEMS / SETTINGS / PATCH NOTES）
-	self.btnStart     = makeBtn("") -- 文言は後で適用（hasSaveによって切替）
+	self.btnStart     = makeBtn("") -- 文言は後で適用（HomeOpenまで同期中表示）
 	self.btnShrine    = makeBtn("")
 	self.btnItems     = makeBtn("")
 	self.btnSettings  = makeBtn("")
@@ -299,14 +310,14 @@ function Home.new(deps)
 	end
 
 	self.chipEN = makeChip("EN")
-	self.chipJP = makeChip("JP")
+	self.chipJP = makeChip("JP") -- 表示はJP、内部コードは "ja"
 
 	--========================
 	-- ★ Patch Notes モーダル（別モジュール）
 	--========================
 	self.patch = PatchNotesModal.new({
 		parentGui = self.gui,
-		lang      = self.lang,
+		lang      = self.lang, -- 'ja' / 'en'
 		Locale    = Locale,
 	})
 
@@ -347,35 +358,54 @@ function Home.new(deps)
 		self.patch:show()
 	end)
 
-	-- 言語切替ボタン
+	-- 言語切替ボタン（内部コードは "ja"/"en"）
 	self.chipEN.Activated:Connect(function() self:setLanguage("en", true) end)
-	self.chipJP.Activated:Connect(function() self:setLanguage("jp", true) end)
+	self.chipJP.Activated:Connect(function() self:setLanguage("ja", true) end)
 
-	-- 初回の文言適用
+	-- 初回の文言適用（STARTはここでは触らない）
 	self:applyLocaleTexts()
-
-	-- いずれのボタンも初期は有効（STARTのラベルは HomeOpen で再設定）
-	setInteractable(self.btnStart, true)
-	setInteractable(self.btnPatch, true)
+	self:_refreshStartButton()
 
 	return self
+end
+
+--========================
+-- 内部：STARTボタンの文言/可否を一元管理
+--========================
+function Home:_refreshStartButton()
+	if not self.btnStart then return end
+	if self.gui and self.gui.Enabled then
+		-- HomeOpen 到着後：CONTINUE / Start Game を表示し、押下可
+		if self.hasSave then
+			self.btnStart.Text = Dget(self.Dict, "BTN_CONT", "CONTINUE")
+		else
+			self.btnStart.Text = Dget(self.Dict, "BTN_START", "Start Game")
+		end
+		setInteractable(self.btnStart, true)
+	else
+		-- HomeOpen 以前：同期中＋無効化
+		self.btnStart.Text = syncingLabel(self.lang, self.Dict)
+		setInteractable(self.btnStart, false)
+	end
 end
 
 --========================
 -- 言語切替 / テキスト適用
 --========================
 function Home:setLanguage(lang: string, requestSave: boolean?)
-	if lang ~= "jp" and lang ~= "en" then return end
+	if lang ~= "ja" and lang ~= "en" then return end
 	if self.lang == lang then return end
 
 	self.lang = lang
-	self.Dict = Locale[self.lang] or Locale.en
+	self.Dict = (typeof(Locale.get)=="function" and Locale.get(self.lang)) or Locale[self.lang] or Locale.en
 	self._L   = makeL(self.Dict)
+
+	-- 静的テキストを更新（STARTは触らない）
 	self:applyLocaleTexts()
 
 	-- 見た目の選択状態（簡易ハイライト）
 	self.chipEN.BackgroundTransparency = (lang == "en") and 0 or 0.1
-	self.chipJP.BackgroundTransparency = (lang == "jp") and 0 or 0.1
+	self.chipJP.BackgroundTransparency = (lang == "ja") and 0 or 0.1
 
 	-- ★ 現在言語をグローバルにも反映（Router/Run/Shopの自動注入で使用）
 	if typeof(Locale.setGlobal) == "function" then
@@ -386,6 +416,9 @@ function Home:setLanguage(lang: string, requestSave: boolean?)
 	if self.patch and self.patch.setLanguage then
 		self.patch:setLanguage(lang)
 	end
+
+	-- START の文言/可否を現在状態に合わせて再適用
+	self:_refreshStartButton()
 
 	-- サーバ保存（任意・存在すれば）
 	if requestSave and self.deps and self.deps.remotes and self.deps.remotes.ReqSetLang then
@@ -403,8 +436,7 @@ function Home:applyLocaleTexts()
 	if self.statusLabel then
 		self.statusLabel.Text = string.format(L("STATUS_FMT"), L("UNSET_YEAR"), 0, 0)
 	end
-	-- メニュー（START は hasSave により show() で差し替え）
-	if self.btnStart     then self.btnStart.Text     = Dget(self.Dict, "BTN_START", "Start Game") end
+	-- メニュー（STARTはここで触らない）
 	if self.btnShrine    then self.btnShrine.Text    = L("BTN_SHRINE")   end
 	if self.btnItems     then self.btnItems.Text     = L("BTN_ITEMS")    end
 	if self.btnSettings  then self.btnSettings.Text  = L("BTN_SETTINGS") end
@@ -413,10 +445,12 @@ function Home:applyLocaleTexts()
 end
 
 function Home:show(payload)
-	-- payload = { hasSave:bool, bank:number, year:number, clears:number, lang:"jp"|"en" }
-	-- 言語（保存値が来ていれば適用）
-	if payload and (payload.lang == "jp" or payload.lang == "en") and payload.lang ~= self.lang then
-		self:setLanguage(payload.lang, false)
+	-- payload = { hasSave:bool, bank:number, year:number, clears:number, lang:"ja"|"en" }
+	-- 言語（保存値が来ていれば適用）："jp" が来ても互換で "ja" に吸収
+	local plang = payload and tostring(payload.lang or ""):lower() or nil
+	if plang == "jp" then plang = "ja" end
+	if plang and (plang == "ja" or plang == "en") and plang ~= self.lang then
+		self:setLanguage(plang, false)
 	end
 
 	self.hasSave = (payload and payload.hasSave == true) or false
@@ -424,15 +458,7 @@ function Home:show(payload)
 	local year    = (payload and tonumber(payload.year))   or 0
 	local clears  = (payload and tonumber(payload.clears)) or 0
 
-	-- STARTボタンのラベルを hasSave で出し分け（CONTINUE 風/NEW 風）
-	if self.btnStart then
-		if self.hasSave then
-			self.btnStart.Text = Dget(self.Dict, "BTN_CONT", "CONTINUE")
-		else
-			self.btnStart.Text = Dget(self.Dict, "BTN_START", "Start Game")
-		end
-	end
-
+	-- ステータス更新
 	local L = self._L
 	local yearTxt = (year > 0) and tostring(year) or L("UNSET_YEAR")
 	if self.statusLabel then
@@ -441,18 +467,21 @@ function Home:show(payload)
 
 	-- チップ選択状態の見た目
 	self.chipEN.BackgroundTransparency = (self.lang == "en") and 0 or 0.1
-	self.chipJP.BackgroundTransparency = (self.lang == "jp") and 0 or 0.1
+	self.chipJP.BackgroundTransparency = (self.lang == "ja") and 0 or 0.1
 
 	-- ★ 念のためグローバル言語を再同期
 	if typeof(Locale.setGlobal) == "function" then
 		Locale.setGlobal(self.lang)
 	end
 
+	-- HomeOpen 到着：GUI有効化→STARTを適切に更新
 	self.gui.Enabled = true
+	self:_refreshStartButton()
 end
 
 function Home:hide()
 	self.gui.Enabled = false
+	-- 非表示時の START 文言は _refreshStartButton が次回呼びで同期中へ戻す
 end
 
 return Home
