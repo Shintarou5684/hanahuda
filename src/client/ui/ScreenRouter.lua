@@ -1,13 +1,10 @@
 -- StarterPlayerScripts/UI/ScreenRouter.lua
 -- シンプルな画面ルーター：同じ画面への show は再実行しない（ちらつき対策）
--- v0.9:
---  - show は `"name", payload` と `{ name="...", _payload=... }` の両方を受け付ける
---  - 画面インスタンス生成/親付け/Enabled 切替を安全に実施（nil ガード付き）
---  - payload.lang を最優先で inst.setLang に適用し、未指定時は Locale.getGlobal() を補完
---  - current==name の再表示スキップ時でも setData は適用
---  - setDeps 後に既存インスタンスの gui.Parent を補修
--- v0.9.1:
---  - current==name でも (inst.update or inst.show)(payload) を呼び、差分更新/再描画を実施
+-- v0.9.3:
+--  - current==name の場合、非表示ループを完全スキップ（ちらつきゼロ）
+--  - Enabled/Visible を型ガードして安全化（ScreenGui/GuiObject 両対応）
+--  - setData → updateOrShow だけ行う
+--  - ログ: "Router.show updated same screen for <name>"
 
 local Router = {}
 
@@ -23,6 +20,18 @@ local _current   = nil   -- 現在の画面名
 local RS     = game:GetService("ReplicatedStorage")
 local Config = RS:WaitForChild("Config")
 local Locale = require(Config:WaitForChild("Locale"))
+
+--==================================================
+-- ヘルパ：可視状態の安全設定（ScreenGui/GuiObject 両対応）
+--==================================================
+local function setGuiActive(gui: Instance?, active: boolean)
+	if not gui or typeof(gui) ~= "Instance" then return end
+	if gui:IsA("ScreenGui") then
+		gui.Enabled = active
+	elseif gui:IsA("GuiObject") then
+		gui.Visible = active
+	end
+end
 
 --==================================================
 -- 初期化
@@ -158,27 +167,30 @@ function Router.show(arg, payload)
 		inst.gui.Parent = _deps.playerGui
 	end
 
-	-- 4) 全画面を安全に非表示（nil ガード付き）
-	for n, e in pairs(_instances) do
+	-- ★ 4) current==name：ちらつき防止モード（可視状態は触らない）
+	if _current == name then
+		applyLangIfPossible(inst, payload.lang)   -- 言語は即時反映
+		if type(inst.setData) == "function" then  -- データは必ず渡す
+			inst:setData(payload)
+		end
+		updateOrShow(inst, payload)               -- 差分更新 or 再描画
+		print("[LANG_FLOW] Router.show updated same screen for", name)
+		return
+	end
+
+	-- 5) 全画面を安全に非表示（nil/型ガード付き）※別画面に切替時のみ
+	for _, e in pairs(_instances) do
 		if e and e.gui then
-			e.gui.Enabled = false
+			setGuiActive(e.gui, false)
 		end
 	end
 
-	-- 5) 言語は最優先で即時適用
+	-- 6) 言語は最優先で即時適用
 	applyLangIfPossible(inst, payload.lang)
 
-	-- 6) current==name でもデータは渡す（取りこぼし防止）
+	-- 7) setData を先に渡しておく（show 前提条件）
 	if type(inst.setData) == "function" then
 		inst:setData(payload)
-	end
-
-	-- 7) current==name のときは差分更新 or 再描画を実施して終了（ちらつき防止）
-	if _current == name then
-		updateOrShow(inst, payload) -- ★追加：差分更新 or 再描画
-		if inst.gui then inst.gui.Enabled = true end
-		print("[LANG_FLOW] Router.show updated same screen for", name)
-		return
 	end
 
 	-- 8) 旧画面 hide（メソッドがあれば呼ぶ）
@@ -196,8 +208,10 @@ function Router.show(arg, payload)
 		if not okShow then warn("[ScreenRouter] show method failed for", name, errShow) end
 	end
 
-	-- 10) 最終的に可視化を担保
-	if inst.gui then inst.gui.Enabled = true end
+	-- 10) 最終的に可視化を担保（型ガード）
+	if inst.gui then
+		setGuiActive(inst.gui, true)
+	end
 end
 
 --==================================================

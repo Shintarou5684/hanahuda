@@ -1,4 +1,6 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
+-- v0.9.5 ResultModal final文言をLocale化（英語フォールバックあり）＋Nav統一
+--        MisleadingAndOr を if-then-else に置換（静的解析対応）
 
 local Run = {}
 Run.__index = Run
@@ -60,6 +62,27 @@ local function jpLineToEn(lineJP)
 	return s
 end
 
+-- Locale.getGlobal() を安全取得（"jp"/"en" 以外は nil を返す）
+local function safeGetGlobalLang()
+	if typeof(Locale.getGlobal) == "function" then
+		local ok, v = pcall(Locale.getGlobal)
+		if ok and (v == "jp" or v == "en") then
+			return v
+		end
+	end
+	return nil
+end
+
+-- フォールバック付きの言語解決（self._lang→Locale.getGlobal→"en"）
+local function resolveLangOrDefault(current)
+	if current == "jp" or current == "en" then
+		return current
+	end
+	local g = safeGetGlobalLang()
+	if g then return g end
+	return "en"
+end
+
 function Run.new(deps)
 	local self = setmetatable({}, Run)
 	self.deps = deps
@@ -67,8 +90,15 @@ function Run.new(deps)
 	self._resultShown = false
 	self._langConn = nil
 
-	-- 言語初期値
-	local initialLang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
+	-- 言語初期値（安全取得 → Locale.pick() → "en"）
+	local initialLang = safeGetGlobalLang()
+	if not initialLang then
+		if type(Locale.pick) == "function" then
+			initialLang = Locale.pick()
+		else
+			initialLang = "en"
+		end
+	end
 	self._lang = initialLang
 	print("[LANG_FLOW] Run.new initialLang=", initialLang)
 
@@ -87,7 +117,6 @@ function Run.new(deps)
 	self.buttons  = ui.buttons
 	self._ui_setLang = ui.setLang
 	self._fmtScore   = ui.formatScore or function(score, mons, pts, rolesText)
-		-- フォールバック（UIが持っていない場合）
 		if self._lang == "jp" then
 			return string.format("得点：%d\n文%d×%d点\n%s", score or 0, mons or 0, pts or 0, rolesText or "役：--")
 		else
@@ -96,13 +125,39 @@ function Run.new(deps)
 	end
 
 	-- Overlay / ResultModal
-	local loadingText = Theme.loadingText or (Locale.t(initialLang, "RUN_HELP_LINE") or "Loading...")
+	local helpText = Locale.t(initialLang, "RUN_HELP_LINE")
+	if type(helpText) ~= "string" or helpText == "" then helpText = "Loading..." end
+	local loadingText = Theme.loadingText or helpText
+
 	self._overlay     = Overlay.create(self.frame, loadingText)
 	self._resultModal = ResultModal.create(self.frame)
+
+	-- ResultModal → Nav.next("...") に統一（DecideNext フォールバック）
 	self._resultModal:on({
-		home = function() if self.deps.GoHome  then self.deps.GoHome :FireServer() end end,
-		next = function() if self.deps.GoNext  then self.deps.GoNext :FireServer() end end,
-		save = function() if self.deps.SaveQuit then self.deps.SaveQuit:FireServer() end end,
+		home = function()
+			local Nav = self.deps and self.deps.Nav
+			if Nav and type(Nav.next) == "function" then
+				Nav:next("home")
+			elseif self.deps.DecideNext then
+				self.deps.DecideNext:FireServer("home")
+			end
+		end,
+		next = function()
+			local Nav = self.deps and self.deps.Nav
+			if Nav and type(Nav.next) == "function" then
+				Nav:next("next")
+			elseif self.deps.DecideNext then
+				self.deps.DecideNext:FireServer("next")
+			end
+		end,
+		save = function()
+			local Nav = self.deps and self.deps.Nav
+			if Nav and type(Nav.next) == "function" then
+				Nav:next("save")
+			elseif self.deps.DecideNext then
+				self.deps.DecideNext:FireServer("save")
+			end
+		end,
 	})
 
 	-- 役倍率パネル
@@ -205,13 +260,18 @@ function Run.new(deps)
 		end
 
 		if isFinal then
+			-- ▼ Locale化：キー欠落時は英語フォールバック（Locale.tが担保）
+			local lang = resolveLangOrDefault(self._lang)
+			local ttl  = Locale.t(lang, "RESULT_FINAL_TITLE")
+			local desc = Locale.t(lang, "RESULT_FINAL_DESC")
+			local btn  = Locale.t(lang, "RESULT_FINAL_BTN")
+
 			self._resultModal:showFinal(
-				"クリアおめでとう！",
-				"このランは終了です。メニューに戻ります。",
-				"メニューに戻る",
+				ttl, desc, btn,
 				function()
-					if self.deps.GoHome then
-						self.deps.GoHome:FireServer()
+					local Nav = self.deps and self.deps.Nav
+					if Nav and type(Nav.next) == "function" then
+						Nav:next("home")
 					elseif self.deps.DecideNext then
 						self.deps.DecideNext:FireServer("home")
 					end
@@ -302,9 +362,13 @@ function Run:show(payload)
 		print("[LANG_FLOW] Run.show payload.lang=", payload.lang, "(cur=", self._lang,")")
 		self:setLang(payload.lang)
 	else
-		local g = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or self._lang
+		local g = self._lang
+		local gg = safeGetGlobalLang()
+		if gg and gg ~= self._lang then
+			print("[LANG_FLOW] Run.show sync from global | from=", self._lang, "to=", gg)
+			g = gg
+		end
 		if g ~= self._lang then
-			print("[LANG_FLOW] Run.show sync from global | from=", self._lang, "to=", g)
 			self:setLang(g)
 		end
 	end

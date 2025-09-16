@@ -1,9 +1,11 @@
--- v0.9.2 屋台サービス
--- ・リロール=回数無制限・費用1文 / -= を安全代入
--- ・★「商品がMAX(6)でも」必ず再抽選されるように修正
---    - サーバは常に在庫を強制再生成（UI側が満杯でも可）
--- ・SaveService による屋台入場/操作スナップ保存（CONTINUE対応）
--- ・Fix: UnknownGlobal 'ShopEffects'（効果ローダーを復活）
+-- ServerScriptService/ShopService.lua
+-- v0.9.2 → v0.9.2b 屋台サービス（SIMPLE+NONCE）
+-- 変更点:
+--  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
+--  - 在庫は満杯でも必ず強制再生成
+--  - SaveService のスナップ対応は従来どおり（存在しなくても続行）
+--  - ShopEffects ローダー復活済み
+--  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -31,8 +33,43 @@ end
 --========================
 -- 設定
 --========================
-local MAX_STOCK        = 6       -- ★ 並べる最大数
-local REROLL_COST      = 1       -- リロール費用
+local MAX_STOCK   = 6   -- 並べる最大数
+local REROLL_COST = 1   -- リロール費用
+
+--========================
+-- nonce（リロール多重送出防止）
+--========================
+local REROLL_NONCE_TTL = 120 -- 秒（メモリ掃除用）
+local rerollNonceByUser: {[number]: {[string]: number}} = {}
+
+local function pruneNonces(userId: number, now: number)
+	local box = rerollNonceByUser[userId]
+	if not box then return end
+	for n, t in pairs(box) do
+		if (now - (t or 0)) > REROLL_NONCE_TTL then
+			box[n] = nil
+		end
+	end
+end
+
+local function checkAndAddNonce(userId: number, nonce: string?): boolean
+	-- レガシー互換: nonce が無い場合は許容（必要なら false にして強制）
+	if type(nonce) ~= "string" or nonce == "" then
+		return true
+	end
+	local now = os.time()
+	pruneNonces(userId, now)
+	local box = rerollNonceByUser[userId]
+	if not box then
+		box = {}
+		rerollNonceByUser[userId] = box
+	end
+	if box[nonce] then
+		return false
+	end
+	box[nonce] = now
+	return true
+end
 
 --========================
 -- ログ支援
@@ -68,7 +105,7 @@ local function snapShop(plr: Player, s: any)
 end
 
 --========================
--- 効果ローダー（★ UnknownGlobal 対策）
+-- 効果ローダー
 --========================
 local ShopEffects
 do
@@ -153,16 +190,16 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 	local reward = (opts and opts.reward) or 0
 	local notice = (opts and opts.notice) or ""
 	local target = (opts and opts.target) or 0
-	local money  = tonumber(s.mon or 0)
+	local money  = tonumber(s.mon or 0) or 0
 
 	local deckView = RunDeckUtil.snapshot(s)
 
-	-- ===== DEBUG =====（残回数の概念は撤去）
+	-- ===== DEBUG =====
 	print(("[SHOP][OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s")
 		:format(tostring(plr and plr.Name or "?"), tostring(s.season), money,
 				REROLL_COST, matsuriJSON(s), stockBrief(s.shop.stock), notice ~= "" and notice or ""))
 
-	-- ★ 入場直後にスナップ
+	-- 入場スナップ
 	snapShop(plr, s)
 
 	ShopOpen:FireClient(plr, {
@@ -171,7 +208,7 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		seasonSum    = s.seasonSum or 0,
 		rewardMon    = reward,
 		totalMon     = money,
-		mon          = money,              -- 互換
+		mon          = money,              -- 互換（クライアントは mon/totalMon のどちらでも読める）
 		stock        = s.shop.stock,
 		items        = s.shop.stock,       -- 互換
 		notice       = notice,
@@ -179,7 +216,7 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		canReroll    = money >= REROLL_COST,
 		currentDeck  = deckView,
 
-		-- ※UIが参照していれば残す（不要なら削除可）
+		-- UI支援（参照していれば活用 / 不要ならクライアント側で無視）
 		maxStock     = MAX_STOCK,
 		stockCount   = #(s.shop.stock or {}),
 	})
@@ -260,7 +297,7 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 
 		if Service._pushState then Service._pushState(plr) end
 
-		-- ★ 購入成功時点スナップ
+		-- 購入成功時点スナップ
 		snapShop(plr, s)
 
 		-- ===== DEBUG (final) =====
@@ -271,7 +308,14 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 	end)
 
 	-- リロール：回数制限なし／費用=REROLL_COST（★満杯でも常に再抽選）
-	ShopReroll.OnServerEvent:Connect(function(plr: Player)
+	ShopReroll.OnServerEvent:Connect(function(plr: Player, nonce: any)
+		-- ★ nonce 検証（重複は黙って無視）
+		local nonceStr = (typeof(nonce) == "string") and nonce or tostring(nonce or "")
+		if not checkAndAddNonce(plr.UserId, nonceStr) then
+			print(("[SHOP][REROLL][IGNORED] duplicate nonce from %s"):format(plr.Name))
+			return
+		end
+
 		local s = Service._getState and Service._getState(plr)
 		if not s then return end
 		if s.phase ~= "shop" then
@@ -289,11 +333,11 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 		local rng = (s.shop and s.shop.rng) or Random.new(os.clock()*1000000)
 		s.shop = s.shop or {}
 		s.shop.rng   = rng
-		s.shop.stock = generateStock(rng, MAX_STOCK) -- ★ ここが肝：常に置き換える
+		s.shop.stock = generateStock(rng, MAX_STOCK)
 
 		if Service._pushState then Service._pushState(plr) end
 
-		-- ★ リロール後スナップ
+		-- リロール後スナップ
 		snapShop(plr, s)
 
 		-- ===== DEBUG =====

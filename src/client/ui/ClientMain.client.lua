@@ -1,4 +1,4 @@
--- v0.9.0 Router＋Remote結線（vararg不使用）
+-- v0.9.3 Router＋Remote結線（NavClient注入／vararg不使用）
 print("[ClientMain] boot")
 
 local Players = game:GetService("Players")
@@ -16,6 +16,9 @@ if not okLocale or type(Locale) ~= "table" then
 	function Locale.getGlobal() return _g end
 	function Locale.setGlobal(v) _g = (v=="ja" or v=="jp") and "jp" or "en" end
 end
+
+-- ▼ 追加：NavClient
+local NavClient = require(RS:WaitForChild("SharedModules"):WaitForChild("NavClient"))
 
 -- S→C
 local HomeOpen    = Remotes:WaitForChild("HomeOpen")
@@ -45,6 +48,18 @@ local ReqSetLang     = Remotes:WaitForChild("ReqSetLang")
 -- DEV
 local DevGrantRyo  = Remotes:FindFirstChild("DevGrantRyo")
 local DevGrantRole = Remotes:FindFirstChild("DevGrantRole")
+
+-- ▼ レガシー（任意）：存在すれば Nav のバックアップ経路に使う
+local GoHome   = Remotes:FindFirstChild("GoHome")
+local GoNext   = Remotes:FindFirstChild("GoNext")
+local SaveQuit = Remotes:FindFirstChild("SaveQuit")
+
+-- ▼ Nav の生成（正準は DecideNext、レガシーは互換のみ）
+local Nav = NavClient.new(DecideNext, {
+	GoHome   = GoHome,
+	GoNext   = GoNext,
+	SaveQuit = SaveQuit,
+})
 
 local uiRoot = script.Parent:FindFirstChild("UI") or script.Parent
 local ScreenRouterModule = uiRoot:FindFirstChild("ScreenRouter") or uiRoot:WaitForChild("ScreenRouter")
@@ -81,11 +96,17 @@ Router.setDeps({
 	DecideNext=DecideNext, ReqSetLang=ReqSetLang,
 	HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 	StageResult=StageResult,
+
+	-- ▼ 追加：UI層へ Nav を配布（ResultModal → Nav.next("home"|"next"|"save")）
+	Nav = Nav,
+
 	toast = function(msg, dur)
 		pcall(function()
 			game.StarterGui:SetCore("SendNotification", { Title = "通知", Text = msg, Duration = dur or 2 })
 		end)
 	end,
+
+	-- 参考：既存 remotes マップ（互換のためそのまま維持）
 	remotes = {
 		Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
 		ShopDone=ShopDone, BuyItem=BuyItem, ShopReroll=ShopReroll,
@@ -93,23 +114,9 @@ Router.setDeps({
 		HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 		StageResult=StageResult, DecideNext=DecideNext, ReqSetLang=ReqSetLang,
 		DevGrantRyo=DevGrantRyo, DevGrantRole=DevGrantRole,
+		-- （必要なら）Nav もここへ見せたい場合は次行を有効化
+		-- Nav = Nav,
 	},
-	showRun = function(payload)
-		payload = payload or {}
-		if payload.lang == nil then payload.lang = Locale.getGlobal and Locale.getGlobal() or "en" end
-		Router.show("run", payload)
-	end,
-	showHome = function(payload)
-		payload = payload or {}
-		if payload.lang == nil then payload.lang = Locale.getGlobal and Locale.getGlobal() or "en" end
-		Router.show("home", payload)
-	end,
-	showShop = function(payload)
-		payload = payload or {}
-		if payload.lang == nil then payload.lang = Locale.getGlobal and Locale.getGlobal() or "en" end
-		Router.show("shop", payload)
-	end,
-	showShrine = function() Router.show("shrine", { lang = Locale.getGlobal and Locale.getGlobal() or "en" }) end,
 })
 
 HomeOpen.OnClientEvent:Connect(function(payload)

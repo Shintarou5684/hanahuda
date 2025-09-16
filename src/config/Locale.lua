@@ -79,14 +79,19 @@ local en = {
 	RUN_BTN_YAKU         = "Yaku",
 	RUN_HELP_LINE        = "Click hand → field to take. Confirm to finish.",
 	RUN_INFO_PLACEHOLDER = "Year:----  Season:--  Target:--  Total:--  Hands:--  Rerolls:--  Mult:--  Bank:--",
-	-- ↓ 3行表示：Score / Mon×Pts / Roles
+	-- ↓ 3 lines: Score / Mon×Pts / Roles
 	RUN_SCOREBOX_INIT    = "Score: 0\n0Mon × 0Pts\nRoles: --",
+
+	-- ▼ NEW: Result Final modal
+	RESULT_FINAL_TITLE = "Congrats!",
+	RESULT_FINAL_DESC  = "Run finished. Returning to menu.",
+	RESULT_FINAL_BTN   = "Back to Menu",
 }
 
 local jp = {
 	-- Home
 	MAIN_TITLE   = "極楽蝶",
-	SUBTITLE     = "Hanafuda Rogue",
+		SUBTITLE     = "Hanafuda Rogue",
 	STATUS_FMT   = "年:%s  両:%d  進捗: 通算 %d/3 クリア",
 	BETA_BADGE   = "BETA TEST",
 
@@ -120,6 +125,11 @@ local jp = {
 	RUN_INFO_PLACEHOLDER = "年:----  季節:--  目標:--  合計:--  残ハンド:--  残リロール:--  倍率:--  Bank:--",
 	-- ↓ 3行表示：得点 / 文×点 / 役
 	RUN_SCOREBOX_INIT    = "得点：0\n文0×0点\n役：--",
+
+	-- ▼ NEW: Result Final modal
+	RESULT_FINAL_TITLE = "クリアおめでとう！",
+	RESULT_FINAL_DESC  = "このランは終了です。メニューに戻ります。",
+	RESULT_FINAL_BTN   = "メニューに戻る",
 }
 
 Locale._data = { en = en, jp = jp }

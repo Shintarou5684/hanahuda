@@ -1,5 +1,5 @@
 -- StarterPlayerScripts/UI/components/ResultModal.lua
--- ステージ結果モーダル：3択／ワンボタン（final）両対応
+-- ステージ結果モーダル：3択／ワンボタン（final）両対応（Nav統一/ロック無効化対応）
 
 local M = {}
 
@@ -112,11 +112,25 @@ function M.create(parent: Instance)
 
 	-- ハンドラ
 	local on = { home = nil, next = nil, save = nil, final = nil }
-	btnHome.Activated:Connect(function() if on.home  then on.home()  end end)
-	btnNext.Activated:Connect(function() if on.next  then on.next()  end end)
-	btnSave.Activated:Connect(function() if on.save  then on.save()  end end)
-	finalBtn.Activated:Connect(function() if on.final then on.final() end end)
-	modalOverlay.Activated:Connect(function() end) -- 背景クリックでは閉じない
+
+	-- クリック結線（ロック中は無視）
+	btnHome.Activated:Connect(function()
+		if on.home then on.home() end
+	end)
+	btnNext.Activated:Connect(function()
+		if btnNext:GetAttribute("locked") then return end
+		if on.next then on.next() end
+	end)
+	btnSave.Activated:Connect(function()
+		if btnSave:GetAttribute("locked") then return end
+		if on.save then on.save() end
+	end)
+	finalBtn.Activated:Connect(function()
+		if on.final then on.final() end
+	end)
+
+	-- 背景クリックでは閉じない
+	modalOverlay.Activated:Connect(function() end)
 
 	-- API
 	local api = {}
@@ -171,6 +185,15 @@ function M.create(parent: Instance)
 		on.next  = handlers.next
 		on.save  = handlers.save
 		on.final = handlers.final
+	end
+
+	-- ▼ 追加：Nav 糖衣（UI側は self._resultModal:bindNav(self.deps.Nav) だけでOK）
+	function api:bindNav(nav)
+		if not nav or type(nav.next) ~= "function" then return end
+		on.home  = function() nav:next("home") end
+		on.next  = function() nav:next("next") end
+		on.save  = function() nav:next("save") end
+		on.final = function() nav:next("home") end
 	end
 
 	return api
