@@ -1,16 +1,21 @@
 -- src/client/ui/components/controllers/ShopWires.lua
--- v0.9.3-P0-5 ShopWires：Shop画面のイベント配線・UI更新のみ
+-- v0.9.3-P1-3 ShopWires：Shop画面のイベント配線・UI更新のみ
 -- ポリシー:
 --  - リロールは「所持金>=費用」でのみ可否判定（残回数は見ない）
 --  - 二重送出防止：UIを即時無効化し、nonce を付与してサーバへ送信
 --  - UIの再有効化はサーバからの ShopOpen ペイロード受信時に判定して行う
---  - （重要/P0-5）ShopOpen の受信は ClientMain に一本化。本モジュールはリスナーを持たない。
+--  - （重要）ShopOpen の受信は ClientMain に一本化。本モジュールはリスナーを持たない。
+--  - P1-3: 共通 Logger 導入（print/warn を LOG.* へ）
 
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
+
+-- Logger
+local Logger = require(SharedModules:WaitForChild("Logger"))
+local LOG    = Logger.scope("ShopWires")
 
 local ShopI18n  = require(script.Parent.Parent:WaitForChild("i18n"):WaitForChild("ShopI18n"))
 
@@ -41,7 +46,7 @@ function M.wireButtons(self)
   nodes.closeBtn.Activated:Connect(function()
     if self._closing then return end
     self._closing = true
-    print("[SHOP][UI] close clicked")
+    LOG.info("close clicked")
     self:hide()
     if self.deps and self.deps.toast then
       local lang = ShopFormat.normLang(self._lang)
@@ -69,7 +74,7 @@ function M.wireButtons(self)
     -- nonce を付与して送信
     local nonce = HttpService:GenerateGUID(false)
     self._lastRerollNonce = nonce
-    print("[SHOP][UI] REROLL click → FireServer(nonce=", nonce, ")")
+    LOG.info("REROLL click → FireServer | nonce=%s", nonce)
     self.deps.remotes.ShopReroll:FireServer(nonce)
 
     -- debounce経過後にbusyフラグだけ解除（UIの再有効化はサーバ側のShopOpen受信時に行う）
@@ -81,7 +86,7 @@ function M.wireButtons(self)
 
   nodes.deckBtn.Activated:Connect(function()
     self._deckOpen = not self._deckOpen
-    print("[SHOP][UI] deck toggle ->", self._deckOpen)
+    LOG.debug("deck toggle -> %s", tostring(self._deckOpen))
     self:_render()
   end)
 end
@@ -89,7 +94,7 @@ end
 -- ⚠ 非推奨：ShopOpenのリスナー接続は行わない。ClientMainが単独で受ける。
 -- 互換用に「payloadを渡すとUIだけ更新する」関数を返す。
 function M.attachRemotes(self, remotes, router)
-  warn("[SHOP][UI] attachRemotes is deprecated; ClientMain handles <ShopOpen>. UI will only refresh.")
+  LOG.warn("attachRemotes is deprecated; ClientMain handles <ShopOpen>. UI will only refresh.")
   -- 互換クロージャ：外部で新payloadを受け取ったときに UI を更新するための関数
   return function(payload)
     -- 言語の注入（payload優先→既存→"en"）

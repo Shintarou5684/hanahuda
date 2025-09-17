@@ -1,12 +1,14 @@
 -- ServerScriptService/GameInit.server.lua
 -- エントリポイント：Remotes生成／各Service初期化／永続（SaveService）連携
--- v0.9.2 → v0.9.2-langfix2:
+-- v0.9.2 → v0.9.2-langfix2 (+P1-3 logger):
 --  - STARTGAME に統合（セーブがあればCONTINUE / なければNEW）
 --  - SaveService.activeRun（季節開始/屋台入場）スナップからの復帰に対応
 --  - HomeOpen.hasSave を正しく反映
 --  - 言語保存 ReqSetLang を実装
 --  - ★ 言語コードを外部公開 "ja/en" に統一（"jp" は受け取ったら "ja" に正規化）
 --  - ★ 冬クリア→HOME/保存→HOME 時は“春スナップ”を残さない（hasSave=false を返す）
+--  - ★ P1-1: DecideNext の実装を NavServer に一本化（本ファイルは初期化のみ）
+--  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 
 --==================================================
 -- Services
@@ -14,6 +16,19 @@
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local SSS     = game:GetService("ServerScriptService")
+
+--==================================================
+-- Logger
+--==================================================
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("GameInit")  -- ★ reserve word対策：for → scope
+Logger.configure({
+	level = Logger.INFO,      -- 公開時は INFO 以上、開発時は DEBUG 推奨
+	timePrefix = true,        -- 時刻プレフィックス
+	dupWindowSec = 0.5,       -- 同一メッセージ抑止窓（秒）
+})
+
+LOG.info("boot")
 
 --==================================================
 -- SaveService（bank/year/clears/lang/activeRun の永続化）
@@ -95,6 +110,9 @@ local Reroll       = require(RS.SharedModules.RerollService)
 local Score        = require(RS.SharedModules.ScoreService)
 local ShopService  = require(RS.SharedModules.ShopService)
 
+-- ★ P1-1: NavServer を導入（DecideNext の唯一線）
+local NavServer    = require(SSS:WaitForChild("NavServer"))
+
 --==================================================
 -- DEV Remotes（Studio向け：+両 / +役 付与）
 --==================================================
@@ -107,6 +125,7 @@ DevGrantRyo.OnServerEvent:Connect(function(plr, amount)
 	s.bank = (s.bank or 0) + amount                -- メモリ状態
 	StateHub.pushState(plr)
 	SaveService.addBank(plr, amount)               -- 永続もdirty化
+	LOG.debug("DevGrantRyo | user=%s amount=%d bank=%d", plr.Name, amount, s.bank or -1)
 end)
 
 local function ensureTable(t) return (type(t)=="table") and t or {} end
@@ -137,6 +156,7 @@ DevGrantRole.OnServerEvent:Connect(function(plr)
 	local total, roles, detail = Scoring.evaluate(s.taken or {}, s)
 	s.lastScore = { total = total or 0, roles = roles, detail = detail }
 	StateHub.pushState(plr)
+	LOG.debug("DevGrantRole | user=%s total=%s", plr.Name, tostring(total))
 end)
 
 --==================================================
@@ -157,19 +177,19 @@ StateHub.init(Remotes)
 if PickService and typeof(PickService.bind) == "function" then
 	PickService.bind(Remotes)
 else
-	warn("[GameInit] PickService.bind が見つかりません")
+	LOG.warn("PickService.bind が見つかりません")
 end
 
 if Reroll and typeof(Reroll.bind) == "function" then
 	Reroll.bind(Remotes)
 else
-	warn("[GameInit] Reroll.bind が見つかりません")
+	LOG.warn("Reroll.bind が見つかりません")
 end
 
 if Score and typeof(Score.bind) == "function" then
 	Score.bind(Remotes, { openShop = ShopService and ShopService.open })
 else
-	warn("[GameInit] Score.bind が見つかりません")
+	LOG.warn("Score.bind が見つかりません")
 end
 
 if ShopService and typeof(ShopService.init) == "function" then
@@ -178,36 +198,33 @@ if ShopService and typeof(ShopService.init) == "function" then
 		function(plr) StateHub.pushState(plr) end
 	)
 else
-	warn("[GameInit] ShopService.init が見つかりません")
+	LOG.warn("ShopService.init が見つかりません")
 end
 
---==================================================
--- Player lifecycle：永続ロード/保存 + 言語トレースログ
---==================================================
+-- ★ P1-1: NavServer を初期化（DecideNext の唯一線）。依存はここで注入。
+NavServer.init({
+	StateHub    = StateHub,
+	Round       = Round,
+	ShopService = ShopService,
+	SaveService = SaveService,
+	HomeOpen    = HomeOpen,           -- S→C push（NavServerで使用）
+	DecideNext  = Remotes.DecideNext, -- C→S pull（同上）
+})
 
--- 共有ミニロガー（サーバ用）
-local function S(tag, msg, kv)
-	local parts = {}
-	if type(kv)=="table" then
-		for k,v in pairs(kv) do
-			table.insert(parts, (tostring(k).."="..tostring(v)))
-		end
-	end
-	print(("[LANG_FLOW][S] %-16s | %s%s"):format(tag, msg or "", (#parts>0) and (" | "..table.concat(parts," ")) or ""))
-end
-
+--==================================================
+-- Player lifecycle：永続ロード/保存 + 言語ログ
+--==================================================
 Players.PlayerAdded:Connect(function(plr)
-	S("PlayerAdded", "begin load profile", {user=plr.Name, userId=plr.UserId})
+	LOG.info("PlayerAdded | begin load profile | user=%s userId=%d", plr.Name, plr.UserId)
 
 	local prof = SaveService.load(plr)
-	S("load.done", "profile loaded", {
-		user=plr.Name,
-		bank=prof and prof.bank,
-		year=prof and prof.year,
-		asc =prof and prof.asc,
-		clears=prof and prof.clears,
-		lang=prof and prof.lang
-	})
+	LOG.debug(
+		"Profile loaded | user=%s bank=%s year=%s asc=%s clears=%s lang=%s",
+		plr.Name,
+		tostring(prof and prof.bank), tostring(prof and prof.year),
+		tostring(prof and prof.asc),  tostring(prof and prof.clears),
+		tostring(prof and prof.lang)
+	)
 
 	local s = StateHub.get(plr) or {}
 	local savedLang = normLang(SaveService.getLang(plr)) or "en"
@@ -218,18 +235,16 @@ Players.PlayerAdded:Connect(function(plr)
 	s.lang        = savedLang
 	StateHub.set(plr, s)
 
-	S("state.set", "state merged & set", {
-		user=plr.Name,
-		stateLang=s.lang,
-		bank=s.bank, year=s.year, clears=s.totalClears
-	})
+	LOG.debug(
+		"State set | user=%s lang=%s bank=%d year=%d clears=%d",
+		plr.Name, s.lang, s.bank or 0, s.year or 0, s.totalClears or 0
+	)
 
 	local hasSave = SaveService.getActiveRun(plr) ~= nil
-	S("HomeOpen→C", "send payload to client", {
-		user=plr.Name,
-		payloadLang=s.lang,
-		hasSave=hasSave, bank=s.bank, year=s.year, clears=s.totalClears or 0
-	})
+	LOG.info(
+		"HomeOpen → C | user=%s lang=%s hasSave=%s bank=%d year=%d clears=%d",
+		plr.Name, s.lang, tostring(hasSave), s.bank or 0, s.year or 0, s.totalClears or 0
+	)
 
 	HomeOpen:FireClient(plr, {
 		hasSave = hasSave,
@@ -241,14 +256,14 @@ Players.PlayerAdded:Connect(function(plr)
 end)
 
 Players.PlayerRemoving:Connect(function(plr)
-	S("PlayerRemoving", "flush profile", {user=plr.Name})
+	LOG.info("PlayerRemoving | flush profile | user=%s", plr.Name)
 	SaveService.flush(plr)
 end)
 
 game:BindToClose(function()
-	S("BindToClose", "flushAll begin")
+	LOG.info("BindToClose | flushAll begin")
 	pcall(function() SaveService.flushAll() end)
-	S("BindToClose", "flushAll end")
+	LOG.info("BindToClose | flushAll end")
 end)
 
 --==================================================
@@ -257,7 +272,7 @@ end)
 ReqSetLang.OnServerEvent:Connect(function(plr, lang)
 	local n = normLang(lang)
 	if not n then
-		warn(("[LANG_FLOW][S] ReqSetLang invalid | from=%s"):format(tostring(lang)))
+		LOG.warn("ReqSetLang invalid | user=%s from=%s", plr.Name, tostring(lang))
 		return
 	end
 	SaveService.setLang(plr, n)
@@ -266,7 +281,7 @@ ReqSetLang.OnServerEvent:Connect(function(plr, lang)
 	s.lang = n
 	StateHub.set(plr, s)
 
-	S("setLang", "saved & state updated", {user=plr.Name, lang=n})
+	LOG.info("setLang | saved & state updated | user=%s lang=%s", plr.Name, n)
 end)
 
 --==================================================
@@ -282,6 +297,7 @@ local function startNewRun(plr)
 	if SaveService.clearActiveRun then pcall(function() SaveService.clearActiveRun(plr) end) end
 	Round.resetRun(plr)
 	fireReadySoon(plr)
+	LOG.info("startNewRun | user=%s", plr.Name)
 end
 
 local function continueFromSnapshot(plr, snap:any)
@@ -310,6 +326,8 @@ local function continueFromSnapshot(plr, snap:any)
 			ShopService.open(plr, cur, { notice = "" })
 		end)
 	end
+
+	LOG.info("continueFromSnapshot | user=%s season=%d atShop=%s", plr.Name, season, tostring(snap.atShop))
 end
 
 local function startGameAuto(plr)
@@ -356,79 +374,9 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	end
 
 	fireReadySoon(plr)
+	LOG.info("ShopDone → next | user=%s nextSeason=%d", plr.Name, nextSeason)
 end)
 
 --==================================================
--- 達成後：冬専用 3択（StageResult）→ DecideNext
+-- 以降、DecideNext の実装は NavServer に移管済み（ここには置かない）
 --==================================================
--- DecideNext の引数：op = "home" | "next" | "save"
-
--- ★補助：HOMEに戻すためのリセット（“春スナップ”は必ず消す）
-local function resetRunForHome(plr)
-	Round.resetRun(plr) -- これが春スナップを作る実装のため
-	if typeof(SaveService.clearActiveRun) == "function" then
-		pcall(function() SaveService.clearActiveRun(plr) end)
-	end
-end
-
-Remotes.DecideNext.OnServerEvent:Connect(function(plr: Player, op: string)
-	local s = StateHub.get(plr); if not s then return end
-	if (s.season or 1) ~= 4 then return end
-
-	local clears = tonumber(s.totalClears or 0) or 0
-	local unlocked = clears >= 3
-
-	-- 共通初期化
-	s.mult = 1.0
-
-	-- サーバ側ガード：未解禁なら "home" 以外は無効化
-	if op ~= "home" and not unlocked then
-		op = "home"
-	end
-
-	if op == "home" then
-		-- トップへ戻す：春スナップは消去 → hasSave=false（START表示）
-		resetRunForHome(plr)
-		HomeOpen:FireClient(plr, {
-			hasSave = false,
-			bank    = s.bank or 0,
-			year    = s.year or 0,
-			clears  = s.totalClears or 0,
-			lang    = normLang(SaveService.getLang(plr)) or "en",
-		})
-		return
-
-	elseif op == "next" then
-		-- 25年進行＋屋台（継続プレイ）
-		s.year = (s.year or 0) + 25
-		if typeof(SaveService.bumpYear) == "function" then
-			SaveService.bumpYear(plr, 25)
-		else
-			SaveService.setYear(plr, s.year)
-		end
-		s.phase = "shop"
-		if ShopService and typeof(ShopService.open) == "function" then
-			ShopService.open(plr, s, { reason = "after_winter" })
-		else
-			StateHub.pushState(plr)
-		end
-		return
-
-	elseif op == "save" then
-		-- 永続保存→トップへ：プロフィール保存のみ／春スナップは消す→hasSave=false
-		local ok = true
-		if typeof(SaveService.flush) == "function" then
-			ok = SaveService.flush(plr) == true
-		end
-		resetRunForHome(plr)
-		HomeOpen:FireClient(plr, {
-			hasSave = false, -- ★強制的に START 表示にする
-			bank    = s.bank or 0,
-			year    = s.year or 0,
-			clears  = s.totalClears or 0,
-			saved   = ok,
-			lang    = normLang(SaveService.getLang(plr)) or "en",
-		})
-		return
-	end
-end)

@@ -6,10 +6,15 @@
 --  - SaveService のスナップ対応は従来どおり（存在しなくても続行）
 --  - ShopEffects ローダー復活済み
 --  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
+--  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
 local Http = game:GetService("HttpService")
+
+-- Logger
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("ShopService")
 
 local Remotes    = RS:WaitForChild("Remotes")
 local ShopOpen   = Remotes:WaitForChild("ShopOpen")
@@ -24,8 +29,10 @@ local CardEngine    = require(SharedModules:WaitForChild("CardEngine"))
 -- ★ SaveService（存在しなくてもゲームは動作継続）
 local SaveService do
 	local ok, mod = pcall(function() return require(SSS:WaitForChild("SaveService")) end)
-	if ok then SaveService = mod else
-		warn("[ShopService] SaveService not available; shop snapshots will be skipped.")
+	if ok then
+		SaveService = mod
+	else
+		LOG.warn("SaveService not available; shop snapshots will be skipped.")
 		SaveService = nil
 	end
 end
@@ -130,9 +137,9 @@ do
 	local ok, mod = pcall(tryRequire)
 	if ok and type(mod) == "table" and type(mod.apply) == "function" then
 		ShopEffects = mod
-		print("[ShopService] ShopEffects loaded OK")
+		LOG.info("ShopEffects loaded OK")
 	else
-		warn("[ShopService] ShopEffects missing/invalid", ok, mod)
+		LOG.warn("ShopEffects missing/invalid | ok=%s err=%s", tostring(ok), tostring(mod))
 		ShopEffects = nil
 	end
 end
@@ -194,10 +201,14 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 
 	local deckView = RunDeckUtil.snapshot(s)
 
-	-- ===== DEBUG =====
-	print(("[SHOP][OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s")
-		:format(tostring(plr and plr.Name or "?"), tostring(s.season), money,
-				REROLL_COST, matsuriJSON(s), stockBrief(s.shop.stock), notice ~= "" and notice or ""))
+	-- ===== LOG =====
+	LOG.info(
+		"[OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s",
+		tostring(plr and plr.Name or "?"),
+		tostring(s.season), money, REROLL_COST,
+		matsuriJSON(s), stockBrief(s.shop.stock),
+		(notice ~= "" and notice) or ""
+	)
 
 	-- 入場スナップ
 	snapShop(plr, s)
@@ -225,7 +236,7 @@ end
 function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 	Service._getState  = getStateFn
 	Service._pushState = pushStateFn
-	print("[ShopService] init OK")
+	LOG.info("init OK")
 
 	-- 購入
 	BuyItem.OnServerEvent:Connect(function(plr: Player, itemId: string)
@@ -235,30 +246,37 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			return openFor(plr, s, { notice="現在は屋台の時間ではありません（同期します）" })
 		end
 
-		-- ===== DEBUG (pre-search) =====
-		print(("[SHOP][BUY][REQ] u=%s itemId=%s mon(before)=%d stock=%s matsuri(before)=%s")
-			:format(tostring(plr and plr.Name or "?"), tostring(itemId), tonumber(s.mon or 0), stockBrief(s.shop and s.shop.stock), matsuriJSON(s)))
+		-- ===== pre-search =====
+		LOG.debug(
+			"[BUY][REQ] u=%s itemId=%s mon(before)=%d stock=%s matsuri(before)=%s",
+			tostring(plr and plr.Name or "?"),
+			tostring(itemId), tonumber(s.mon or 0),
+			stockBrief(s.shop and s.shop.stock), matsuriJSON(s)
+		)
 
 		local foundIndex, found
 		for i, it in ipairs(((s.shop and s.shop.stock) or {})) do
 			if it.id == itemId then foundIndex = i; found = it; break end
 		end
 		if not found then
-			print(("[SHOP][BUY][ERR] not found: %s"):format(tostring(itemId)))
+			LOG.warn("[BUY][ERR] not found: %s", tostring(itemId))
 			return openFor(plr, s, { notice="不明な商品です" })
 		end
 		local price = tonumber(found.price) or 0
 		if (s.mon or 0) < price then
-			print(("[SHOP][BUY][ERR] mon short: need=%d have=%d"):format(price, tonumber(s.mon or 0)))
+			LOG.warn("[BUY][ERR] mon short: need=%d have=%d", price, tonumber(s.mon or 0))
 			return openFor(plr, s, { notice=("文が足りません（必要:%d）"):format(price) })
 		end
 
 		-- ★ 安全代入で請求
 		s.mon = (s.mon or 0) - price
 
-		-- ===== DEBUG (before effect) =====
-		print(("[SHOP][BUY][DO] item=%s(%s) price=%d mon(after charge)=%d effect=%s")
-			:format(found.name or found.id, tostring(found.category), price, tonumber(s.mon or 0), tostring(found.effect or found.id)))
+		-- ===== before effect =====
+		LOG.info(
+			"[BUY][DO] item=%s(%s) price=%d mon(after charge)=%d effect=%s",
+			found.name or found.id, tostring(found.category), price, tonumber(s.mon or 0),
+			tostring(found.effect or found.id)
+		)
 
 		local effOk, effMsg = true, ""
 		if ShopEffects then
@@ -271,7 +289,7 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			end)
 			if not okCall then
 				effOk, effMsg = false, ("効果適用エラー: %s"):format(tostring(okRet))
-				warn("[ShopService] effect threw:", okRet)
+				LOG.warn("effect threw: %s", tostring(okRet))
 			else
 				effOk, effMsg = okRet, msgRet
 			end
@@ -279,15 +297,14 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			effOk, effMsg = false, "効果モジュール未ロード"
 		end
 
-		-- ===== DEBUG (after effect) =====
-		print(("[SHOP][BUY][RES] ok=%s msg=%s matsuri(after)=%s")
-			:format(tostring(effOk), tostring(effMsg or ""), matsuriJSON(s)))
+		-- ===== after effect =====
+		LOG.info("[BUY][RES] ok=%s msg=%s matsuri(after)=%s", tostring(effOk), tostring(effMsg or ""), matsuriJSON(s))
 
 		if not effOk then
 			-- ロールバックも安全代入
 			s.mon = (s.mon or 0) + price
 			if Service._pushState then Service._pushState(plr) end
-			print(("[SHOP][BUY][ROLLBACK] price=%d mon=%d"):format(price, tonumber(s.mon or 0)))
+			LOG.warn("[BUY][ROLLBACK] price=%d mon=%d", price, tonumber(s.mon or 0))
 			return openFor(plr, s, { notice=("購入失敗：%s（返金）\n%s"):format(found.name or found.id, tostring(effMsg or "")) })
 		end
 
@@ -300,9 +317,8 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 		-- 購入成功時点スナップ
 		snapShop(plr, s)
 
-		-- ===== DEBUG (final) =====
-		print(("[SHOP][BUY][OK] item=%s mon=%d stock(after)=%s")
-			:format(found.name or found.id, tonumber(s.mon or 0), stockBrief(s.shop and s.shop.stock)))
+		-- ===== final =====
+		LOG.info("[BUY][OK] item=%s mon=%d stock(after)=%s", found.name or found.id, tonumber(s.mon or 0), stockBrief(s.shop and s.shop.stock))
 
 		openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, tostring(effMsg or "")) })
 	end)
@@ -312,7 +328,7 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 		-- ★ nonce 検証（重複は黙って無視）
 		local nonceStr = (typeof(nonce) == "string") and nonce or tostring(nonce or "")
 		if not checkAndAddNonce(plr.UserId, nonceStr) then
-			print(("[SHOP][REROLL][IGNORED] duplicate nonce from %s"):format(plr.Name))
+			LOG.debug("[REROLL][IGNORED] duplicate nonce from %s", plr.Name)
 			return
 		end
 
@@ -322,7 +338,7 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			return openFor(plr, s, { notice="今はリロールできません（同期します）" })
 		end
 		if (s.mon or 0) < REROLL_COST then
-			print(("[SHOP][REROLL][ERR] mon short: need=%d have=%d"):format(REROLL_COST, tonumber(s.mon or 0)))
+			LOG.warn("[REROLL][ERR] mon short: need=%d have=%d", REROLL_COST, tonumber(s.mon or 0))
 			return openFor(plr, s, { notice=("リロールには %d 文が必要です"):format(REROLL_COST) })
 		end
 
@@ -340,9 +356,12 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 		-- リロール後スナップ
 		snapShop(plr, s)
 
-		-- ===== DEBUG =====
-		print(("[SHOP][REROLL][OK] u=%s mon=%d cost=%d stock(after)=%s matsuri=%s")
-			:format(tostring(plr and plr.Name or "?"), tonumber(s.mon or 0), REROLL_COST, stockBrief(s.shop.stock), matsuriJSON(s)))
+		-- ===== LOG =====
+		LOG.info(
+			"[REROLL][OK] u=%s mon=%d cost=%d stock(after)=%s matsuri=%s",
+			tostring(plr and plr.Name or "?"), tonumber(s.mon or 0),
+			REROLL_COST, stockBrief(s.shop.stock), matsuriJSON(s)
+		)
 
 		openFor(plr, s, { notice=("品揃えを更新しました（-%d 文）"):format(REROLL_COST) })
 	end)

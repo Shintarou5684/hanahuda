@@ -1,8 +1,9 @@
 -- StarterPlayerScripts/UI/components/CardNode.lua
 -- カード画像ボタン（画像・角丸・枠・軽い拡大アニメ）
--- 右側インフォ / 下部バッジはローカライズ（JP/EN）対応
+-- 右側インフォ / 下部バッジはローカライズ（JA/EN）対応
 -- 依存: ReplicatedStorage/SharedModules/CardImageMap.lua
 -- 任意依存: ReplicatedStorage/Config/Theme.lua, ReplicatedStorage/Config/Locale.lua
+-- v0.9.7-P1-1: 言語コードを "ja"/"en" に統一（受信 "jp" は "ja" に正規化）/ kindEN のパターン修正
 
 local TweenService = game:GetService("TweenService")
 local RS = game:GetService("ReplicatedStorage")
@@ -71,15 +72,36 @@ end
 --========================
 -- Locale helpers
 --========================
+local function normLangJa(v: string?): string?
+	local s = tostring(v or ""):lower()
+	if s == "ja" or s == "jp" then
+		if s == "jp" then warn("[CardNode] received legacy 'jp'; normalizing to 'ja'") end
+		return "ja"
+	elseif s == "en" then
+		return "en"
+	end
+	return nil
+end
+
+-- "ja"/"en" のみ返す（Locale.getGlobal → Locale.pick → "en"）
 local function curLang(): string
+	-- Locale.getGlobal()
 	if Locale and typeof(Locale.getGlobal) == "function" then
 		local ok, v = pcall(Locale.getGlobal)
-		if ok and (v == "jp" or v == "en") then return v end
+		if ok then
+			local n = normLangJa(v)
+			if n then return n end
+		end
 	end
+	-- Locale.pick()
 	if Locale and typeof(Locale.pick) == "function" then
 		local ok, v = pcall(Locale.pick)
-		if ok and (v == "jp" or v == "en") then return v end
+		if ok then
+			local n = normLangJa(v)
+			if n then return n end
+		end
 	end
+	-- fallback
 	return "en"
 end
 
@@ -97,19 +119,19 @@ local function kindEN(kind: string?, fallbackName: string?): string
 	elseif kind == "seed" then return "Seed"
 	elseif kind == "ribbon" then return "Ribbon"
 	elseif kind == "chaff" or kind == "kasu" then return "Chaff"
-	-- name が英字なら使っても良い
-	elseif fallbackName and fallbackName:match("^[%w%p%space]+$") then
+	-- name が ASCII 系ならそのまま表示
+	elseif fallbackName and fallbackName:match("^[%w%p%s]+$") then
 		return fallbackName
 	else
 		return "--"
 	end
 end
 
--- JP: "11月/タネ" / EN: "11/Seed"（ENは単位「月」を省く）
+-- JA: "11月/タネ" / EN: "11/Seed"（ENは単位「月」を省く）
 local function footerText(monthNum: number?, kind: string?, name: string?, lang: string): string
 	local m = tonumber(monthNum)
 	local mStr = m and tostring(m) or ""
-	if lang == "jp" then
+	if lang == "ja" then
 		local k = kindJP(kind, name)
 		return (mStr ~= "" and (mStr .. "月/" .. k)) or k
 	else
@@ -121,7 +143,7 @@ end
 -- 右側インフォの文言（短め）
 local function sideInfoText(monthNum: number?, kind: string?, name: string?, lang: string): string
 	local m = tonumber(monthNum) or 0
-	if lang == "jp" then
+	if lang == "ja" then
 		return string.format("%d月 %s", m, (name and #name>0) and name or kindJP(kind))
 	else
 		return string.format("%s %s", tostring(m), kindEN(kind))

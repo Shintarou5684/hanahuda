@@ -4,8 +4,13 @@
 --  1) 結果表示中 (s.phase=="result") は余計な再送を避ける
 --  2) 連打/重複のデバウンス (同一プレイヤー 0.3s 以内は捨てる)
 --  3) null/型の安全化（落ちないようにデフォルト値を用意）
+--  4) P1-3: Logger 導入（print/warn を LOG.* に置換）
 
 local RS = game:GetService("ReplicatedStorage")
+
+-- Logger
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("UiResync")
 
 -- Remotes フォルダ
 local RemotesFolder = RS:FindFirstChild("Remotes") or (function()
@@ -63,7 +68,7 @@ local function safeEvaluate(taken:any)
 	if ok then
 		return total, roles, detail
 	else
-		warn("[UiResync] Scoring.evaluate failed; fallback 0/{}")
+		LOG.warn("Scoring.evaluate failed; fallback to zeros")
 		return 0, {}, {mon=0, pts=0}
 	end
 end
@@ -76,8 +81,8 @@ ReqSyncUI.OnServerEvent:Connect(function(plr)
 	local now = os.clock()
 	local prev = _lastSyncAt[plr]
 	if prev and (now - prev) < DEBOUNCE_SEC then
-		-- 近すぎる要求は無視（ログだけ）
-		-- print(("[UiResync] debounced for %s (%.2f s)"):format(plr.Name, now - prev))
+		-- 近すぎる要求は無視（必要ならデバッグログ）
+		-- LOG.debug("debounced | user=%s dt=%.2f", plr.Name, now - prev)
 		return
 	end
 	_lastSyncAt[plr] = now
@@ -86,8 +91,10 @@ ReqSyncUI.OnServerEvent:Connect(function(plr)
 	local s = StateHub.get(plr)
 	if not s then return end
 
-	print(("[UiResync] lens deck=%d hand=%d board=%d taken=%d phase=%s")
-		:format(#(s.deck or {}), #(s.hand or {}), #(s.board or {}), #(s.taken or {}), tostring(s.phase)))
+	LOG.info(
+		"lens | user=%s deck=%d hand=%d board=%d taken=%d phase=%s",
+		plr.Name, #(s.deck or {}), #(s.hand or {}), #(s.board or {}), #(s.taken or {}), tostring(s.phase)
+	)
 
 	-- 結果表示中は余計な再送を避ける（State だけ押し直したい場合は pushState を残す）
 	if s.phase == "result" then
@@ -113,7 +120,7 @@ ReqSyncUI.OnServerEvent:Connect(function(plr)
 
 	-- 得点は「現在の取り札」で再採点（季節跨ぎの残留を避ける）
 	local total, roles, detail = safeEvaluate(s.taken)
-	print("[UiResync] ScorePush types:", typeof(total), typeof(roles), typeof(detail))
+	LOG.debug("ScorePush types: %s %s %s", typeof(total), typeof(roles), typeof(detail))
 	ScorePush:FireClient(plr, total, roles, detail)
 
 	-- ★ 状態は StateHub 側の正規ルートで送る（target/hands/rerolls/deckLeft などが埋まる）

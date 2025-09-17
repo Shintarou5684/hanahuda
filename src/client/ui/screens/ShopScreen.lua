@@ -1,5 +1,5 @@
 -- src/client/ui/screens/ShopScreen.lua
--- v0.9.6-P0-9 ShopScreen（言語コードを "ja"/"en" に正規化・"jp" は警告して "ja" へ）
+-- v0.9.6-P1-3 ShopScreen（Logger導入／言語コードを "ja"/"en" に正規化・"jp" は警告して "ja" へ）
 --  - [A] ShopFormat
 --  - [B] ShopCells
 --  - [C] ShopUI
@@ -13,6 +13,13 @@ Shop.__index = Shop
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
+
+-- Logger
+local Logger = require(SharedModules:WaitForChild("Logger"))
+-- ⚠️ Luau ではフィールド名に予約語（for）はドット記法不可。ブラケットで呼ぶ。
+local LOG = (typeof(Logger.scope) == "function" and Logger.scope("ShopScreen"))
+		or (typeof(Logger["for"]) == "function" and Logger["for"]("ShopScreen"))
+		or { debug=function()end, info=function()end, warn=function(...) warn(...) end }
 
 -- ui/components/*
 local uiRoot = script.Parent.Parent
@@ -43,10 +50,17 @@ export type Payload = {
 local function normToJa(lang: string?)
 	local v = ShopFormat.normLang(lang)
 	if v == "jp" then
-		warn("[Locale] ShopScreen: received legacy 'jp'; normalizing to 'ja'")
+		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
 		return "ja"
 	end
 	return v
+end
+
+local function countItems(p: Payload?): number
+	if not p then return 0 end
+	if typeof(p.items) == "table" then return #p.items end
+	if typeof(p.stock) == "table" then return #p.stock end
+	return 0
 end
 
 --==================================================
@@ -72,6 +86,7 @@ function Shop.new(deps)
 	ShopWires.wireButtons(self)
 	ShopWires.applyInfoPlaceholder(self)
 
+	LOG.debug("boot")
 	return self
 end
 
@@ -86,8 +101,8 @@ function Shop:setData(payload: Payload)
 		if nl and nl ~= payload.lang then payload.lang = nl end
 		self._lang = nl or self._lang
 	end
-	print("[SHOP][UI] setData items=", (payload and (payload.items and #payload.items or payload.stock and #payload.stock)) or 0)
 	self._payload = payload
+	LOG.debug("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
 	self:_render()
 end
 
@@ -102,14 +117,14 @@ function Shop:show(payload: Payload?)
 		self._payload = payload
 	end
 	self.gui.Enabled = true
-	print("[SHOP][UI] show (enabled=true)")
+	LOG.info("show | enabled=true items=%d lang=%s", countItems(self._payload), tostring(self._lang))
 	self:_render()
-	self:_applyRerollButtonState() -- ★ P0-5: 受信後にボタン可否を再評価
+	self:_applyRerollButtonState() -- P0-5: 受信後にボタン可否を再評価
 end
 
 function Shop:hide()
 	if self.gui.Enabled then
-		print("[SHOP][UI] hide (enabled=false)")
+		LOG.debug("hide | enabled=false")
 	end
 	self.gui.Enabled = false
 end
@@ -124,22 +139,23 @@ function Shop:update(payload: Payload?)
 		end
 		self._payload = payload
 	end
-	print("[SHOP][UI] update")
+	LOG.debug("update | items=%d lang=%s", countItems(self._payload), tostring(self._lang))
 	self:_render()
-	self:_applyRerollButtonState() -- ★ P0-5: 差分更新時も評価
+	self:_applyRerollButtonState() -- P0-5: 差分更新時も評価
 end
 
 function Shop:setLang(lang: string?)
+	-- ★ ログ出力を抑止（ノイジーなため）
 	self._lang = normToJa(lang)
-	print("[SHOP][UI] setLang ->", self._lang)
 	ShopWires.applyInfoPlaceholder(self)
-	-- ★ P0-8対応: setLang ではフルレンダしない（旧payloadでの再有効化を防ぐ）
+	-- P0-8対応: setLang ではフルレンダしない（旧payloadでの再有効化を防ぐ）
 end
 
 -- Remotes配線（委譲／非推奨フックを返すだけ）
 function Shop:attachRemotes(remotes: any, router: any?)
 	-- ShopWires.attachRemotes は警告を出しつつ「UIだけ更新する関数」を返す
 	-- （ClientMain が唯一 <ShopOpen> を受け、Router.show("shop", payload) まで行う想定）
+	LOG.debug("attachRemotes (compat)")
 	return ShopWires.attachRemotes(self, remotes, router)
 end
 

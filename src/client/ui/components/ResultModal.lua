@@ -3,23 +3,36 @@
 
 local M = {}
 
+-- 型（Luau）
+type NavIF = { next: (NavIF, string) -> () }
+type Handlers = { home: (() -> ())?, next: (() -> ())?, save: (() -> ())?, final: (() -> ())? }
+type ResultAPI = {
+	hide: (ResultAPI) -> (),
+	show: (ResultAPI, data: { rewardBank: number?, message: string?, clears: number? }?) -> (),
+	showFinal: (ResultAPI, titleText: string?, descText: string?, buttonText: string?, onClick: (() -> ())?) -> (),
+	setLocked: (ResultAPI, boolean, boolean) -> (),
+	on: (ResultAPI, Handlers) -> (),
+	bindNav: (ResultAPI, Nav: NavIF) -> (),
+	destroy: (ResultAPI) -> (),
+}
+
 local function setLocked(button: TextButton, locked: boolean)
 	if not button then return end
 	local base = button:GetAttribute("OrigText") or button.Text
 	if locked then
 		button.AutoButtonColor = false
 		button.BackgroundColor3 = Color3.fromRGB(220,220,220)
-		button.Text = base .. "  🔒"
+		button.Text = tostring(base) .. "  🔒"
 		button:SetAttribute("locked", true)
 	else
 		button.AutoButtonColor = true
 		button.BackgroundColor3 = Color3.fromRGB(240,240,240)
-		button.Text = base
+		button.Text = tostring(base)
 		button:SetAttribute("locked", false)
 	end
 end
 
-function M.create(parent: Instance)
+function M.create(parent: Instance): ResultAPI
 	-- 背景
 	local modalOverlay = Instance.new("TextButton")
 	modalOverlay.Name = "ResultBackdrop"
@@ -54,6 +67,9 @@ function M.create(parent: Instance)
 	title.AnchorPoint = Vector2.new(0.5,0)
 	title.TextXAlignment = Enum.TextXAlignment.Center
 	title.Font = Enum.Font.GothamBold
+	title.TextWrapped = true
+	title.RichText = true
+	title.ZIndex = 101
 	title.Text = "結果"
 
 	local desc = Instance.new("TextLabel")
@@ -65,6 +81,9 @@ function M.create(parent: Instance)
 	desc.Position = UDim2.new(0.5,0,0,70)
 	desc.AnchorPoint = Vector2.new(0.5,0)
 	desc.TextXAlignment = Enum.TextXAlignment.Center
+	desc.TextWrapped = true
+	desc.RichText = true
+	desc.ZIndex = 101
 	desc.Text = ""
 
 	-- ▼ ボタン行（3択用）
@@ -81,12 +100,14 @@ function M.create(parent: Instance)
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.Padding = UDim.new(0, 16)
 
-	local function mkBtn(text)
+	local function mkBtn(text: string): TextButton
 		local b = Instance.new("TextButton")
 		b.Size = UDim2.new(0.31, 0, 1, 0)
 		b.Text = text
 		b.AutoButtonColor = true
 		b.BackgroundColor3 = Color3.fromRGB(240,240,240)
+		b.TextWrapped = true
+		b.RichText = true
 		local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = b
 		b.Parent = btnRow
 		b.ZIndex = 102
@@ -106,12 +127,14 @@ function M.create(parent: Instance)
 	finalBtn.AnchorPoint = Vector2.new(0.5,0)
 	finalBtn.AutoButtonColor = true
 	finalBtn.BackgroundColor3 = Color3.fromRGB(240,240,240)
+	finalBtn.TextWrapped = true
+	finalBtn.RichText = true
 	local fcorner = Instance.new("UICorner"); fcorner.CornerRadius = UDim.new(0, 10); fcorner.Parent = finalBtn
 	finalBtn.Visible = false
 	finalBtn.ZIndex = 102
 
 	-- ハンドラ
-	local on = { home = nil, next = nil, save = nil, final = nil }
+	local on: Handlers = { home = nil, next = nil, save = nil, final = nil }
 
 	-- クリック結線（ロック中は無視）
 	btnHome.Activated:Connect(function()
@@ -129,11 +152,11 @@ function M.create(parent: Instance)
 		if on.final then on.final() end
 	end)
 
-	-- 背景クリックでは閉じない
+	-- 背景クリックでは閉じない（意図的にno-op）
 	modalOverlay.Activated:Connect(function() end)
 
 	-- API
-	local api = {}
+	local api: any = {}
 
 	function api:hide()
 		modalOverlay.Visible = false
@@ -159,7 +182,7 @@ function M.create(parent: Instance)
 	end
 
 	-- 冬（最終）専用：ワンボタン表示
-	function api:showFinal(titleText: string, descText: string, buttonText: string, onClick: (() -> ())?)
+	function api:showFinal(titleText: string?, descText: string?, buttonText: string?, onClick: (() -> ())?)
 		title.Text = titleText or "クリアおめでとう！"
 		desc.Text  = descText  or "このランは終了です。メニューに戻ります。"
 		finalBtn.Text = buttonText or "メニューに戻る"
@@ -180,20 +203,27 @@ function M.create(parent: Instance)
 	end
 
 	-- 3択/ワンボタンのハンドラ設定
-	function api:on(handlers)
-		on.home  = handlers.home
-		on.next  = handlers.next
-		on.save  = handlers.save
-		on.final = handlers.final
+	function api:on(handlers: Handlers)
+		on.home  = handlers and handlers.home  or on.home
+		on.next  = handlers and handlers.next  or on.next
+		on.save  = handlers and handlers.save  or on.save
+		on.final = handlers and handlers.final or on.final
 	end
 
-	-- ▼ 追加：Nav 糖衣（UI側は self._resultModal:bindNav(self.deps.Nav) だけでOK）
-	function api:bindNav(nav)
+	-- ▼ Nav 糖衣（UI側は self._resultModal:bindNav(self.deps.Nav) だけでOK）
+	function api:bindNav(nav: NavIF)
 		if not nav or type(nav.next) ~= "function" then return end
 		on.home  = function() nav:next("home") end
 		on.next  = function() nav:next("next") end
 		on.save  = function() nav:next("save") end
 		on.final = function() nav:next("home") end
+	end
+
+	-- 破棄（画面遷移時のリーク防止）
+	function api:destroy()
+		self:hide()
+		pcall(function() resultModal:Destroy() end)
+		pcall(function() modalOverlay:Destroy() end)
 	end
 
 	return api

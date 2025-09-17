@@ -3,6 +3,7 @@
 -- 分類: 光 / タネ / 短冊 / カス（言語で Bright / Seed / Ribbon / Chaff に自動切替）
 -- 各カテゴリは 1月→12月 で並び、カードは横方向に 1/3 だけ重ねて表示
 -- タグは不透明の白ベース＋濃色文字、タグの“直下”からカードを開始
+-- v0.9.7-P1-1: 言語コード外部I/Fを "ja"/"en" に統一（受信 "jp" は警告して "ja" へ正規化）
 
 local RS = game:GetService("ReplicatedStorage")
 local Theme   = require(RS:WaitForChild("Config"):WaitForChild("Theme"))
@@ -27,19 +28,44 @@ local function clearChildrenExceptLayouts(parent: Instance)
 	end
 end
 
+-- "jp" → "ja" 正規化
+local function normLangJa(v: string?): string?
+	local s = tostring(v or ""):lower()
+	if s == "ja" or s == "jp" then
+		if s == "jp" then warn("[TakenRenderer] received legacy 'jp'; normalizing to 'ja'") end
+		return "ja"
+	elseif s == "en" then
+		return "en"
+	end
+	return nil
+end
+
+-- 現在言語（"ja"/"en"。取得不可なら "en"）
 local function curLang(): string
-	local ok, v = pcall(function()
-		return (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
-	end)
-	if ok and (v == "jp" or v == "en") then return v end
+	-- Locale.getGlobal
+	if typeof(Locale.getGlobal) == "function" then
+		local ok, v = pcall(Locale.getGlobal)
+		if ok then
+			local n = normLangJa(v)
+			if n then return n end
+		end
+	end
+	-- Locale.pick
+	if typeof(Locale.pick) == "function" then
+		local ok, v = pcall(Locale.pick)
+		if ok then
+			local n = normLangJa(v)
+			if n then return n end
+		end
+	end
 	return "en"
 end
 
--- kind名 → 表示カテゴリ名（JP/EN）
-local CATEGORY_JP = { bright = "光",     seed = "タネ",   ribbon = "短冊",  chaff = "カス",   kasu = "カス" }
+-- kind名 → 表示カテゴリ名（JA/EN）
+local CATEGORY_JA = { bright = "光",     seed = "タネ",   ribbon = "短冊",  chaff = "カス",   kasu = "カス" }
 local CATEGORY_EN = { bright = "Bright", seed = "Seed",   ribbon = "Ribbon", chaff = "Chaff", kasu = "Chaff" }
 -- 表示順（固定）
-local CAT_ORDER_JP = { "光", "タネ", "短冊", "カス" }
+local CAT_ORDER_JA = { "光", "タネ", "短冊", "カス" }
 local CAT_ORDER_EN = { "Bright", "Seed", "Ribbon", "Chaff" }
 
 -- 役色（Theme があればそちらを優先）
@@ -70,9 +96,9 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 	if not parent or not parent.Destroy then return end
 	clearChildrenExceptLayouts(parent)
 
-	local lang     = curLang()
-	local CAT_MAP  = (lang == "jp") and CATEGORY_JP or CATEGORY_EN
-	local CAT_ORDER= (lang == "jp") and CAT_ORDER_JP or CAT_ORDER_EN
+	local lang      = curLang()
+	local CAT_MAP   = (lang == "ja") and CATEGORY_JA or CATEGORY_EN
+	local CAT_ORDER = (lang == "ja") and CAT_ORDER_JA or CAT_ORDER_EN
 
 	-- バケット（キーは表示名で）
 	local buckets = {}
@@ -145,9 +171,9 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 
 			-- 種類の色ドット
 			local kindGuess = "chaff"
-			if catName == CATEGORY_JP.bright or catName == CATEGORY_EN.bright then kindGuess = "bright"
-			elseif catName == CATEGORY_JP.seed or catName == CATEGORY_EN.seed then kindGuess = "seed"
-			elseif catName == CATEGORY_JP.ribbon or catName == CATEGORY_EN.ribbon then kindGuess = "ribbon"
+			if catName == CATEGORY_JA.bright or catName == CATEGORY_EN.bright then kindGuess = "bright"
+			elseif catName == CATEGORY_JA.seed or catName == CATEGORY_EN.seed then kindGuess = "seed"
+			elseif catName == CATEGORY_JA.ribbon or catName == CATEGORY_EN.ribbon then kindGuess = "ribbon"
 			end
 
 			local dot = Instance.new("Frame")
@@ -211,7 +237,7 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 					})
 				end
 
-				-- ★取り札のカードには“下部バッジ”を付けない（見た目をすっきり）
+				-- ★取り札カードには“下部バッジ”は付けない（見た目をすっきり）
 				-- （何もしない）
 
 				x += stepX

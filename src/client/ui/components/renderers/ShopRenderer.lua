@@ -1,10 +1,16 @@
 -- src/client/ui/components/renderers/ShopRenderer.lua
--- v0.9.SIMPLE-2 ShopRenderer：Shop画面の描画処理（_render 相当）
--- ポリシー: リロール可否は「所持金 >= 費用」のみで判定。_rerollBusy は renderer では参照しない。
+-- v0.9.SIMPLE-3 ShopRenderer：Shop画面の描画処理（_render 相当）
+-- 変更点（P1-3）:
+--  - Logger 導入（print → LOG.debug/info に置換）
+--  - 既存ポリシー維持：リロール可否は「所持金 >= 費用」のみで判定。_rerollBusy は renderer では参照しない。
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
+
+-- Logger
+local Logger = require(SharedModules:WaitForChild("Logger"))
+local LOG    = Logger.scope("ShopRenderer")
 
 -- renderers から 1つ上に戻って components のモジュールを参照
 local ShopCells = require(script.Parent.Parent:WaitForChild("ShopCells"))
@@ -22,8 +28,7 @@ function M.render(self)
   local mon = tonumber(p.mon or p.totalMon or 0) or 0
   local rerollCost = tonumber(p.rerollCost or 1) or 1
 
-  print(("[SHOP][UI] render lang=%s items=%d mon=%d rerollCost=%d")
-    :format(lang, #items, mon, rerollCost))
+  LOG.debug("render | lang=%s items=%d mon=%d rerollCost=%d", tostring(lang), #items, mon, rerollCost)
 
   -- タイトル・ボタン
   if nodes.title then
@@ -84,7 +89,7 @@ function M.render(self)
     if self._buyBusy then return end
     if not (self.deps and self.deps.remotes and self.deps.remotes.BuyItem) then return end
     self._buyBusy = true
-    print(("[SHOP][UI] BUY click id=%s name=%s"):format(it.id or "?", it.name or "?"))
+    LOG.info("BUY click | id=%s name=%s", tostring(it.id or "?"), tostring(it.name or "?"))
     self.deps.remotes.BuyItem:FireServer(it.id)
     task.delay(0.25, function() self._buyBusy = false end)
   end
@@ -109,9 +114,14 @@ function M.render(self)
   -- サマリ：基本情報のみ（残回数表示は撤去）
   local s = {}
   if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
-    table.insert(s, ShopI18n.t(lang, "summary_cleared_fmt",
-      tonumber(p.seasonSum or 0), tonumber(p.target or 0),
-      tonumber(p.rewardMon or 0), tonumber(p.totalMon or mon or 0)))
+    table.insert(s, ShopI18n.t(
+      lang,
+      "summary_cleared_fmt",
+      tonumber(p.seasonSum or 0),
+      tonumber(p.target or 0),
+      tonumber(p.rewardMon or 0),
+      tonumber(p.totalMon or mon or 0)
+    ))
   end
   table.insert(s, ShopI18n.t(lang, "summary_items_fmt", #items))
   table.insert(s, ShopI18n.t(lang, "summary_money_fmt", mon))

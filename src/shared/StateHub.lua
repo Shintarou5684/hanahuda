@@ -1,8 +1,13 @@
 -- ReplicatedStorage/SharedModules/StateHub.lua
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
 -- P0-11: StatePush の payload に goal:number を追加（UI側の文字列パース依存を排除）
+-- P1-3: Logger 導入（print/warn を LOG.* に置換）
 
 local RS = game:GetService("ReplicatedStorage")
+
+-- Logger
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("StateHub")
 
 -- 依存モジュール
 local Scoring     = require(RS:WaitForChild("SharedModules"):WaitForChild("Scoring"))
@@ -81,6 +86,7 @@ end
 --========================
 function StateHub.init(remotesTable:any)
 	Remotes = remotesTable
+	LOG.info("initialized")
 end
 
 --========================
@@ -177,7 +183,7 @@ function StateHub.pushState(plr: Player)
 
 	-- スコア（リスト/直近役表示）
 	if Remotes.ScorePush then
-		print("[StateHub] ScorePush types:", typeof(total), typeof(roles), typeof(detail))
+		LOG.debug("ScorePush types: %s %s %s", typeof(total), typeof(roles), typeof(detail))
 		Remotes.ScorePush:FireClient(plr, total, roles, detail) -- detail={mon,pts}
 	end
 

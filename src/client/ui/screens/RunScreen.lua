@@ -1,15 +1,23 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
+-- v0.9.7-P1-3
+--  - ログを共通 Logger に統一（print/warn を撤去）
+--  - 以降の変更点は先頭コメント参照
 -- v0.9.6-P0-9 言語コード外部I/Fを "ja"/"en" に統一（受信 "jp" は警告して "ja" へ正規化）
 -- v0.9.5 ResultModal final文言をLocale化（英語フォールバックあり）＋Nav統一
 --        MisleadingAndOr を if-then-else に置換（静的解析対応）
 --        P0-8: no-op削除／_G依存排除／役なしは Locale.t("ROLES_NONE")
 -- v0.9.6-P0-11 goal 数値を payload から参照（情報行パースは撤廃）
+-- v0.9.7-P1-1  ResultModal を Nav 単一点に直結（bindNav）。final/3択の判定を canNext/canSave/locks で統一。
 
 local Run = {}
 Run.__index = Run
 
 local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Logger
+local Logger = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("RunScreen")
 
 -- Modules
 local Config = ReplicatedStorage:WaitForChild("Config")
@@ -41,7 +49,7 @@ local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 local function normLangJa(lang: string?)
 	local v = tostring(lang or ""):lower()
 	if v == "jp" then
-		warn("[Locale] RunScreen: received legacy 'jp'; normalizing to 'ja'")
+		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
 		return "ja"
 	elseif v == "ja" then
 		return "ja"
@@ -121,7 +129,7 @@ function Run.new(deps)
 		end
 	end
 	self._lang = initialLang
-	print("[LANG_FLOW] Run.new initialLang=", initialLang)
+	LOG.debug("init lang=%s", tostring(initialLang))
 
 	-- UI 構築
 	local ui = UIBuilder.build(nil, { lang = initialLang })
@@ -153,49 +161,40 @@ function Run.new(deps)
 	self._overlay     = Overlay.create(self.frame, loadingText)
 	self._resultModal = ResultModal.create(self.frame)
 
-	-- ResultModal → Nav.next("...") に統一（DecideNext フォールバック）
-	self._resultModal:on({
-		home = function()
-			local Nav = self.deps and self.deps.Nav
-			if Nav and type(Nav.next) == "function" then
-				Nav:next("home")
-			elseif self.deps.DecideNext then
-				self.deps.DecideNext:FireServer("home")
-			end
-		end,
-		next = function()
-			local Nav = self.deps and self.deps.Nav
-			if Nav and type(Nav.next) == "function" then
-				Nav:next("next")
-			elseif self.deps.DecideNext then
-				self.deps.DecideNext:FireServer("next")
-			end
-		end,
-		save = function()
-			local Nav = self.deps and self.deps.Nav
-			if Nav and type(Nav.next) == "function" then
-				Nav:next("save")
-			elseif self.deps.DecideNext then
-				self.deps.DecideNext:FireServer("save")
-			end
-		end,
-	})
+	-- ▼ P1-1: ResultModal → Nav 単一点（Nav がなければ DecideNext でフォールバック）
+	if self.deps and self.deps.Nav and type(self.deps.Nav.next) == "function" then
+		self._resultModal:bindNav(self.deps.Nav)
+	else
+		self._resultModal:on({
+			home = function()
+				if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("home") end
+			end,
+			next = function()
+				if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("next") end
+			end,
+			save = function()
+				if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("save") end
+			end,
+			final = function()
+				if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("home") end
+			end,
+		})
+	end
 
 	-- 役倍率パネル
 	self._yakuPanel = YakuPanel.mount(self.gui)
 
 	--- Studio専用 DevTools
-if RunService:IsStudio() then
-    local r = self.deps and self.deps.remotes
-    local grantRyo  = (self.deps and self.deps.DevGrantRyo)  or (r and r.DevGrantRyo)
-    local grantRole = (self.deps and self.deps.DevGrantRole) or (r and r.DevGrantRole)
-
-    if grantRyo or grantRole then
-        DevTools.create(self.frame, { DevGrantRyo = grantRyo, DevGrantRole = grantRole }, {
-            grantRyoAmount = 1000, offsetX = 10, offsetY = 10, width = 160, height = 32
-        })
-    end
-end
+	if RunService:IsStudio() then
+		local r = self.deps and self.deps.remotes
+		local grantRyo  = (self.deps and self.deps.DevGrantRyo)  or (r and r.DevGrantRyo)
+		local grantRole = (self.deps and self.deps.DevGrantRole) or (r and r.DevGrantRole)
+		if grantRyo or grantRole then
+			DevTools.create(self.frame, { DevGrantRyo = grantRyo, DevGrantRole = grantRole }, {
+				grantRyoAmount = 1000, offsetX = 10, offsetY = 10, width = 160, height = 32
+			})
+		end
+	end
 
 	-- 内部状態
 	self._selectedHandIdx = nil
@@ -281,13 +280,46 @@ end
 		self._resultShown = true
 
 		local data = b
-		local isFinal = false
-		if data.isFinal == true or tonumber(data.season) == 4 or tostring(data.seasonStr or "") == "冬" then
-			isFinal = true
+
+		-- ▼ 可否情報の収集（ops/locks を優先、なければ options / canX を後方互換で）
+		local canNext, canSave
+		-- 正準 ops
+		if typeof(data.ops) == "table" then
+			if typeof(data.ops.next) == "table" then canNext = (data.ops.next.enabled == true) end
+			if typeof(data.ops.save) == "table" then canSave = (data.ops.save.enabled == true) end
+		end
+		-- 互換 options
+		if canNext == nil and typeof(data.options) == "table" and typeof(data.options.goNext) == "table" then
+			canNext = (data.options.goNext.enabled == true)
+		end
+		if canSave == nil and typeof(data.options) == "table" and typeof(data.options.saveQuit) == "table" then
+			canSave = (data.options.saveQuit.enabled == true)
+		end
+		-- さらに互換（bool）
+		if canNext == nil and data.canNext ~= nil then canNext = (data.canNext == true) end
+		if canSave == nil and data.canSave ~= nil then canSave = (data.canSave == true) end
+
+		-- locks が届いていればそれを優先（UI用に計算済み）
+		local nextLocked, saveLocked
+		if typeof(data.locks) == "table" then
+			if typeof(data.locks.nextLocked) == "boolean" then nextLocked = data.locks.nextLocked end
+			if typeof(data.locks.saveLocked) == "boolean" then saveLocked = data.locks.saveLocked end
+		end
+		if nextLocked == nil and canNext ~= nil then nextLocked = (canNext ~= true) end
+		if saveLocked == nil and canSave ~= nil then saveLocked = (canSave ~= true) end
+
+		-- 通算クリア >=3 の場合は強制開放（サーバと二重に守る）
+		local clears = tonumber(data.clears) or 0
+		if clears >= 3 then
+			nextLocked, saveLocked = false, false
+			canNext, canSave = true, true
 		end
 
-		if isFinal then
-			-- ▼ Locale化：キー欠落時は英語フォールバック（Locale.tが担保）
+		-- ▼ final（ワンボタン） or 3択 の決定
+		local isFinalView = (nextLocked == true and saveLocked == true)
+
+		if isFinalView then
+			-- Locale化ワンボタン
 			local lang = resolveLangOrDefault(self._lang)
 			local ttl  = Locale.t(lang, "RESULT_FINAL_TITLE")
 			local desc = Locale.t(lang, "RESULT_FINAL_DESC")
@@ -296,10 +328,11 @@ end
 			self._resultModal:showFinal(
 				ttl, desc, btn,
 				function()
+					-- Nav: 単一点（フォールバックは create 時に設定済み）
 					local Nav = self.deps and self.deps.Nav
 					if Nav and type(Nav.next) == "function" then
 						Nav:next("home")
-					elseif self.deps.DecideNext then
+					elseif self.deps and self.deps.DecideNext then
 						self.deps.DecideNext:FireServer("home")
 					end
 					self._resultModal:hide()
@@ -308,19 +341,9 @@ end
 			return
 		end
 
+		-- 3択表示（必要に応じてロック）
 		self._resultModal:show(data)
-
-		local clears = tonumber(data.clears) or 0
-		local canNext, canSave = false, false
-		if typeof(data.options) == "table" then
-			if typeof(data.options.goNext) == "table" then canNext = (data.options.goNext.enabled == true) end
-			if typeof(data.options.saveQuit) == "table" then canSave = (data.options.saveQuit.enabled == true) end
-		end
-		if not canNext and data.canNext ~= nil then canNext = (data.canNext == true) end
-		if not canSave and data.canSave ~= nil then canSave = (data.canSave == true) end
-		if clears >= 3 then canNext, canSave = true, true end
-
-		self._resultModal:setLocked(not canNext, not canSave)
+		self._resultModal:setLocked(nextLocked == true, saveLocked == true)
 	end
 
 	-- ボタン
@@ -361,7 +384,7 @@ end
 	self.onState       = function(_, st)                   onState(st) end
 	self.onStageResult = function(_, ...)                  onStageResult(...) end
 
-	print("[LANG_FLOW] Run.new done | lang=", self._lang)
+	LOG.debug("new done | lang=%s", tostring(self._lang))
 	return self
 end
 
@@ -370,10 +393,10 @@ function Run:setLang(lang)
 	local n = normLangJa(lang)
 	if n ~= "ja" and n ~= "en" then return end
 	if self._lang == n then
-		print("[LANG_FLOW] Run.setLang ignored(same) | lang=", n)
+		LOG.debug("setLang ignored (same) | lang=%s", n)
 		return
 	end
-	print("[LANG_FLOW] Run.setLang apply | from=", self._lang, "to=", n)
+	LOG.debug("setLang apply | from=%s to=%s", tostring(self._lang), tostring(n))
 	self._lang = n
 	if type(self._ui_setLang) == "function" then
 		self._ui_setLang(n)
@@ -389,18 +412,14 @@ function Run:show(payload)
 	if payload and payload.lang then
 		local n = normLangJa(payload.lang)
 		if n and n ~= self._lang then
-			print("[LANG_FLOW] Run.show payload.lang=", n, "(cur=", self._lang,")")
+			LOG.debug("show payload.lang=%s (cur=%s)", tostring(n), tostring(self._lang))
 			self:setLang(n)
 		end
 	else
-		local g = self._lang
 		local gg = safeGetGlobalLang()
 		if gg and gg ~= self._lang then
-			print("[LANG_FLOW] Run.show sync from global | from=", self._lang, "to=", gg)
-			g = gg
-		end
-		if g ~= self._lang then
-			self:setLang(g)
+			LOG.debug("show sync from global | from=%s to=%s", tostring(self._lang), tostring(gg))
+			self:setLang(gg)
 		end
 	end
 

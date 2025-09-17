@@ -1,7 +1,15 @@
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
+-- UIビルダーは親付けしない契約（親付けは ScreenRouter の責務）
+-- v0.9.7-P1-3: Logger導入／言語コードを "ja"/"en" に統一（入力 "jp" は "ja" へ正規化）
+-- v0.9.6-P0-11 以降：親付け除去／その他の挙動は従来どおり
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = ReplicatedStorage:WaitForChild("Config")
+
+-- Logger
+local Logger = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("RunScreenUI")
+
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
 
@@ -9,6 +17,26 @@ local lib    = script.Parent.Parent:WaitForChild("lib")
 local UiUtil = require(lib:WaitForChild("UiUtil"))
 
 local M = {}
+
+--=== lang helpers =======================================================
+local function normLang(v: string?): string?
+	local x = tostring(v or ""):lower()
+	if x == "ja" or x == "en" then return x end
+	if x == "jp" then
+		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
+		return "ja"
+	end
+	return nil
+end
+
+local function pickInitialLang(): string
+	local g = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or nil
+	local n = normLang(g)
+	if n then return n end
+	local p = (type(Locale.pick)=="function" and Locale.pick()) or nil
+	return normLang(p) or "en"
+end
+--=======================================================================
 
 --=== helpers ============================================================
 local function addCornerStroke(frame: Instance, radius: number?, strokeColor: Color3?, thickness: number?)
@@ -46,7 +74,7 @@ local function makePanel(parent: Instance, name: string, sizeScale: Vector2, lay
 		local title = UiUtil.makeLabel(p, name.."Title", titleText, UDim2.new(1,-12,0,24), UDim2.new(0,6,0,6), nil, titleColor)
 		title.TextScaled = true
 		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.ZIndex = 3 -- ★ 木目より確実に前面へ
+		title.ZIndex = 3 -- 木目より確実に前面へ
 	end
 	return p
 end
@@ -65,9 +93,9 @@ local function makeSideBtn(parent: Instance, name: string, text: string, bg: Col
 end
 --=======================================================================
 
--- 言語：Global → OS 推定
-local _lang = (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
-print("[LANG_FLOW] RunScreenUI.init _lang =", _lang)
+-- 言語：Global → OS 推定（"jp" は "ja" へ正規化）
+local _lang = pickInitialLang()
+LOG.debug("init _lang=%s", tostring(_lang))
 
 -- ラベル適用
 local function applyTexts(tRefs)
@@ -77,7 +105,7 @@ local function applyTexts(tRefs)
 	-- 右カラム：取り札
 	if tRefs.takenPanel and tRefs.takenPanel:FindFirstChild("TakenPanelTitle") then
 		tRefs.takenPanel.TakenPanelTitle.Text = t("RUN_TAKEN_TITLE")
-		tRefs.takenPanel.TakenPanelTitle.ZIndex = 3 -- 念のため
+		tRefs.takenPanel.TakenPanelTitle.ZIndex = 3
 	end
 
 	-- 左カラム：ボタン
@@ -106,17 +134,22 @@ local function applyTexts(tRefs)
 		tRefs.info.Text = t("RUN_INFO_PLACEHOLDER")
 	end
 
-	-- スコア：辞書の初期値（言語ごとに2行目が Mon/Pts / 文×点）
+	-- スコア：辞書の初期値
 	if tRefs.scoreBox then
 		tRefs.scoreBox.Text = t("RUN_SCOREBOX_INIT")
 	end
 end
 
-function M.build(parentGui: Instance, opts)
-	if opts and (opts.lang == "jp" or opts.lang == "en") then
-		_lang = opts.lang
-	end
-	print("[LANG_FLOW] RunScreenUI.build lang=", _lang)
+--[[
+UIビルダーは親付けしない契約に統一：
+- 第1引数 parentGui は互換のため受け取るが、**親付けには使用しない**（無視）。
+- ScreenGui は生成するが、**Parent を設定しない**。親付けは ScreenRouter が行う。
+]]
+function M.build(_parentGuiIgnored: Instance?, opts)
+	local want = opts and opts.lang or nil
+	local n = normLang(want)
+	if n then _lang = n end
+	LOG.debug("build lang=%s (opts=%s)", tostring(_lang), tostring(want))
 
 	--=== Theme ===========================================================
 	local T = Theme or {}
@@ -145,17 +178,14 @@ function M.build(parentGui: Instance, opts)
 	local COLOR_PANEL_BG     = (T.COLORS and T.COLORS.PanelBg)         or Color3.fromRGB(255,255,255)
 	local COLOR_PANEL_STROKE = (T.COLORS and T.COLORS.PanelStroke)     or Color3.fromRGB(220,225,235)
 
-	--=== ScreenGui =======================================================
-	local g = parentGui
-	if not g or not g:IsA("ScreenGui") then
-		g = Instance.new("ScreenGui")
-		g.Name = "RunScreen"
-		g.ResetOnSpawn = false
-		g.IgnoreGuiInset = true
-		g.DisplayOrder = 10
-		g.Enabled = true
-		g.Parent = parentGui
-	end
+	--=== ScreenGui（※親付けしない） ======================================
+	local g = Instance.new("ScreenGui")
+	g.Name = "RunScreen"
+	g.ResetOnSpawn = false
+	g.IgnoreGuiInset = true
+	g.DisplayOrder = 10
+	g.Enabled = true
+	-- ★ ここで Parent を設定しない（Router が playerGui に付ける）
 
 	-- 背景
 	local roomBG = Instance.new("ImageLabel")
@@ -234,7 +264,7 @@ function M.build(parentGui: Instance, opts)
 	goalText.TextScaled = true
 	goalText.TextXAlignment = Enum.TextXAlignment.Left
 
-	-- スコア＋役一覧（水色）
+	-- スコア＋役一覧
 	local scorePanel = makePanel(left, "ScorePanel", Vector2.new(1, 0.26), 3, COLOR_PANEL_BG, COLOR_PANEL_STROKE, nil, nil)
 	local scoreStack = Instance.new("Frame"); scoreStack.Name="ScoreStack"; scoreStack.Parent=scorePanel
 	scoreStack.Size = UDim2.new(1,-12,1,-12); scoreStack.Position = UDim2.new(0,6,0,6); scoreStack.BackgroundTransparency=1
@@ -306,7 +336,7 @@ function M.build(parentGui: Instance, opts)
 	local takenPanel = makePanel(rightPane, "TakenPanel", Vector2.new(1,1), 1, COLOR_PANEL_BG, COLOR_PANEL_STROKE, Locale.t(_lang, "RUN_TAKEN_TITLE"), COLOR_TEXT)
 	local takenBG = Instance.new("ImageLabel"); takenBG.Name="TakenBG"; takenBG.Parent=takenPanel
 	takenBG.Image=TAKEN_BG_IMAGE; takenBG.BackgroundTransparency=1; takenBG.ScaleType=Enum.ScaleType.Crop; takenBG.Size=UDim2.fromScale(1,1)
-	takenBG.ZIndex=1; takenBG.ImageTransparency=TRANSP.takenBg or 0 -- ★ 木目はZ=1のまま（消えない）
+	takenBG.ZIndex=1; takenBG.ImageTransparency=TRANSP.takenBg or 0
 	local takenCorner = Instance.new("UICorner"); takenCorner.CornerRadius=UDim.new(0, Theme.PANEL_RADIUS or 10); takenCorner.Parent=takenBG
 	local takenBox = Instance.new("ScrollingFrame"); takenBox.Name="TakenBox"; takenBox.Parent=takenPanel
 	takenBox.Size=UDim2.new(1,-12,1,-42); takenBox.Position=UDim2.new(0,6,0,36); takenBox.AutomaticCanvasSize=Enum.AutomaticSize.Y
@@ -325,23 +355,25 @@ function M.build(parentGui: Instance, opts)
 
 	-- 初期テキスト
 	local function setLang(newLang: string)
-		if newLang ~= "jp" and newLang ~= "en" then return end
-		_lang = newLang
+		local n2 = normLang(newLang)
+		if not n2 then return end
+		_lang = n2
 		applyTexts(refs)
 	end
 	applyTexts(refs)
 
-	-- ★ 言語変更イベント購読（Home の切替 → setGlobal で即反映）
+	-- 言語変更イベント購読（Home の切替 → setGlobal で即反映）
 	local langConn = nil
 	if typeof(Locale.changed) == "RBXScriptSignal" then
 		langConn = Locale.changed:Connect(function(newLang)
-			if newLang == "jp" or newLang == "en" then setLang(newLang) end
+			local nn = normLang(newLang)
+			if nn then setLang(nn) end
 		end)
 	end
 
-	-- 任意：スコア文面のフォーマッタ（Run側で使いたい時に）
+	-- 任意：スコア文面のフォーマッタ（Run側で利用）
 	refs.formatScore = function(score, mons, pts, rolesText)
-		if _lang == "jp" then
+		if _lang == "ja" then
 			return string.format("得点：%d\n文%d×%d点\n%s", score or 0, mons or 0, pts or 0, rolesText or "役：--")
 		else
 			return string.format("Score: %d\n%dMon × %dPts\n%s", score or 0, mons or 0, pts or 0, rolesText or "Roles: --")
@@ -355,7 +387,7 @@ function M.build(parentGui: Instance, opts)
 	refs.setLang = setLang
 	refs.getLang = function() return _lang end
 
-	print(("[LANG_FLOW] RunScreenUI.build done | lang=%s"):format(tostring(_lang)))
+	LOG.debug("build done | lang=%s", tostring(_lang))
 	return refs
 end
 

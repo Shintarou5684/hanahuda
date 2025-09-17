@@ -1,14 +1,28 @@
 -- StarterPlayerScripts/UI/ClientMain.client.lua
--- v0.9.6-P0-9 Router＋Remote結線（NavClient注入／vararg不使用）
+-- v0.9.6-P1-3 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
 -- 仕様メモ:
 --   * <ShopOpen> は **ClientMainのみ** で受信し、Router.show("shop", payload) に一本化。
 --   * 言語コードは外部公開を "ja"/"en" に統一（"jp" を受信した場合は "ja" へ正規化して警告）
-
-print("[ClientMain] boot")
+--   * print/warn を共通 Logger に置換（公開時は閾値で抑止可能）
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local Remotes = RS:WaitForChild("Remotes")
+
+--========================
+-- Logger
+--========================
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("ClientMain")  -- ★ for → scope に変更
+
+-- 公開ビルドで抑止したい場合は INFO/WARN へ（Studioは Logger.DEBUG にしてもOK）
+Logger.configure({
+	level = Logger.INFO,
+	timePrefix = true,
+	dupWindowSec = 0.5,
+})
+
+LOG.info("boot")
 
 --========================
 -- Locale（存在しない場合のフォールバック込み）
@@ -17,7 +31,7 @@ local okLocale, Locale = pcall(function()
 	return require(RS:WaitForChild("Config"):WaitForChild("Locale"))
 end)
 if not okLocale or type(Locale) ~= "table" then
-	warn("[ClientMain] Locale missing; fallback")
+	LOG.warn("Locale missing; using fallback")
 	local _g = "en"
 	Locale = {}
 	function Locale.getGlobal() return _g end
@@ -35,13 +49,15 @@ local function normLang(v)
 	v = tostring(v or ""):lower()
 	if v == "ja" or v == "en" then return v end
 	if v == "jp" then
-		warn("[Locale] ClientMain: received legacy 'jp'; normalizing to 'ja'")
+		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
 		return "ja"
 	end
 	return nil
 end
 
--- ▼ 追加：NavClient
+--========================
+-- NavClient
+--========================
 local NavClient = require(RS:WaitForChild("SharedModules"):WaitForChild("NavClient"))
 
 --========================
@@ -100,7 +116,7 @@ local Router
 do
 	local ok, mod = pcall(require, ScreenRouterModule)
 	if not ok then
-		warn("[ClientMain] require(ScreenRouter) failed; stub:", mod)
+		LOG.warn("require(ScreenRouter) failed; stub used: %s", tostring(mod))
 		mod = {}
 	end
 	if type(mod) ~= "table" then mod = {} end
@@ -164,9 +180,11 @@ Router.setDeps({
 --========================================
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
-		Locale.setGlobal(payload.lang) -- Locale側で "jp"→"ja" 正規化される想定
+		local nl = normLang(payload.lang) or payload.lang
+		Locale.setGlobal(nl)
 	end
 	Router.show("home", payload)
+	LOG.info("Router.show -> home")
 end)
 
 ShopOpen.OnClientEvent:Connect(function(payload)
@@ -179,7 +197,7 @@ ShopOpen.OnClientEvent:Connect(function(payload)
 	local nl = normLang(p.lang)
 	if nl and nl ~= p.lang then p.lang = nl end
 	Router.show("shop", p)
-	print("[SHOP][ClientMain] <ShopOpen> routed once")
+	LOG.info("<ShopOpen> routed once | lang=%s", tostring(p.lang))
 end)
 
 RoundReady.OnClientEvent:Connect(function()
@@ -190,6 +208,7 @@ RoundReady.OnClientEvent:Connect(function()
 		Router.call("run", "setLang", lang)
 		Router.call("run", "requestSync")
 	end
+	LOG.info("RoundReady → run | lang=%s", lang)
 end)
 
 StatePush.OnClientEvent:Connect(function(st)
@@ -222,4 +241,4 @@ StageResult.OnClientEvent:Connect(function(payload)
 	if Router and type(Router.call)=="function" then Router.call("run", "onStageResult", payload) end
 end)
 
-print("[ClientMain] ready")
+LOG.info("ready")

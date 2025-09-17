@@ -1,10 +1,11 @@
 -- StarterPlayerScripts/UI/ScreenRouter.lua
 -- シンプルな画面ルーター：同じ画面への show は再実行しない（ちらつき対策）
--- v0.9.3:
+-- v0.9.4 (P1-3 logger):
 --  - current==name の場合、非表示ループを完全スキップ（ちらつきゼロ）
 --  - Enabled/Visible を型ガードして安全化（ScreenGui/GuiObject 両対応）
 --  - setData → updateOrShow だけ行う
---  - ログ: "Router.show updated same screen for <name>"
+--  - Logger 導入（print/warn を LOG.* に置換）
+--  - ログ例: LOG.debug("Router.show updated same screen for %s", name)
 
 local Router = {}
 
@@ -20,6 +21,10 @@ local _current   = nil   -- 現在の画面名
 local RS     = game:GetService("ReplicatedStorage")
 local Config = RS:WaitForChild("Config")
 local Locale = require(Config:WaitForChild("Locale"))
+
+-- Logger
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("ScreenRouter")
 
 --==================================================
 -- ヘルパ：可視状態の安全設定（ScreenGui/GuiObject 両対応）
@@ -38,6 +43,7 @@ end
 --==================================================
 function Router.init(screenMap)
 	_map = screenMap
+	LOG.info("initialized")
 end
 
 function Router.setDeps(d)
@@ -51,6 +57,7 @@ function Router.setDeps(d)
 			end
 		end
 	end
+	LOG.debug("deps set (playerGui=%s)", tostring(_deps and _deps.playerGui))
 end
 
 --==================================================
@@ -123,10 +130,10 @@ end
 local function updateOrShow(inst, payload)
 	if type(inst.update) == "function" then
 		local ok, err = pcall(function() inst:update(payload) end)
-		if not ok then warn("[ScreenRouter] update failed:", err) end
+		if not ok then LOG.warn("update failed: %s", tostring(err)) end
 	elseif type(inst.show) == "function" then
 		local ok, err = pcall(function() inst:show(payload) end)
-		if not ok then warn("[ScreenRouter] show (as update) failed:", err) end
+		if not ok then LOG.warn("show(as update) failed: %s", tostring(err)) end
 	end
 end
 
@@ -143,13 +150,13 @@ function Router.show(arg, payload)
 		name = arg
 	end
 	if type(name) ~= "string" then
-		warn("[ScreenRouter] show: invalid name:", typeof(name))
+		LOG.warn("show: invalid name: %s", typeof(name))
 		return
 	end
 
 	-- 2) payload を正規化（lang を必ず持たせる）
 	payload = normalizePayload(payload)
-	print("[LANG_FLOW] Router.show ->", name, "payload.lang=", payload.lang)
+	LOG.debug("Router.show -> %s | lang=%s", name, tostring(payload.lang))
 
 	-- 3) インスタンス確保（new/create/そのままテーブルの順で対応）
 	local inst
@@ -157,7 +164,7 @@ function Router.show(arg, payload)
 		inst = ensure(name)
 	end)
 	if not ok or type(inst) ~= "table" then
-		warn("[ScreenRouter] show: failed to ensure instance for", name, err)
+		LOG.warn("show: ensure failed for %s | %s", tostring(name), tostring(err))
 		return
 	end
 
@@ -174,7 +181,7 @@ function Router.show(arg, payload)
 			inst:setData(payload)
 		end
 		updateOrShow(inst, payload)               -- 差分更新 or 再描画
-		print("[LANG_FLOW] Router.show updated same screen for", name)
+		LOG.debug("Router.show updated same screen for %s", name)
 		return
 	end
 
@@ -197,7 +204,7 @@ function Router.show(arg, payload)
 	if _current and _instances[_current] and type(_instances[_current].hide) == "function" then
 		local prev = _instances[_current]
 		local okHide, errHide = pcall(function() prev:hide() end)
-		if not okHide then warn("[ScreenRouter] hide failed for", _current, errHide) end
+		if not okHide then LOG.warn("hide failed for %s | %s", tostring(_current), tostring(errHide)) end
 	end
 
 	_current = name
@@ -205,7 +212,7 @@ function Router.show(arg, payload)
 	-- 9) 画面表示（メソッドがあれば呼ぶ）
 	if type(inst.show) == "function" then
 		local okShow, errShow = pcall(function() inst:show(payload) end)
-		if not okShow then warn("[ScreenRouter] show method failed for", name, errShow) end
+		if not okShow then LOG.warn("show method failed for %s | %s", tostring(name), tostring(errShow)) end
 	end
 
 	-- 10) 最終的に可視化を担保（型ガード）
