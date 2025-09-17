@@ -3,7 +3,10 @@
 -- 右側インフォ / 下部バッジはローカライズ（JA/EN）対応
 -- 依存: ReplicatedStorage/SharedModules/CardImageMap.lua
 -- 任意依存: ReplicatedStorage/Config/Theme.lua, ReplicatedStorage/Config/Locale.lua
--- v0.9.7-P1-1: 言語コードを "ja"/"en" に統一（受信 "jp" は "ja" に正規化）/ kindEN のパターン修正
+-- v0.9.7-P1-4a:
+--   ① 札は“真四角”に統一（UICorner/外枠UIStrokeを生成しない）
+--   ② バッジは従来どおりカード幅いっぱい（Size=UDim2.new(1,0,0,h)）
+--   ③ 言語ヘルパは現状維持（JP/EN正規化）
 
 local TweenService = game:GetService("TweenService")
 local RS = game:GetService("ReplicatedStorage")
@@ -53,18 +56,18 @@ local function colorForKind(kind: string?)
 	return kindColorFallback(kind)
 end
 
-local function themeColor(path: string, fallback: Color3)
+local function themeColor(key: string, fallback: Color3)
 	local c = fallback
-	if Theme and Theme.COLORS and Theme.COLORS[path] and typeof(Theme.COLORS[path]) == "Color3" then
-		c = Theme.COLORS[path]
+	if Theme and Theme.COLORS and typeof(Theme.COLORS[key]) == "Color3" then
+		c = Theme.COLORS[key]
 	end
 	return c
 end
 
-local function themeImage(path: string, fallback: string)
+local function themeImage(key: string, fallback: string)
 	local id = fallback
-	if Theme and Theme.IMAGES and Theme.IMAGES[path] and typeof(Theme.IMAGES[path]) == "string" and #Theme.IMAGES[path] > 0 then
-		id = Theme.IMAGES[path]
+	if Theme and Theme.IMAGES and typeof(Theme.IMAGES[key]) == "string" and #Theme.IMAGES[key] > 0 then
+		id = Theme.IMAGES[key]
 	end
 	return id
 end
@@ -85,7 +88,6 @@ end
 
 -- "ja"/"en" のみ返す（Locale.getGlobal → Locale.pick → "en"）
 local function curLang(): string
-	-- Locale.getGlobal()
 	if Locale and typeof(Locale.getGlobal) == "function" then
 		local ok, v = pcall(Locale.getGlobal)
 		if ok then
@@ -93,7 +95,6 @@ local function curLang(): string
 			if n then return n end
 		end
 	end
-	-- Locale.pick()
 	if Locale and typeof(Locale.pick) == "function" then
 		local ok, v = pcall(Locale.pick)
 		if ok then
@@ -101,7 +102,6 @@ local function curLang(): string
 			if n then return n end
 		end
 	end
-	-- fallback
 	return "en"
 end
 
@@ -119,7 +119,6 @@ local function kindEN(kind: string?, fallbackName: string?): string
 	elseif kind == "seed" then return "Seed"
 	elseif kind == "ribbon" then return "Ribbon"
 	elseif kind == "chaff" or kind == "kasu" then return "Chaff"
-	-- name が ASCII 系ならそのまま表示
 	elseif fallbackName and fallbackName:match("^[%w%p%s]+$") then
 		return fallbackName
 	else
@@ -159,7 +158,7 @@ end
 --   create(parent, code, opts)
 --     opts = {
 --       size: UDim2, pos: UDim2, anchor: Vector2, zindex: number,
---       info: Info, showInfoRight: boolean, cornerRadius: number?,
+--       info: Info, showInfoRight: boolean, -- cornerRadius は無効（真四角固定）
 --     }
 function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: any?)
 	-- 画像ID
@@ -223,19 +222,8 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		min.Parent = btn
 	end
 
-	-- 角丸＋枠
-	do
-		local corner = Instance.new("UICorner")
-		local rpx = (opts and tonumber(opts.cornerRadius)) or 8
-		corner.CornerRadius = UDim.new(0, rpx)
-		corner.Parent = btn
-
-		local stroke = Instance.new("UIStroke")
-		stroke.Thickness = 0
-		stroke.Color = themeColor("CardStroke", Color3.fromRGB(0,0,0))
-		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Parent = btn
-	end
+	-- ★ 真四角：UICorner/外枠UIStrokeは生成しない（＝角丸なし＆縁取りなし）
+	-- （ここは意図的に何もしない）
 
 	-- 影（Theme.IMAGES.dropShadow があれば使用）
 	do
@@ -244,7 +232,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		shadow.Parent = btn
 		shadow.BackgroundTransparency = 1
 		shadow.Image = themeImage("dropShadow", "rbxassetid://1316045217")
-		shadow.ImageTransparency = 0.7
+		shadow.ImageTransparency = (Theme and Theme.HandShadowOffT) or 0.70
 		shadow.ScaleType = Enum.ScaleType.Slice
 		shadow.SliceCenter = Rect.new(10,10,118,118)
 		shadow.Size = UDim2.fromScale(1,1)
@@ -301,6 +289,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		lab.TextYAlignment = Enum.TextYAlignment.Center
 		lab.Font = Enum.Font.GothamMedium
 		lab.Text = sideInfoText(info.month, info.kind, info.name, curLang())
+		-- 補助ラベルの色は“役色”に寄せてアクセントを付ける
 		lab.TextColor3 = colorForKind(info.kind)
 		lab.ZIndex = btn.ZIndex + 1
 	end
@@ -319,19 +308,20 @@ function M.addBadge(cardButton: Instance, info: Info?)
 
 	local lang = curLang()
 
-	-- 台
+	-- 台（カード幅いっぱい・真四角のまま）
 	local holder = Instance.new("Frame")
 	holder.Name = "Badge"
 	holder.Parent = cardButton
 	holder.AnchorPoint = Vector2.new(0, 1)
 	holder.Position = UDim2.new(0, 0, 1, -2)              -- 下に2pxマージン
 	holder.Size     = UDim2.new(1, 0, 0, 26)              -- カード幅いっぱい
-	holder.BackgroundTransparency = 0.15                   -- 少し濃く
+	holder.BackgroundTransparency = 0.15
 	holder.BorderSizePixel = 0
 	holder.ZIndex = cardButton.ZIndex + 1
 	holder.BackgroundColor3 = themeColor("BadgeBg", Color3.fromRGB(25,28,36))
 
-	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,8); c.Parent = holder
+	-- バッジは見た目を保つため角丸を残す（カード本体は真四角）
+	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, (Theme and Theme.PANEL_RADIUS) or 10); c.Parent = holder
 	local s = Instance.new("UIStroke"); s.Thickness = 1; s.Color = themeColor("BadgeStroke", Color3.fromRGB(60,65,80)); s.Parent = holder
 
 	-- 文言

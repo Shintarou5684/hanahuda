@@ -1,7 +1,6 @@
 -- StarterPlayerScripts/UI/components/renderers/HandRenderer.lua
--- 手札を描画。selectedIndex のハイライトは内部で管理
+-- 手札を描画。selectedIndex のハイライトは内部で管理（縁取りは使わず影だけで強調）
 
-local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = ReplicatedStorage:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
@@ -16,24 +15,35 @@ local M = {}
 -- 言語/フッタユーティリティ
 --========================
 local function _lang()
-	return (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
+	-- "jp" を "ja" に正規化。取得不可時は "en"
+	local v = nil
+	if typeof(Locale.getGlobal) == "function" then
+		local ok, g = pcall(Locale.getGlobal); if ok then v = g end
+	end
+	if v == nil and typeof(Locale.pick) == "function" then
+		local ok, p = pcall(Locale.pick); if ok then v = p end
+	end
+	v = tostring(v or "en"):lower()
+	if v == "jp" then return "ja" end
+	if v == "ja" or v == "en" then return v end
+	return "en"
 end
 
 local function _catEn(v)
 	v = tostring(v or ""):lower()
 	if v=="光" or v=="ひかり" or v=="hikari" or v=="bright" then return "Bright" end
-	if v=="タネ" or v=="種" or v=="tane" or v=="seed" then return "Seed" end
-	if v=="短冊" or v=="ribbon" then return "Ribbon" end
-	if v=="カス" or v=="kasu" or v=="chaff" then return "Chaff" end
+	if v=="タネ" or v=="種" or v=="tane" or v=="seed"   then return "Seed"   end
+	if v=="短冊" or v=="ribbon"                         then return "Ribbon" end
+	if v=="カス" or v=="kasu" or v=="chaff"            then return "Chaff"  end
 	return v
 end
 
 local function _catJp(v)
 	v = tostring(v or ""):lower()
-	if v=="bright" or v=="光" then return "光" end
-	if v=="seed"   or v=="タネ" or v=="種" then return "タネ" end
-	if v=="ribbon" or v=="短冊" then return "短冊" end
-	if v=="chaff"  or v=="kasu" or v=="カス" then return "カス" end
+	if v=="bright" or v=="光"                 then return "光"   end
+	if v=="seed"   or v=="タネ" or v=="種"   then return "タネ" end
+	if v=="ribbon" or v=="短冊"               then return "短冊" end
+	if v=="chaff"  or v=="kasu" or v=="カス" then return "カス"  end
 	return v
 end
 
@@ -62,27 +72,30 @@ local function makeFooterText(monthNum, cat, lang)
 	end
 end
 
--- カード下部にフッタ（小バッジ）を重ねる
-local function addFooter(node: Instance, text: string)
+-- カード下部にフッタ（カード幅いっぱい）
+local function addFooter(node: Instance, text: string, kindForColor: string?)
 	-- 既存削除
 	local old = node:FindFirstChild("Footer")
 	if old then old:Destroy() end
+
+	local C = (Theme and Theme.COLORS) or {}
+	local badgeH = (Theme and Theme.SIZES and Theme.SIZES.BadgeH) or 26
 
 	local footer = Instance.new("Frame")
 	footer.Name = "Footer"
 	footer.Parent = node
 	footer.AnchorPoint = Vector2.new(0,1)
-	footer.Position = UDim2.new(0, 6, 1, -6)
-	footer.Size = UDim2.fromOffset(0, 22)      -- 横は自動
-	footer.AutomaticSize = Enum.AutomaticSize.X
-	footer.BackgroundColor3 = Color3.fromRGB(36,40,52)
+	-- 下に 2px の余白を残して、幅は常にカードと同じ
+	footer.Position = UDim2.new(0, 0, 1, -2)
+	footer.Size = UDim2.new(1, 0, 0, badgeH)
+	footer.BackgroundColor3 = C.BadgeBg or Color3.fromRGB(25,28,36)
 	footer.BackgroundTransparency = 0.15
 	footer.BorderSizePixel = 0
 	footer.ZIndex = 10
 	footer.ClipsDescendants = true
 
-	local uic = Instance.new("UICorner"); uic.CornerRadius = UDim.new(0, 6); uic.Parent = footer
-	local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(70,75,90); stroke.Thickness = 0; stroke.Parent = footer
+	local uic = Instance.new("UICorner"); uic.CornerRadius = UDim.new(0, (Theme and Theme.PANEL_RADIUS) or 10); uic.Parent = footer
+	local stroke = Instance.new("UIStroke"); stroke.Color = C.BadgeStroke or Color3.fromRGB(60,65,80); stroke.Thickness = 1; stroke.Parent = footer
 
 	local pad = Instance.new("UIPadding")
 	pad.PaddingLeft   = UDim.new(0, 6)
@@ -98,20 +111,19 @@ local function addFooter(node: Instance, text: string)
 	label.Size = UDim2.new(1, 0, 1, 0)
 	label.Text = tostring(text or "")
 	label.Font = Enum.Font.GothamMedium
-	label.TextSize = 14
-	label.TextScaled = false
-	label.TextColor3 = Color3.fromRGB(240,240,240)
+	label.TextScaled = true
+	-- 役種に応じたバッジ文字色（Theme.colorForKind）。該当なしは白。
+	local badgeTextColor = (type(Theme.colorForKind)=="function" and Theme.colorForKind(kindForColor or "")) or Color3.fromRGB(235,235,235)
+	label.TextColor3 = badgeTextColor
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.ZIndex = 11
 end
 
 --========================
--- 選択ハイライト（枠は黄色にせず、未選択=0px/選択=3px＋影を濃く）
+-- 選択ハイライト（縁取りは使わない）
 --========================
-local HIGHLIGHT_THICK  = (Theme and Theme.HIGHLIGHT_THICKNESS) or 3
-local NORMAL_THICK     = 0
-local SHADOW_ON_ALPHA  = 0.45  -- 選択時の影の濃さ（0=不透明）
-local SHADOW_OFF_ALPHA = 0.70  -- 未選択時
+local SHADOW_ON_ALPHA  = (Theme and Theme.HandShadowOnT  ~= nil) and Theme.HandShadowOnT  or 0.45  -- 0=不透明（濃い影）
+local SHADOW_OFF_ALPHA = (Theme and Theme.HandShadowOffT ~= nil) and Theme.HandShadowOffT or 0.70
 
 local function highlight(container: Instance, selectedIndex: number?)
 	for _,node in ipairs(container:GetChildren()) do
@@ -119,23 +131,15 @@ local function highlight(container: Instance, selectedIndex: number?)
 			local myIdx = node:GetAttribute("index")
 			local on = (selectedIndex ~= nil and myIdx == selectedIndex)
 
-			-- 外枠は色を変えず、太さだけで出す（未選択は0pxで完全非表示）
-			local stroke = node:FindFirstChildOfClass("UIStroke")
-			if stroke then
-				stroke.Thickness    = on and HIGHLIGHT_THICK or NORMAL_THICK
-				stroke.Transparency = on and 0 or 1
-				-- ※ stroke.Color は CardNode 側の既定色のまま（黄色にしない）
-				stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-				stroke.Color = on and Color3.fromRGB(0,255,255) or Color3.fromRGB(0,0,0)
-			end
+			-- 縁取りは一切使わない（UIStrokeを触らない）
 
-			-- 影を強めて視覚的なハイライト
+			-- 影でハイライト（CardNode 側の Shadow:ImageLabel を利用）
 			local shadow = node:FindFirstChild("Shadow")
 			if shadow and shadow:IsA("ImageLabel") then
 				shadow.ImageTransparency = on and SHADOW_ON_ALPHA or SHADOW_OFF_ALPHA
 			end
 
-			-- TextButtonの枠も常に消す
+			-- TextButtonの枠は常に消す
 			if node:IsA("TextButton") then
 				node.BorderSizePixel = 0
 			end
@@ -213,14 +217,14 @@ function M.render(container: Instance, hand: {any}?, opts: {width:number?, heigh
 
 		node:SetAttribute("index", i)
 
-		-- ▼ 言語対応のフッタ（EN: "11/Seed" / JP: "11月/タネ"）
+		-- ▼ 言語対応のフッタ（EN: "11/Seed" / JP: "11月/タネ"）— 幅は常にカードいっぱい
 		local footerText = makeFooterText(card.month, card.kind or card.name, langNow)
-		addFooter(node, footerText)
+		addFooter(node, footerText, card.kind)
 
 		if typeof(opts.onSelect) == "function" then
 			node.MouseButton1Click:Connect(function()
 				opts.onSelect(i)
-				-- コールバックだけでなく、内部ハイライトも即時更新
+				-- 内部ハイライトも即時更新（影だけで表現）
 				highlight(container, i)
 			end)
 		end

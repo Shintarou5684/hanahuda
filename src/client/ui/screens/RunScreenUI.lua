@@ -1,5 +1,6 @@
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
 -- UIビルダーは親付けしない契約（親付けは ScreenRouter の責務）
+-- v0.9.7-P1-4: Theme完全デフォルト化（色・画像・透過のUI側フォールバック撤去）
 -- v0.9.7-P1-3: Logger導入／言語コードを "ja"/"en" に統一（入力 "jp" は "ja" へ正規化）
 -- v0.9.6-P0-11 以降：親付け除去／その他の挙動は従来どおり
 
@@ -124,8 +125,8 @@ local function applyTexts(tRefs)
 
 	-- ヘルプ
 	if tRefs.help then
-		local T = Theme or {}
-		local helpDefault = (T and T.helpText) and T.helpText or t("RUN_HELP_LINE")
+		local Tm = Theme
+		local helpDefault = (Tm and Tm.helpText) and Tm.helpText or t("RUN_HELP_LINE")
 		tRefs.help.Text = helpDefault
 	end
 
@@ -152,31 +153,36 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	LOG.debug("build lang=%s (opts=%s)", tostring(_lang), tostring(want))
 
 	--=== Theme ===========================================================
-	local T = Theme or {}
-	local C = T.COLORS or {}
-	local R = T.RATIOS or {}
-	local IMAGES = T.IMAGES or {}
-	local TRANSP = T.TRANSPARENCY or {}
+	local T       = Theme
+	local C       = T.COLORS
+	local R       = T.RATIOS
+	local IMAGES  = T.IMAGES
+	local TRANSP  = T.TRANSPARENCY
 
-	local ASPECT       = T.ASPECT or (16/9)
-	local PAD          = (R.CENTER_PAD ~= nil and R.CENTER_PAD) or (R.PAD or 0.02)
-	local LEFT_W       = R.LEFT_W      or 0.18
-	local RIGHT_W      = R.RIGHT_W     or 0.22
-	local BOARD_H      = R.BOARD_H     or 0.50
-	local TUTORIAL_H   = R.TUTORIAL_H  or 0.08
-	local HAND_H       = R.HAND_H      or 0.28
-	local ROW_GAP      = 0.035
-	local COL_GAP      = R.COL_GAP or 0.015
+	local ASPECT     = T.ASPECT
+	local PAD        = R.CENTER_PAD
+	local LEFT_W     = R.LEFT_W
+	local RIGHT_W    = R.RIGHT_W
+	local BOARD_H    = R.BOARD_H
+	local TUTORIAL_H = R.TUTORIAL_H
+	local HAND_H     = R.HAND_H
+	local ROW_GAP    = 0.035   -- 比率に置きづらい“視覚的間隔”。必要なら Theme.SIZES へ昇格可。
+	local COL_GAP    = R.COL_GAP
 
-	local ROOM_BG_IMAGE  = IMAGES.ROOM_BG  or "rbxassetid://134603580471930"
-	local FIELD_BG_IMAGE = IMAGES.FIELD_BG or "rbxassetid://138521222203366"
-	local TAKEN_BG_IMAGE = IMAGES.TAKEN_BG or "rbxassetid://93059114972102"
+	local ROOM_BG_IMAGE  = IMAGES.ROOM_BG
+	local FIELD_BG_IMAGE = IMAGES.FIELD_BG
+	local TAKEN_BG_IMAGE = IMAGES.TAKEN_BG
 
-	local COLOR_TEXT         = (T.COLORS and T.COLORS.TextDefault)     or Color3.fromRGB(20,20,20)
-	local COLOR_RIGHT_BG     = (T.COLORS and T.COLORS.RightPaneBg)     or Color3.fromRGB(245,248,255)
-	local COLOR_RIGHT_STROKE = (T.COLORS and T.COLORS.RightPaneStroke) or Color3.fromRGB(210,220,230)
-	local COLOR_PANEL_BG     = (T.COLORS and T.COLORS.PanelBg)         or Color3.fromRGB(255,255,255)
-	local COLOR_PANEL_STROKE = (T.COLORS and T.COLORS.PanelStroke)     or Color3.fromRGB(220,225,235)
+	local COLOR_TEXT           = C.TextDefault
+	local COLOR_RIGHT_BG       = C.RightPaneBg
+	local COLOR_RIGHT_STROKE   = C.RightPaneStroke
+	local COLOR_PANEL_BG       = C.PanelBg
+	local COLOR_PANEL_STROKE   = C.PanelStroke
+	local COLOR_NOTICE_BG      = C.NoticeBg   or C.PanelBg        -- 未定義なら PanelBg を流用
+	local COLOR_TUTORIAL_BG    = C.TutorialBg or C.PrimaryBtnBg   -- 未定義なら Primary を流用
+	local BTN_PRIMARY_BG       = C.PrimaryBtnBg
+	local BTN_WARN_BG          = C.WarnBtnBg
+	local BTN_YAKU_BG          = C.InfoBtnBg
 
 	--=== ScreenGui（※親付けしない） ======================================
 	local g = Instance.new("ScreenGui")
@@ -196,7 +202,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	roomBG.Size = UDim2.fromScale(1,1)
 	roomBG.ScaleType = Enum.ScaleType.Crop
 	roomBG.ZIndex = 0
-	roomBG.ImageTransparency = TRANSP.roomBg or 0
+	roomBG.ImageTransparency = TRANSP.roomBg
 
 	-- Root
 	local root = Instance.new("Frame")
@@ -243,7 +249,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	rightPane.Name = "RightPane"
 	rightPane.Parent = playArea
 	rightPane.BackgroundColor3 = COLOR_RIGHT_BG
-	rightPane.BackgroundTransparency = T.rightPaneBgT or 0
+	rightPane.BackgroundTransparency = T.rightPaneBgT
 	rightPane.Size = UDim2.fromScale(RIGHT_W, 1 - PAD*2)
 	rightPane.Position = UDim2.fromScale(1 - RIGHT_W - PAD, PAD)
 	rightPane.ZIndex = 1
@@ -275,8 +281,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	scoreBox.TextWrapped = true
 	scoreBox.TextScaled = true
 
-	local btnYakuColor = (Theme.COLORS and Theme.COLORS.InfoBtnBg) or Color3.fromRGB(120, 180, 255)
-	local btnYaku = makeSideBtn(scoreStack, "OpenYaku", "", btnYakuColor)
+	local btnYaku = makeSideBtn(scoreStack, "OpenYaku", "", BTN_YAKU_BG)
 
 	-- コントロールボタン
 	local controlsPanel = Instance.new("Frame")
@@ -289,9 +294,9 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	controlsPanel.ZIndex = 1
 	makeList(controlsPanel, Enum.FillDirection.Vertical, 8)
 
-	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", (T.COLORS and T.COLORS.PrimaryBtnBg) or Color3.fromRGB(255,153,0))
-	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", (T.COLORS and T.COLORS.WarnBtnBg)    or Color3.fromRGB(220,70,70))
-	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", (T.COLORS and T.COLORS.WarnBtnBg)    or Color3.fromRGB(220,70,70))
+	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", BTN_PRIMARY_BG)
+	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", BTN_WARN_BG)
+	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", BTN_WARN_BG)
 
 	-- Center
 	makeList(center, Enum.FillDirection.Vertical, 0.02, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
@@ -300,7 +305,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	do
 		local tatami = Instance.new("ImageLabel"); tatami.Name="BoardBG"; tatami.Parent=boardArea
 		tatami.Image=FIELD_BG_IMAGE; tatami.BackgroundTransparency=1; tatami.Size=UDim2.fromScale(1,1)
-		tatami.ScaleType=Enum.ScaleType.Crop; tatami.ZIndex=1; tatami.ImageTransparency=TRANSP.boardBg or 0
+		tatami.ScaleType=Enum.ScaleType.Crop; tatami.ZIndex=1; tatami.ImageTransparency=TRANSP.boardBg
 		local tatamiCorner = Instance.new("UICorner"); tatamiCorner.CornerRadius=UDim.new(0, Theme.PANEL_RADIUS or 10); tatamiCorner.Parent=tatami
 
 		local boardWrap = Instance.new("Frame"); boardWrap.Name="BoardWrap"; boardWrap.Parent=boardArea
@@ -317,13 +322,13 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	end
 
 	local notice = Instance.new("Frame"); notice.Name="NoticeBar"; notice.Parent=center; notice.LayoutOrder=4
-	local noticeH = math.max(0.05, (TUTORIAL_H or 0.08) * 0.9)
-	notice.Size=UDim2.fromScale(1, noticeH); notice.BackgroundColor3=Color3.fromRGB(240,246,255); notice.ZIndex=1; addCornerStroke(notice,nil,nil,1)
+	local noticeH = math.max(0.05, (TUTORIAL_H) * 0.9)
+	notice.Size=UDim2.fromScale(1, noticeH); notice.BackgroundColor3=COLOR_NOTICE_BG; notice.ZIndex=1; addCornerStroke(notice,nil,nil,1)
 	local noticeText = UiUtil.makeLabel(notice, "NoticeText", "", UDim2.new(1,-16,1,-12), UDim2.new(0,8,0,6), nil, COLOR_TEXT)
 	noticeText.TextScaled=true; noticeText.TextWrapped=true; noticeText.TextXAlignment=Enum.TextXAlignment.Left
 
 	local tutorial = Instance.new("Frame"); tutorial.Name="TutorialBar"; tutorial.Parent=center
-	tutorial.Size=UDim2.fromScale(1, TUTORIAL_H); tutorial.BackgroundColor3=Color3.fromRGB(255,153,0)
+	tutorial.Size=UDim2.fromScale(1, TUTORIAL_H); tutorial.BackgroundColor3=COLOR_TUTORIAL_BG
 	tutorial.LayoutOrder=3; tutorial.ZIndex=1; addCornerStroke(tutorial,nil,nil,1)
 	local help = UiUtil.makeLabel(tutorial, "Help", "", UDim2.new(1,-16,1,-12), UDim2.new(0,8,0,6), nil, COLOR_TEXT)
 	help.TextScaled=true; help.TextWrapped=true; help.TextXAlignment=Enum.TextXAlignment.Center
@@ -336,7 +341,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	local takenPanel = makePanel(rightPane, "TakenPanel", Vector2.new(1,1), 1, COLOR_PANEL_BG, COLOR_PANEL_STROKE, Locale.t(_lang, "RUN_TAKEN_TITLE"), COLOR_TEXT)
 	local takenBG = Instance.new("ImageLabel"); takenBG.Name="TakenBG"; takenBG.Parent=takenPanel
 	takenBG.Image=TAKEN_BG_IMAGE; takenBG.BackgroundTransparency=1; takenBG.ScaleType=Enum.ScaleType.Crop; takenBG.Size=UDim2.fromScale(1,1)
-	takenBG.ZIndex=1; takenBG.ImageTransparency=TRANSP.takenBg or 0
+	takenBG.ZIndex=1; takenBG.ImageTransparency=TRANSP.takenBg
 	local takenCorner = Instance.new("UICorner"); takenCorner.CornerRadius=UDim.new(0, Theme.PANEL_RADIUS or 10); takenCorner.Parent=takenBG
 	local takenBox = Instance.new("ScrollingFrame"); takenBox.Name="TakenBox"; takenBox.Parent=takenPanel
 	takenBox.Size=UDim2.new(1,-12,1,-42); takenBox.Position=UDim2.new(0,6,0,36); takenBox.AutomaticCanvasSize=Enum.AutomaticSize.Y

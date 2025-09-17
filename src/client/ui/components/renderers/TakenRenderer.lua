@@ -2,12 +2,14 @@
 -- 取り札描画（右枠拡張版）
 -- 分類: 光 / タネ / 短冊 / カス（言語で Bright / Seed / Ribbon / Chaff に自動切替）
 -- 各カテゴリは 1月→12月 で並び、カードは横方向に 1/3 だけ重ねて表示
--- タグは不透明の白ベース＋濃色文字、タグの“直下”からカードを開始
+-- タグは不透明のパネル色ベース＋濃色文字、タグの“直下”からカードを開始
+-- v0.9.7-P1-4: Theme 完全デフォルト化（色/角丸/余白/比率のUI側フォールバック撤去）
 -- v0.9.7-P1-1: 言語コード外部I/Fを "ja"/"en" に統一（受信 "jp" は警告して "ja" へ正規化）
 
-local RS = game:GetService("ReplicatedStorage")
-local Theme   = require(RS:WaitForChild("Config"):WaitForChild("Theme"))
-local Locale  = require(RS:WaitForChild("Config"):WaitForChild("Locale"))
+local RS      = game:GetService("ReplicatedStorage")
+local Config  = RS:WaitForChild("Config")
+local Theme   = require(Config:WaitForChild("Theme"))
+local Locale  = require(Config:WaitForChild("Locale"))
 
 -- CardNode（カード1枚の描画モジュール）
 local UI_ROOT  = script.Parent.Parent
@@ -68,16 +70,14 @@ local CATEGORY_EN = { bright = "Bright", seed = "Seed",   ribbon = "Ribbon", cha
 local CAT_ORDER_JA = { "光", "タネ", "短冊", "カス" }
 local CAT_ORDER_EN = { "Bright", "Seed", "Ribbon", "Chaff" }
 
--- 役色（Theme があればそちらを優先）
+-- 役色：Theme.colorForKind を最優先（未定義時は Theme.COLORS の安全色）
 local function kindColor(kind: string): Color3
 	if Theme and Theme.colorForKind then
 		local ok, c = pcall(function() return Theme.colorForKind(kind) end)
 		if ok and typeof(c) == "Color3" then return c end
 	end
-	if kind == "bright" then return Color3.fromRGB(255,230,140)
-	elseif kind == "seed" then return Color3.fromRGB(200,240,255)
-	elseif kind == "ribbon" then return Color3.fromRGB(255,200,220)
-	else return Color3.fromRGB(220,225,235) end
+	local C = Theme.COLORS
+	return (C and (C.BadgeStroke or C.PanelStroke or C.TextDefault)) or Color3.new(1,1,1)
 end
 
 -- 63:88 の実寸横幅（高さから算出）
@@ -116,23 +116,26 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 		table.sort(arr, function(a, b) return monthOf(a.code) < monthOf(b.code) end)
 	end
 
-	-- レイアウト定数
+	-- レイアウト/見た目定数（Theme から取得）
 	local S = Theme.SIZES or {}
 	local C = Theme.COLORS or {}
+	local R = Theme.RATIOS or {}
 
 	-- カードは「半分サイズ」
 	local baseH    = tonumber(S.HAND_H) or 168
 	local cardH    = math.floor(baseH * 0.5)
 	local cardW    = widthFromHeight(cardH)
-	local overlap  = 0.33
+	local overlap  = (R.TAKEN_OVERLAP ~= nil) and R.TAKEN_OVERLAP or 0.33
 	local stepX    = math.max(1, math.floor(cardW * (1 - overlap)))
 
-	-- 余白など
-	local panelPadX   = 6
-	local gapBetween  = 6             -- タグ行とカード行の間
-	local sectionGap  = 8             -- セクション間
-	local tagH        = 24
+	-- 余白・寸法（Theme 寄せ）
+	local padPx       = tonumber(S.PAD) or 10
+	local sectionGap  = tonumber(S.ROW_GAP) or 12
+	local gapBetween  = math.max(4, math.floor((S.HELP_H or 22) * 0.27)) -- タグとカード行の間
+	local tagH        = tonumber(S.HELP_H) or 22
+	local tagW        = tonumber(S.TAKEN_TAG_W) or 110
 	local rowH        = cardH + 2
+	local radiusPx    = tonumber(Theme.PANEL_RADIUS) or 10
 
 	local usedHeight  = 0
 	local parentZ     = (parent:IsA("GuiObject") and parent.ZIndex) or 1
@@ -147,24 +150,24 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 		section.BackgroundTransparency = 1
 		section.ClipsDescendants = false
 		section.AutomaticSize = Enum.AutomaticSize.None
-		section.Size = UDim2.new(1, -panelPadX*2, 0, tagH + gapBetween + rowH)
-		section.Position = UDim2.new(0, panelPadX, 0, usedHeight)
+		section.Size = UDim2.new(1, -padPx*2, 0, tagH + gapBetween + rowH)
+		section.Position = UDim2.new(0, padPx, 0, usedHeight)
 		section.ZIndex = parentZ + 2    -- 木目より確実に前面
 
-		-- === タグ行（不透明の白＋濃い文字、左に色ドット） ===
+		-- === タグ行（不透明の PanelBg ＋ Stroke ＋ ドット） ===
 		do
 			local tag = Instance.new("Frame")
 			tag.Name = "LabelTag"
 			tag.Parent = section
-			tag.BackgroundTransparency = 0                 -- 透過なし（くっきり）
-			tag.BackgroundColor3 = (C.PanelBg or Color3.fromRGB(255,255,255))
+			tag.BackgroundTransparency = 0
+			tag.BackgroundColor3 = C.PanelBg
 			tag.Position = UDim2.new(0, 0, 0, 0)
-			tag.Size = UDim2.new(0, 110, 0, tagH)          -- 幅は固定でOK
+			tag.Size = UDim2.new(0, tagW, 0, tagH)
 			tag.ZIndex = section.ZIndex + 1
 
-			local cr = Instance.new("UICorner"); cr.CornerRadius = UDim.new(0, 10); cr.Parent = tag
+			local cr = Instance.new("UICorner"); cr.CornerRadius = UDim.new(0, radiusPx); cr.Parent = tag
 			local st = Instance.new("UIStroke")
-			st.Color = C.PanelStroke or Color3.fromRGB(210,220,230)
+			st.Color = C.PanelStroke
 			st.Thickness = 1
 			st.Transparency = 0
 			st.Parent = tag
@@ -197,7 +200,7 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 			lab.Font = Enum.Font.GothamBold
 			lab.ZIndex = tag.ZIndex + 1
 			lab.Text = string.format("%s ×%d", catName, #arr)
-			lab.TextColor3 = (C.TextDefault or Color3.fromRGB(40,40,40)) -- くっきり
+			lab.TextColor3 = C.TextDefault
 		end
 
 		-- === カード行（タグの直下から開始） ===
@@ -237,9 +240,7 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 					})
 				end
 
-				-- ★取り札カードには“下部バッジ”は付けない（見た目をすっきり）
-				-- （何もしない）
-
+				-- 取り札カードにはフッタは付けない（見た目をすっきり）
 				x += stepX
 				z += 1
 			end

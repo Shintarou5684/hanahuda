@@ -1,5 +1,7 @@
 -- StarterPlayerScripts/UI/components/renderers/FieldRenderer.lua
 -- 場札の描画レンダラ：上下2段に分けて配置
+-- v0.9.7-P1-4: Theme 完全デフォルト化 + 札フッタを常にカード幅いっぱい
+--              言語コード正規化（"jp"→"ja"）/ JP時の英語カテゴリ混入を修正
 
 local components = script.Parent.Parent
 local lib        = components.Parent:WaitForChild("lib")
@@ -7,71 +9,104 @@ local lib        = components.Parent:WaitForChild("lib")
 local UiUtil   = require(lib:WaitForChild("UiUtil"))
 local CardNode = require(components:WaitForChild("CardNode"))
 
--- ★ 言語取得（グローバル優先）
+-- ★ 依存
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config  = ReplicatedStorage:WaitForChild("Config")
 local Locale  = require(Config:WaitForChild("Locale"))
+local Theme   = require(Config:WaitForChild("Theme"))
+
+-- 言語（"ja"/"en"）。"jp" は "ja" へ正規化、取得不可は "en"
 local function _lang()
-	return (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or Locale.pick()
+	local v
+	if typeof(Locale.getGlobal) == "function" then
+		local ok, g = pcall(Locale.getGlobal); if ok then v = g end
+	end
+	if v == nil and typeof(Locale.pick) == "function" then
+		local ok, p = pcall(Locale.pick); if ok then v = p end
+	end
+	v = tostring(v or "en"):lower()
+	if v == "jp" then return "ja" end
+	if v == "ja" or v == "en" then return v end
+	return "en"
 end
 
 --=== フッタ用ユーティリティ ============================================
 
 -- カテゴリの英語ラベル（短め）
-local function _catEn(jp)
-	if jp=="光" or jp=="ヒカリ" then return "Bright" end
-	if jp=="タネ" or jp=="種"   then return "Seed"   end -- Animal/Tane を短く Seed に
-	if jp=="短冊"               then return "Ribbon" end
-	if jp=="カス"               then return "Chaff"  end
-	return jp or ""
+local function _catEn(src)
+	src = tostring(src or ""):lower()
+	if src=="光" or src=="ひかり" or src=="hikari" or src=="bright" then return "Bright" end
+	if src=="タネ" or src=="種"   or src=="tane"   or src=="seed"   then return "Seed"   end
+	if src=="短冊"               or src=="ribbon"                       then return "Ribbon" end
+	if src=="カス" or src=="kasu" or src=="chaff"                      then return "Chaff"  end
+	return src
+end
+
+-- カテゴリの日本語ラベル（英語/表記ゆれを吸収）
+local function _catJa(src)
+	src = tostring(src or ""):lower()
+	if src=="bright" or src=="光" or src=="ひかり" or src=="hikari" then return "光"   end
+	if src=="seed"   or src=="タネ" or src=="種"   or src=="tane"   then return "タネ" end
+	if src=="ribbon" or src=="短冊"                                 then return "短冊" end
+	if src=="chaff"  or src=="kasu" or src=="カス"                  then return "カス"  end
+	return src
 end
 
 -- フッタ表示テキスト（JP: "11月/タネ" ／ EN: "11/Seed"）
-local function makeFooterText(monthNum, catJP, lang)
+local function makeFooterText(monthNum, kindOrName, lang)
 	local m = tonumber(monthNum)
 	local mStr = m and tostring(m) or ""
 	if lang == "en" then
-		-- 月という単位語は出さず、数字のみ
-		if mStr ~= "" and catJP then
-			return string.format("%s/%s", mStr, _catEn(catJP))
+		local cat = _catEn(kindOrName)
+		if mStr ~= "" and cat ~= "" then
+			return string.format("%s/%s", mStr, cat)
 		elseif mStr ~= "" then
 			return mStr
 		else
-			return _catEn(catJP)
+			return cat
 		end
 	else
-		-- 日本語は従来どおり「11月/タネ」
-		if mStr ~= "" and catJP then
-			return string.format("%s月/%s", mStr, catJP)
+		local cat = _catJa(kindOrName)
+		if mStr ~= "" and cat ~= "" then
+			return string.format("%s月/%s", mStr, cat)
 		elseif mStr ~= "" then
 			return (mStr .. "月")
 		else
-			return (catJP or "")
+			return cat
 		end
 	end
 end
 
--- カード下部に小さなフッタバッジを作る（CardNode.addBadge の代替）
-local function addFooter(node: Instance, text: string)
-	-- 既存の Footer があれば消す
+-- カード下部にフッタバッジを追加（カード幅いっぱい）
+local function addFooter(node: Instance, text: string, kindForColor: string?)
+	-- 既存 Footer を除去
 	local old = node:FindFirstChild("Footer")
 	if old then old:Destroy() end
+
+	local SZ   = Theme.SIZES or {}
+	local COL  = Theme.COLORS or {}
+	local badgeH = SZ.BadgeH or 26
 
 	local footer = Instance.new("Frame")
 	footer.Name = "Footer"
 	footer.Parent = node
 	footer.AnchorPoint = Vector2.new(0,1)
-	footer.Position = UDim2.new(0, 6, 1, -6)
-	footer.Size = UDim2.fromOffset(0, 22)
-	footer.AutomaticSize = Enum.AutomaticSize.X
-	footer.BackgroundColor3 = Color3.fromRGB(36,40,52)
+	footer.Position = UDim2.new(0, 0, 1, -2)              -- 下に 2px マージン
+	footer.Size     = UDim2.new(1, 0, 0, badgeH)          -- ★カード幅いっぱい
+	footer.BackgroundColor3 = COL.BadgeBg or Color3.fromRGB(25,28,36)
 	footer.BackgroundTransparency = 0.15
 	footer.BorderSizePixel = 0
 	footer.ZIndex = 10
 	footer.ClipsDescendants = true
 
-	local uic = Instance.new("UICorner"); uic.CornerRadius = UDim.new(0, 6); uic.Parent = footer
-	local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(70,75,90); stroke.Thickness = 0; stroke.Parent = footer
+	local uic = Instance.new("UICorner")
+	uic.CornerRadius = UDim.new(0, Theme.PANEL_RADIUS or 10)
+	uic.Parent = footer
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = COL.BadgeStroke or Color3.fromRGB(60,65,80)
+	stroke.Thickness = 1
+	stroke.Parent = footer
 
 	local pad = Instance.new("UIPadding")
 	pad.PaddingLeft   = UDim.new(0, 6)
@@ -87,9 +122,10 @@ local function addFooter(node: Instance, text: string)
 	label.Size = UDim2.new(1, 0, 1, 0)
 	label.Text = tostring(text or "")
 	label.Font = Enum.Font.GothamMedium
-	label.TextSize = 14
-	label.TextScaled = false
-	label.TextColor3 = Color3.fromRGB(240,240,240)
+	label.TextScaled = true
+	-- 役種に応じた文字色（Theme.colorForKind）。該当なしは白っぽく。
+	local txtColor = (type(Theme.colorForKind)=="function" and Theme.colorForKind(kindForColor or "")) or Color3.fromRGB(235,235,235)
+	label.TextColor3 = txtColor
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.ZIndex = 11
 end
@@ -100,21 +136,22 @@ local M = {}
 -- opts:
 --   width:number?         -- 未指定ならスケールレイアウト（推奨）
 --   height:number?        -- 未指定ならスケールレイアウト（推奨）
---   rowPaddingScale:number? = 0.02  -- カード間の横間隔（比率）
+--   rowPaddingScale:number?  -- カード間隔（比率）。未指定は Theme.RATIOS.COL_GAP
 --   onPick:(bindex:number)->()      -- 場札クリック時に呼ぶ
 function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {width:number?, height:number?, rowPaddingScale:number?, onPick:any}? )
 	opts = opts or {}
 	local useScale = (opts.width == nil and opts.height == nil)
 	local W = opts.width  or 80
 	local H = opts.height or 96
-	local padScale = (typeof(opts.rowPaddingScale) == "number" and opts.rowPaddingScale) or 0.02
+	local R = Theme.RATIOS or {}
+	local padScale = (typeof(opts.rowPaddingScale) == "number" and opts.rowPaddingScale) or R.COL_GAP or 0.015
 	local onPick = opts.onPick
 
-	-- 既存をクリア（まっさらに）
+	-- 既存をクリア
 	UiUtil.clear(topRow, {})
 	UiUtil.clear(bottomRow, {})
 
-	-- 行レイアウト（横並び・両端にも同じ余白を付ける）
+	-- 行レイアウト（横並び・両端にも同じ余白）
 	local function ensureRowLayout(row: Instance)
 		local layout = Instance.new("UIListLayout")
 		layout.Parent = row
@@ -140,12 +177,10 @@ function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {w
 	local topCount = math.min(split, n)
 	local bottomCount = math.max(0, n - split)
 
-	-- 行ごとのカード幅（scale）を計算
+	-- 行ごとのカード幅（scale）
 	local function calcWScale(count: number): number
 		if count <= 0 then return 0.12 end
-		-- 1行の横幅 = 1。両端とカード間に (count+1) 個の padScale が入る想定。
-		local raw = (1 - padScale * (count + 1)) / count
-		-- 見やすさのため下限/上限をクランプ
+		local raw = (1 - padScale * (count + 1)) / count -- 両端＋間の余白
 		if raw < 0.08 then raw = 0.08 end
 		if raw > 0.18 then raw = 0.18 end
 		return raw
@@ -153,6 +188,7 @@ function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {w
 
 	local W_TOP    = calcWScale(topCount)
 	local W_BOTTOM = calcWScale(bottomCount)
+	local langNow  = _lang()
 
 	for i, card in ipairs(list) do
 		local code = card.code or string.format("%02d%02d", card.month, card.idx)
@@ -161,14 +197,13 @@ function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {w
 
 		local node
 		if useScale then
-			-- ★ スケールレイアウト：CardNode 側は比率対応。ここで横幅を行の枚数に合わせて上書き。
+			-- スケールレイアウト：横幅は行の枚数に応じて最適化
 			node = CardNode.create(parentRow, code, nil, nil, {
 				month = card.month, kind = card.kind, name = card.name
 			})
-			-- 横幅は行ごとの最適値、高さは CardNode 側が 0.90 を採用
 			node.Size = UDim2.fromScale(rowWScale, 0.90)
 		else
-			-- ★ 互換：pxサイズを明示
+			-- 互換：px 指定
 			node = CardNode.create(parentRow, code, W, H, {
 				month = card.month, kind = card.kind, name = card.name
 			})
@@ -177,10 +212,9 @@ function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {w
 		node:SetAttribute("bindex", i)
 		node.LayoutOrder = i
 
-		-- ▼ 既存の addBadge は使わず、言語対応したフッタを自前で作る
-		--    月の“単位語”は EN では出さない（11/Seed）
-		local footerText = makeFooterText(card.month, card.kind or card.name, _lang())
-		addFooter(node, footerText)
+		-- ▼ 言語対応のフッタ（EN: "11/Seed" / JP: "11月/タネ"）
+		local footerText = makeFooterText(card.month, card.kind or card.name, langNow)
+		addFooter(node, footerText, card.kind)
 
 		-- クリック
 		if onPick then
