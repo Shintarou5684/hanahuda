@@ -8,6 +8,7 @@
 --        P0-8: no-op削除／_G依存排除／役なしは Locale.t("ROLES_NONE")
 -- v0.9.6-P0-11 goal 数値を payload から参照（情報行パースは撤廃）
 -- v0.9.7-P1-1  ResultModal を Nav 単一点に直結（bindNav）。final/3択の判定を canNext/canSave/locks で統一。
+-- v0.9.7-P2-0  [+] 護符ボード常時表示（表示のみ / 操作不可）
 
 local Run = {}
 Run.__index = Run
@@ -34,6 +35,8 @@ local ResultModal    = require(components:WaitForChild("ResultModal"))
 local Overlay        = require(components:WaitForChild("Overlay"))
 local DevTools       = require(components:WaitForChild("DevTools"))
 local YakuPanel      = require(components:WaitForChild("YakuPanel")) -- 役倍率パネル
+-- [+] 護符ボード（表示専用）
+local TalismanBoard   = require(components:WaitForChild("TalismanBoard"))
 
 local lib        = script.Parent.Parent:WaitForChild("lib")
 local Format     = require(lib:WaitForChild("FormatUtil"))
@@ -183,6 +186,15 @@ function Run.new(deps)
 
 	-- 役倍率パネル
 	self._yakuPanel = YakuPanel.mount(self.gui)
+
+	-- [+] 護符ボード（表示のみ）を右上に常時表示（初期タイトルはJP。言語は後で setLang で反映）
+	self._taliBoard = TalismanBoard.new(self.gui, { title = "護符ボード" })
+	do
+		local inst = self._taliBoard:getInstance()
+		inst.AnchorPoint = Vector2.new(1, 0)
+		inst.Position    = UDim2.new(1, -24, 0, 56) -- 右端から-24px / 上から56px（RunのHUDに合わせて微調整）
+		inst.ZIndex      = 5
+	end
 
 	--- Studio専用 DevTools
 	if RunService:IsStudio() then
@@ -405,6 +417,19 @@ function Run:setLang(lang)
 	if self._yakuPanel then
 		self._yakuPanel:update({ lang = mapLangForPanel(n) })
 	end
+	-- [+] 護符ボードのタイトルも追従
+	if self._taliBoard then
+		self._taliBoard:setLang(self._lang or "ja")
+	end
+end
+
+local function extractTalismanFromPayload(payload: any)
+	if typeof(payload) ~= "table" then return nil end
+	local s = payload.state
+	if typeof(s) ~= "table" then return nil end
+	local r = s.run
+	if typeof(r) ~= "table" then return nil end
+	return r.talisman
 end
 
 function Run:show(payload)
@@ -421,6 +446,12 @@ function Run:show(payload)
 			LOG.debug("show sync from global | from=%s to=%s", tostring(self._lang), tostring(gg))
 			self:setLang(gg)
 		end
+	end
+
+	-- [+] 護符ボードへ初期データを反映（payload に state.run.talisman があれば）
+	if self._taliBoard then
+		self._taliBoard:setLang(self._lang or "ja")
+		self._taliBoard:setData(extractTalismanFromPayload(payload))
 	end
 
 	self.frame.Visible = true

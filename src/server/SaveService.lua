@@ -29,6 +29,11 @@
 local DataStoreService = game:GetService("DataStoreService")
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
+-- SaveService.lua (先頭付近)
+local RS = game:GetService("ReplicatedStorage")
+-- 旧: local TalismanState = require(RS:WaitForChild("TalismanState"))
+local SharedModules = RS:WaitForChild("SharedModules")
+local TalismanState = require(SharedModules:WaitForChild("TalismanState"))
 
 --=== 設定 =========================================================
 local PROFILE_DS_NAME = "ProfileV1" -- 互換維持：version でのマイグレーション
@@ -288,6 +293,14 @@ function Save.mergeIntoState(plr: Player, state:any)
 	state.clears      = p.clears
 	state.totalClears = p.clears
 	state.lang        = (p.lang == "ja") and "ja" or "en"
+
+	-- ▼ 追加：アカウント側の護符解放数（無ければ2枠）を state.account に橋渡し
+	state.account = state.account or {}
+	state.account.talismanUnlock = state.account.talismanUnlock or { unlocked = (p.talismanUnlocked or 2) }
+
+	-- ▼ 追加：run.talisman ボードを初期化（6マス/解放数反映）
+	TalismanState.ensureRunBoard(state)
+
 	return state
 end
 
