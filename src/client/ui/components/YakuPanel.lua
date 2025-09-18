@@ -1,8 +1,9 @@
 -- src/client/ui/components/YakuPanel.lua
--- v0.9.7a 役倍率ビュー（前面ポップアップ／開閉API）
+-- v0.9.7b 役倍率ビュー（前面ポップアップ／開閉API）
 -- 変更点:
 --  ・Client側で RunDeckUtil を使って祭事Lvを“初期化”しないよう修正
 --  ・StatePushの payload に入ってきた matsuri を優先し、未同梱時は既存値を保持
+--  ・四光の表示説明を現仕様へ更新（雨四区別なし／任意の光4枚で四光、基礎8文）
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -47,9 +48,10 @@ local YAKU_CATALOG = {
 --==============================
 local BASE_INFO = {
 	-- 光系
-	yaku_goko        = { base = 10 },                    -- 五光
-	yaku_yonko       = { base =  8, noteJP="（雨入りは7文）", noteEN="(with rain: 7 mon)" }, -- UI案内のみ
-	yaku_sanko       = { base =  5 },
+	yaku_goko        = { base = 10 },  -- 五光
+	-- ★更新：雨四の区別をしない現仕様。任意4枚で四光＝基礎8文（注記なし）
+	yaku_yonko       = { base =  8 },  -- 四光
+	yaku_sanko       = { base =  5 },  -- 三光
 
 	-- 役もの
 	yaku_hanami      = { base =  5 },
@@ -109,7 +111,7 @@ local function buildBaseSuffix(lang, yakuId)
 		end
 	end
 
-	-- 備考（四光の雨入りなど）
+	-- 備考（※現仕様で四光は注記なし）
 	local note = ""
 	if info.noteJP or info.noteEN then
 		note = (lang=="en") and (" "..(info.noteEN or "")) or (" "..(info.noteJP or ""))
