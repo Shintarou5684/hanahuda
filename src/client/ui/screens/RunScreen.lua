@@ -1,8 +1,10 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-5
+-- v0.9.7-P2-7
 --  - StageResult の互換受信を強化（{close=true} / (true,data) / data 単体の全対応）
 --  - Home等への遷移後にリザルトが残留しないよう、show() 冒頭で明示的に hide / _resultShown リセット
 --  - 既存機能・UIは維持
+--  - P2-6: [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
+--  - P2-7: 監視用ログを追加（[LOG] マーク）
 
 local Run = {}
 Run.__index = Run
@@ -45,7 +47,7 @@ local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 local function normLangJa(lang: string?)
 	local v = tostring(lang or ""):lower()
 	if v == "jp" then
-		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
+		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'") -- [LOG]
 		return "ja"
 	elseif v == "ja" or v == "en" then
 		return v
@@ -66,6 +68,8 @@ local function safeGetGlobalLang()
 			if n == "ja" or n == "en" then
 				return n
 			end
+		else
+			LOG.debug("Locale.getGlobal failed (pcall)") -- [LOG]
 		end
 	end
 	return nil
@@ -92,7 +96,7 @@ function Run.new(deps)
 		end
 	end
 	self._lang = initialLang
-	LOG.debug("init lang=%s", tostring(initialLang))
+	LOG.info("boot | lang=%s", tostring(initialLang)) -- [LOG]
 
 	-- UI 構築
 	local ui = UIBuilder.build(nil, { lang = initialLang })
@@ -168,6 +172,7 @@ function Run.new(deps)
 		inst.AnchorPoint = Vector2.new(0.5, 0)
 		inst.Position    = UDim2.fromScale(0.5, 0)
 		inst.ZIndex      = 2
+		LOG.debug("talisman board mounted (center/bottom)") -- [LOG]
 	end
 	-- ====== ここまで ======
 
@@ -218,6 +223,7 @@ function Run.new(deps)
 			end
 		})
 		if self._awaitingInitial then
+			LOG.debug("initial hand received → overlay hide") -- [LOG]
 			self._overlay:hide()
 			self._awaitingInitial = false
 		end
@@ -251,6 +257,8 @@ function Run.new(deps)
 			local rolesLabel = (self._lang == "en") and "Roles: " or "役："
 			self._scoreBox.Text = self._fmtScore(tot, mon, pts, rolesLabel .. rolesBody)
 		end
+		LOG.debug("score | total=%s mon=%s pts=%s roles#=%d",
+			tostring(tot), tostring(mon), tostring(pts), #roles) -- [LOG]
 	end
 
 	-- 状態更新
@@ -270,7 +278,26 @@ function Run.new(deps)
 			})
 		end
 
-		if self._awaitingInitial then self._overlay:hide(); self._awaitingInitial = false end
+		-- [FIX-S1] StatePush から護符を即時反映（nilなら何もしない）
+		if self._taliBoard
+			and typeof(st) == "table"
+			and typeof(st.run) == "table"
+			and typeof(st.run.talisman) == "table"
+		then
+			self._taliBoard:setLang(self._lang or "ja")
+			self._taliBoard:setData(st.run.talisman)
+			local u = tonumber(st.run.talisman.unlocked or 0) or 0
+			LOG.info("state:talisman applied | unlocked=%d slots#=%d",
+				u, #(st.run.talisman.slots or {})) -- [LOG]
+		else
+			LOG.debug("state:talisman not present (skipped)") -- [LOG]
+		end
+
+		if self._awaitingInitial then
+			LOG.debug("initial state received → overlay hide") -- [LOG]
+			self._overlay:hide()
+			self._awaitingInitial = false
+		end
 		self._resultShown = false
 	end
 
@@ -278,6 +305,7 @@ function Run.new(deps)
 	local function onStageResult(a, b, _c, _d, _e)
 		-- ① サーバからの明示クローズ {close=true}
 		if typeof(a) == "table" and a.close == true then
+			LOG.info("result:close (server)") -- [LOG]
 			if self._resultModal then self._resultModal:hide() end
 			self._resultShown = false
 			return
@@ -290,10 +318,14 @@ function Run.new(deps)
 		elseif typeof(a) == "table" then
 			data = a
 		else
+			LOG.warn("result:unknown signature (ignored)") -- [LOG]
 			return
 		end
 
-		if self._resultShown then return end
+		if self._resultShown then
+			LOG.debug("result:already shown (ignored)") -- [LOG]
+			return
+		end
 		self._resultShown = true
 
 		-- 正準 ops/locks
@@ -317,6 +349,9 @@ function Run.new(deps)
 			nextLocked, saveLocked = false, false
 			canNext, canSave = true, true
 		end
+
+		LOG.info("result:show | nextLocked=%s saveLocked=%s clears=%d",
+			tostring(nextLocked), tostring(saveLocked), clears) -- [LOG]
 
 		local isFinalView = (nextLocked == true and saveLocked == true)
 		if isFinalView then
@@ -371,19 +406,22 @@ function Run.new(deps)
 		end)
 	end
 
-	LOG.debug("new done | lang=%s", tostring(self._lang))
+	LOG.info("new done | lang=%s", tostring(self._lang)) -- [LOG]
 	return self
 end
 
 -- 言語切替
 function Run:setLang(lang)
 	local n = normLangJa(lang)
-	if n ~= "ja" and n ~= "en" then return end
-	if self._lang == n then
-		LOG.debug("setLang ignored (same) | lang=%s", n)
+	if n ~= "ja" and n ~= "en" then
+		LOG.debug("setLang ignored (invalid) | in=%s", tostring(lang)) -- [LOG]
 		return
 	end
-	LOG.debug("setLang apply | from=%s to=%s", tostring(self._lang), tostring(n))
+	if self._lang == n then
+		LOG.debug("setLang ignored (same) | lang=%s", n) -- [LOG]
+		return
+	end
+	LOG.info("setLang | from=%s to=%s", tostring(self._lang), tostring(n)) -- [LOG]
 	self._lang = n
 	if type(self._ui_setLang) == "function" then
 		self._ui_setLang(n)
@@ -414,13 +452,13 @@ function Run:show(payload)
 	if payload and payload.lang then
 		local n = normLangJa(payload.lang)
 		if n and n ~= self._lang then
-			LOG.debug("show payload.lang=%s (cur=%s)", tostring(n), tostring(self._lang))
+			LOG.debug("show:payload.lang=%s (cur=%s)", tostring(n), tostring(self._lang)) -- [LOG]
 			self:setLang(n)
 		end
 	else
 		local gg = safeGetGlobalLang()
 		if gg and gg ~= self._lang then
-			LOG.debug("show sync from global | from=%s to=%s", tostring(self._lang), tostring(gg))
+			LOG.debug("show:sync from global | %s -> %s", tostring(self._lang), tostring(gg)) -- [LOG]
 			self:setLang(gg)
 		end
 	end
@@ -428,11 +466,20 @@ function Run:show(payload)
 	-- 護符ボードへ初期データを反映
 	if self._taliBoard then
 		self._taliBoard:setLang(self._lang or "ja")
-		self._taliBoard:setData(extractTalismanFromPayload(payload))
+		-- [FIX-S2] 初期payloadに有効なtalismanがある場合のみ反映（nilで空上書きしない）
+		local tali = extractTalismanFromPayload(payload)
+		if typeof(tali) == "table" then
+			self._taliBoard:setData(tali)
+			LOG.info("show:init talisman applied | unlocked=%s slots#=%d",
+				tostring(tali.unlocked), #(tali.slots or {})) -- [LOG]
+		else
+			LOG.debug("show:init talisman not present (keep current)") -- [LOG]
+		end
 	end
 
 	self.frame.Visible = true
 	self._remotes:disconnect()
+	LOG.debug("remotes:connect") -- [LOG]
 	self._remotes:connect()
 end
 
@@ -440,15 +487,18 @@ function Run:requestSync()
 	if not self.deps or not self.deps.ReqSyncUI then return end
 	self._awaitingInitial = true
 	if self._overlay then self._overlay:show() end
+	LOG.info("ReqSyncUI → FireServer") -- [LOG]
 	self.deps.ReqSyncUI:FireServer()
 end
 
 function Run:hide()
 	self.frame.Visible = false
+	LOG.debug("remotes:disconnect (hide)") -- [LOG]
 	self._remotes:disconnect()
 end
 
 function Run:destroy()
+	LOG.debug("destroy:disconnect remotes & langConn, destroy gui") -- [LOG]
 	self._remotes:disconnect()
 	if self._langConn then self._langConn:Disconnect() end
 	if self.gui then self.gui:Destroy() end

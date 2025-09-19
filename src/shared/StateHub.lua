@@ -175,6 +175,11 @@ function StateHub.pushState(plr: Player)
 			-- 祭事レベル（YakuPanel 等のUIで利用）
 			matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
 
+			-- ▼▼ 追加：Run 側のスナップショット（護符ボード反映用）
+			run         = {                           -- ★追加
+				talisman = (s.run and s.run.talisman) or nil
+			},
+
 			-- 山/手の残枚数（UIの安全表示用）
 			deckLeft    = #(s.deck or {}),
 			handLeft    = #(s.hand or {}),
