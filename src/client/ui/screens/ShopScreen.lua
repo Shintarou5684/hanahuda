@@ -1,8 +1,9 @@
--- src/client/ui/screens/ShopScreen.lua
--- v0.9.7-P2-9 ShopScreen（TWO-ROWS 対応：護符ボードを下段に配置）
---  - 護符ボードの親を nodes.taliArea に変更（中央寄せ）
---  - 右上オーバーレイ配置の残存コードを撤去
---  - そのほかのロジックは P2-8 と同一
+-- StarterPlayerScripts/UI/screens/ShopScreen.lua
+-- v0.9.7-P2-10 ShopScreen（Server-first talisman + jp→ja + idempotent redraw）
+--  - show(payload) で payload.state.run.talisman を即時反映（サーバ確定を優先）
+--  - payload.lang を尊重し "jp"→"ja" 正規化
+--  - 自動配置は「護符配列が無い or 空スロットがある」時のみ（既存の空き検知で担保）
+--  - 同一データの再描画を抑止（talisman シグネチャ比較）
 
 local Shop = {}
 Shop.__index = Shop
@@ -78,6 +79,17 @@ local function cloneSlots6(slots)
 	return { s[1], s[2], s[3], s[4], s[5], s[6] }
 end
 
+local function cloneTalismanData(t)
+	if typeof(t) ~= "table" then
+		return nil
+	end
+	return {
+		maxSlots = tonumber(t.maxSlots or 6) or 6,
+		unlocked = tonumber(t.unlocked or 0) or 0,
+		slots    = cloneSlots6(t.slots),
+	}
+end
+
 local function stockSignature(itemsTbl)
 	if type(itemsTbl) ~= "table" then return "" end
 	local ids = {}
@@ -86,6 +98,16 @@ local function stockSignature(itemsTbl)
 	end
 	table.sort(ids)
 	return table.concat(ids, "|")
+end
+
+local function talismanSignature(t)
+	if typeof(t) ~= "table" then return "<nil>" end
+	local parts = { tostring(tonumber(t.unlocked or 0) or 0) }
+	local s = t.slots or {}
+	for i = 1, 6 do
+		parts[#parts+1] = tostring(s[i] or "")
+	end
+	return table.concat(parts, "|")
 end
 
 --==================================================
@@ -104,10 +126,11 @@ function Shop.new(deps)
 	self._bg = nil
 	self._taliBoard = nil
 
-	-- プレビュー/ローカル影
+	-- プレビュー/ローカル影/シグネチャ
 	self._preview = nil
 	self._lastPlaced = nil
 	self._localBoard = nil
+	self._taliSig = "<none>"
 
 	-- 一時SoldOut
 	self._hiddenItems = {}   -- [itemId]=true
@@ -153,12 +176,13 @@ function Shop.new(deps)
 		if ack and ack:IsA("RemoteEvent") then
 			ack.OnClientEvent:Connect(function(data)
 				-- サーバ確定：ローカル影を更新
-				local base = getTalismanFromPayload(self._payload) or { maxSlots=6, unlocked=2, slots={nil,nil,nil,nil,nil,nil} }
+				local base = getTalismanFromPayload(self._payload) or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
 				self._localBoard = {
 					maxSlots = base.maxSlots or 6,
-					unlocked = tonumber(data and data.unlocked or base.unlocked or 2) or 2,
+					unlocked = tonumber(data and data.unlocked or base.unlocked or 0) or 0,
 					slots    = (data and data.slots) or cloneSlots6(base.slots),
 				}
+				self._taliSig = talismanSignature(self._localBoard)
 				self._preview = nil
 				self._lastPlaced = nil
 				if self._taliBoard then
@@ -182,7 +206,7 @@ function Shop:_snapBoard()
 	return self._localBoard
 		or self._preview
 		or getTalismanFromPayload(self._payload)
-		or { maxSlots=6, unlocked=2, slots={nil,nil,nil,nil,nil,nil} }
+		or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
 end
 
 function Shop:_findFirstEmpty()
@@ -228,6 +252,25 @@ local function maybeClearPreview(self)
 	end
 end
 
+-- サーバ確定 talisman をローカルへ即時反映（重複ならスキップ）
+function Shop:_applyServerTalismanOnce(payload: Payload?)
+	local sv = cloneTalismanData(getTalismanFromPayload(payload))
+	if not sv then return end
+	local sig = talismanSignature(sv)
+	if sig == self._taliSig then
+		-- 同一なら再描画不要
+		return
+	end
+	self._localBoard = sv
+	self._taliSig = sig
+	self._preview = nil
+	self._lastPlaced = nil
+	if self._taliBoard then
+		self._taliBoard:setData(self._localBoard)
+	end
+	LOG.debug("[Shop] server talisman applied | sig=%s", sig)
+end
+
 function Shop:setData(payload: Payload)
 	if payload and payload.lang then
 		local nl = normToJa(payload.lang)
@@ -238,10 +281,14 @@ function Shop:setData(payload: Payload)
 	self._payload = payload
 	maybeClearPreview(self)
 
+	-- サーバ確定護符を優先反映（差分時のみ）
+	self:_applyServerTalismanOnce(payload)
+
 	LOG.debug("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
 
 	if self._taliBoard then
 		self._taliBoard:setLang(self._lang or "ja")
+		-- ここでの setData は差分適用済み（_applyServerTalismanOnce 内）なので冪等維持
 		self._taliBoard:setData(self:_snapBoard())
 	end
 
@@ -257,6 +304,8 @@ function Shop:show(payload: Payload?)
 		end
 		self:_refreshStockSignature(payload)
 		self._payload = payload
+		-- ★ 表示初期化：サーバ確定 talisman を即時反映（プレビューは破棄）
+		self:_applyServerTalismanOnce(payload)
 		maybeClearPreview(self)
 	end
 	self.gui.Enabled = true
@@ -288,6 +337,8 @@ function Shop:update(payload: Payload?)
 		end
 		self:_refreshStockSignature(payload)
 		self._payload = payload
+		-- 連続 open/update 時も差分だけ適用
+		self:_applyServerTalismanOnce(payload)
 		maybeClearPreview(self)
 	end
 	LOG.debug("update | items=%d lang=%s", countItems(self._payload), tostring(self._lang))
@@ -324,6 +375,7 @@ function Shop:autoPlace(talismanId: string, item: any?)
 		return
 	end
 
+	-- 条件：護符配列が無い or 空スロットがある（_findFirstEmpty() が nil なら中止）
 	local idx = self:_findFirstEmpty()
 	if not idx then
 		local toast = self.deps and self.deps.toast
@@ -345,7 +397,7 @@ function Shop:autoPlace(talismanId: string, item: any?)
 	local t = self:_snapBoard()
 	local preview = {
 		maxSlots = t.maxSlots or 6,
-		unlocked = t.unlocked or 2,
+		unlocked = t.unlocked or 0,
 		slots    = cloneSlots6(t.slots),
 	}
 	preview.slots[idx] = tostring(talismanId) .. "(仮)"

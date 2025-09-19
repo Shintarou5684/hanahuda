@@ -1,10 +1,11 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-7
+-- v0.9.7-P2-8
 --  - StageResult の互換受信を強化（{close=true} / (true,data) / data 単体の全対応）
 --  - Home等への遷移後にリザルトが残留しないよう、show() 冒頭で明示的に hide / _resultShown リセット
 --  - 既存機能・UIは維持
---  - P2-6: [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
---  - P2-7: 監視用ログを追加（[LOG] マーク）
+--  - [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
+--  - 監視用ログを追加（[LOG] マーク）
+--  - ★ サーバ確定の talisman をそのまま描画（クライアントで補完/推測しない）
 
 local Run = {}
 Run.__index = Run
@@ -129,10 +130,26 @@ function Run.new(deps)
 		self._resultModal:bindNav(self.deps.Nav)
 	else
 		self._resultModal:on({
-			home  = function() if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("home") end end,
-			next  = function() if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("next") end end,
-			save  = function() if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("save") end end,
-			final = function() if self.deps and self.deps.DecideNext then self.deps.DecideNext:FireServer("home") end end,
+			home  = function()
+				if self.deps and self.deps.DecideNext then
+					self.deps.DecideNext:FireServer("home")
+				end
+			end,
+			next  = function()
+				if self.deps and self.deps.DecideNext then
+					self.deps.DecideNext:FireServer("next")
+				end
+			end,
+			save  = function()
+				if self.deps and self.deps.DecideNext then
+					self.deps.DecideNext:FireServer("save")
+				end
+			end,
+			final = function()
+				if self.deps and self.deps.DecideNext then
+					self.deps.DecideNext:FireServer("home")
+				end
+			end,
 		})
 	end
 
@@ -143,13 +160,17 @@ function Run.new(deps)
 	do
 		if ui.notice then
 			local nb = ui.notice.Parent
-			nb.Size = UDim2.fromScale(1, 0)
-			nb.Visible = false
+			if nb then
+				nb.Size = UDim2.fromScale(1, 0)
+				nb.Visible = false
+			end
 		end
 		if ui.help then
 			local tb = ui.help.Parent
-			tb.Size = UDim2.fromScale(1, 0)
-			tb.Visible = false
+			if tb then
+				tb.Size = UDim2.fromScale(1, 0)
+				tb.Visible = false
+			end
 		end
 
 		local center = nil
@@ -196,9 +217,11 @@ function Run.new(deps)
 		end
 
 		if grantRyo or grantRole then
-			DevTools.create(self.frame, { DevGrantRyo = grantRyo, DevGrantRole = grantRole }, {
-				grantRyoAmount = 1000, offsetX = 10, offsetY = 10, width = 160, height = 32
-			})
+			DevTools.create(
+				self.frame,
+				{ DevGrantRyo = grantRyo, DevGrantRole = grantRole },
+				{ grantRyoAmount = 1000, offsetX = 10, offsetY = 10, width = 160, height = 32 }
+			)
 		end
 	end
 
@@ -215,12 +238,11 @@ function Run.new(deps)
 				else
 					self._selectedHandIdx = i
 				end
-
 				HandRenderer.render(self.handArea, hand, {
 					selectedIndex = self._selectedHandIdx,
-					onSelect = function(_) end
+					onSelect = function(_) end,
 				})
-			end
+			end,
 		})
 		if self._awaitingInitial then
 			LOG.debug("initial hand received → overlay hide") -- [LOG]
@@ -237,7 +259,7 @@ function Run.new(deps)
 					self.deps.ReqPick:FireServer(self._selectedHandIdx, bindex)
 					self._selectedHandIdx = nil
 				end
-			end
+			end,
 		})
 	end
 
@@ -274,7 +296,7 @@ function Run.new(deps)
 		if self._yakuPanel then
 			self._yakuPanel:update({
 				lang    = mapLangForPanel(self._lang),
-				matsuri = st and st.matsuri
+				matsuri = st and st.matsuri,
 			})
 		end
 
@@ -287,8 +309,8 @@ function Run.new(deps)
 			self._taliBoard:setLang(self._lang or "ja")
 			self._taliBoard:setData(st.run.talisman)
 			local u = tonumber(st.run.talisman.unlocked or 0) or 0
-			LOG.info("state:talisman applied | unlocked=%d slots#=%d",
-				u, #(st.run.talisman.slots or {})) -- [LOG]
+			local cnt = #(st.run.talisman.slots or {})
+			LOG.info("state:talisman applied | unlocked=%d slots#=%d", u, cnt) -- [LOG]
 		else
 			LOG.debug("state:talisman not present (skipped)") -- [LOG]
 		end
@@ -380,14 +402,32 @@ function Run.new(deps)
 	end
 
 	-- ボタン（必要最低限）
-	if self.buttons.yaku then
+	if self.buttons and self.buttons.yaku then
 		self.buttons.yaku.MouseButton1Click:Connect(function()
 			if self._yakuPanel then self._yakuPanel:open() end
 		end)
 	end
-	self.buttons.confirm.MouseButton1Click:Connect(function() if self.deps.Confirm       then self.deps.Confirm:FireServer()       end end)
-	self.buttons.rerollAll.MouseButton1Click:Connect(function() if self.deps.ReqRerollAll then self.deps.ReqRerollAll:FireServer() end end)
-	self.buttons.rerollHand.MouseButton1Click:Connect(function() if self.deps.ReqRerollHand then self.deps.ReqRerollHand:FireServer() end end)
+	if self.buttons and self.buttons.confirm then
+		self.buttons.confirm.MouseButton1Click:Connect(function()
+			if self.deps and self.deps.Confirm then
+				self.deps.Confirm:FireServer()
+			end
+		end)
+	end
+	if self.buttons and self.buttons.rerollAll then
+		self.buttons.rerollAll.MouseButton1Click:Connect(function()
+			if self.deps and self.deps.ReqRerollAll then
+				self.deps.ReqRerollAll:FireServer()
+			end
+		end)
+	end
+	if self.buttons and self.buttons.rerollHand then
+		self.buttons.rerollHand.MouseButton1Click:Connect(function()
+			if self.deps and self.deps.ReqRerollHand then
+				self.deps.ReqRerollHand:FireServer()
+			end
+		end)
+	end
 
 	-- Remotes
 	self._remotes = RemotesCtl.create(self.deps, {

@@ -7,7 +7,8 @@
 --  - ShopEffects ローダー復活済み
 --  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
 --  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
---  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（s.run.talisman または s.talisman）
+--  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（state.run.talisman をそのまま搭載）
+--               ※補完/推測は一切しない（真実は TalismanService/StateHub が管理）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -26,6 +27,9 @@ local SharedModules = RS:WaitForChild("SharedModules")
 local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
 local RunDeckUtil   = require(SharedModules:WaitForChild("RunDeckUtil"))
 local CardEngine    = require(SharedModules:WaitForChild("CardEngine"))
+
+-- ★ 護符の正本はサーバ一元管理（不足キー補完のみ）
+local TaliService   = require(SSS:WaitForChild("TalismanService"))
 
 -- ★ SaveService（存在しなくてもゲームは動作継続）
 local SaveService do
@@ -180,12 +184,26 @@ local function generateStock(rng: Random, count: number)
 end
 
 --========================
+-- talisman 抽出（整形/補完はしない）
+--========================
+local function readRunTalisman(s:any)
+	if type(s) ~= "table" then return nil end
+	if type(s.run) == "table" and type(s.run.talisman) == "table" then
+		return s.run.talisman
+	end
+	return nil
+end
+
+--========================
 -- 本体
 --========================
 local Service = { _getState=nil, _pushState=nil }
 
 -- ========= open =========
 local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string?, target:number?}?)
+	-- 開店直前に、正本の talisman を必ず準備（不足キーのみ補う）
+	pcall(function() TaliService.ensureFor(plr, "ShopOpen") end)
+
 	s.phase = "shop"
 	s.shop = s.shop or {}
 	s.shop.rng = s.shop.rng or Random.new(os.clock()*1000000)
@@ -202,24 +220,17 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 
 	local deckView = RunDeckUtil.snapshot(s)
 
-	-- ★ 抽出：talisman（存在すればクライアントへ渡す）
-	local tali = nil
-	if type(s) == "table" then
-		-- s.run.talisman または s.talisman のどちらかに居るケースを想定
-		if type(s.run) == "table" and type(s.run.talisman) == "table" then
-			tali = s.run.talisman
-		elseif type(s.talisman) == "table" then
-			tali = s.talisman
-		end
-	end
+	-- ★ talisman は state.run.talisman を“そのまま”搭載（補完や推測はしない）
+	local tali = readRunTalisman(s)
 
 	-- ===== LOG =====
 	LOG.info(
-		"[OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s",
+		"[OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s talisman#=%s",
 		tostring(plr and plr.Name or "?"),
 		tostring(s.season), money, REROLL_COST,
 		matsuriJSON(s), stockBrief(s.shop.stock),
-		(notice ~= "" and notice) or ""
+		(notice ~= "" and notice) or "",
+		tostring(type(tali)=="table" and #(tali.slots or {}) or 0)
 	)
 
 	-- 入場スナップ
@@ -243,8 +254,14 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		maxStock     = MAX_STOCK,
 		stockCount   = #(s.shop.stock or {}),
 
-		-- ★ 護符データ（nil 許容）
+		-- ★ 護符データ（nil 許容、上書き/補完なし）
 		talisman     = tali,
+
+		-- 互換用：State を抱えておく（ShopScreen が state.run.talisman を参照できるように）
+		state = {
+			run = { talisman = tali },
+			lang = s.lang,
+		},
 	})
 end
 
