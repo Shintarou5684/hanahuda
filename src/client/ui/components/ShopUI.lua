@@ -1,8 +1,7 @@
 -- src/client/ui/components/ShopUI.lua
--- v0.9.F Theme薄適用版（UIのみ）
--- - レイアウトや挙動は従来通り
--- - 角丸/ストローク/色を Theme から適用
--- - ノード名は従来互換（title, rerollBtn, deckBtn, scroll, grid, summary, deckPanel, deckTitle, deckText, infoPanel, infoTitle, infoText, closeBtn）
+-- v0.9.G TWO-ROWS: 上下2段（上=0.7 / 下=0.3）下段に TalismanArea 追加
+-- - 既存ノード名は従来互換（title, rerollBtn, deckBtn, scroll, grid, summary, deckPanel, deckTitle, deckText, infoPanel, infoTitle, infoText, closeBtn）
+-- - 追加ノード: taliArea
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -100,7 +99,7 @@ function M.build()
 	rerollBtn.TextColor3 = Theme.COLORS.WarnBtnText
 	addCorner(rerollBtn, 8)
 
-	-- body
+	-- body（上下2段）
 	local body = Instance.new("Frame")
 	body.Name = "Body"
 	body.BackgroundTransparency = 1
@@ -109,12 +108,27 @@ function M.build()
 	body.ZIndex = 1
 	body.Parent = modal
 
+	local vlist = Instance.new("UIListLayout")
+	vlist.FillDirection = Enum.FillDirection.Vertical
+	vlist.SortOrder = Enum.SortOrder.LayoutOrder
+	vlist.Padding = UDim.new(0,8)
+	vlist.Parent = body
+
+	-- 上段（コンテンツ 70%）
+	local top = Instance.new("Frame")
+	top.Name = "Top"
+	top.BackgroundTransparency = 1
+	top.Size = UDim2.new(1,0,0.7,0)
+	top.LayoutOrder = 1
+	top.ZIndex = 1
+	top.Parent = body
+
 	local left = Instance.new("Frame")
 	left.Name = "Left"
 	left.BackgroundTransparency = 1
 	left.Size = UDim2.new(0.62,0,1,0)
 	left.ZIndex = 1
-	left.Parent = body
+	left.Parent = top
 
 	local right = Instance.new("Frame")
 	right.Name = "Right"
@@ -122,7 +136,7 @@ function M.build()
 	right.Size = UDim2.new(0.38,0,1,0)
 	right.Position = UDim2.new(0.62,0,0,0)
 	right.ZIndex = 1
-	right.Parent = body
+	right.Parent = top
 
 	-- 左スクロール
 	local scroll = Instance.new("ScrollingFrame")
@@ -236,6 +250,21 @@ function M.build()
 	summary.ZIndex = 1
 	summary.Parent = right
 
+	-- 下段（護符 30%）
+	local bottom = Instance.new("Frame")
+	bottom.Name = "Bottom"
+	bottom.BackgroundTransparency = 1
+	bottom.Size = UDim2.new(1,0,0.3,0)
+	bottom.LayoutOrder = 2
+	bottom.ZIndex = 1
+	bottom.Parent = body
+
+	local taliArea = Instance.new("Frame")
+	taliArea.Name = "TalismanArea"
+	taliArea.BackgroundTransparency = 1
+	taliArea.Size = UDim2.fromScale(1,1)
+	taliArea.Parent = bottom
+
 	-- footer
 	local footer = Instance.new("Frame")
 	footer.Name = "Footer"
@@ -257,7 +286,7 @@ function M.build()
 	closeBtn.TextColor3 = Theme.COLORS.PrimaryBtnText
 	addCorner(closeBtn, 8)
 
-	-- nodes 返却（従来互換）
+	-- nodes 返却（従来互換＋taliArea）
 	local nodes = {
 		title = title, rerollBtn = rerollBtn, deckBtn = deckBtn,
 		scroll = scroll, grid = grid,
@@ -265,6 +294,7 @@ function M.build()
 		deckPanel = deckPanel, deckTitle = deckTitle, deckText = deckText,
 		infoPanel = infoPanel, infoTitle = infoTitle, infoText = infoText,
 		closeBtn = closeBtn,
+		taliArea = taliArea,
 	}
 
 	return g, nodes

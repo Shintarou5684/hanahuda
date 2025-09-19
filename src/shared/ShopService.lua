@@ -1,5 +1,5 @@
 -- ServerScriptService/ShopService.lua
--- v0.9.2 → v0.9.2b 屋台サービス（SIMPLE+NONCE）
+-- v0.9.2 → v0.9.2c 屋台サービス（SIMPLE+NONCE + Talisman payload）
 -- 変更点:
 --  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
 --  - 在庫は満杯でも必ず強制再生成
@@ -7,6 +7,7 @@
 --  - ShopEffects ローダー復活済み
 --  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
 --  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
+--  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（s.run.talisman または s.talisman）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -201,6 +202,17 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 
 	local deckView = RunDeckUtil.snapshot(s)
 
+	-- ★ 抽出：talisman（存在すればクライアントへ渡す）
+	local tali = nil
+	if type(s) == "table" then
+		-- s.run.talisman または s.talisman のどちらかに居るケースを想定
+		if type(s.run) == "table" and type(s.run.talisman) == "table" then
+			tali = s.run.talisman
+		elseif type(s.talisman) == "table" then
+			tali = s.talisman
+		end
+	end
+
 	-- ===== LOG =====
 	LOG.info(
 		"[OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s",
@@ -230,6 +242,9 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		-- UI支援（参照していれば活用 / 不要ならクライアント側で無視）
 		maxStock     = MAX_STOCK,
 		stockCount   = #(s.shop.stock or {}),
+
+		-- ★ 護符データ（nil 許容）
+		talisman     = tali,
 	})
 end
 

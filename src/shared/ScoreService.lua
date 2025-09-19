@@ -51,6 +51,10 @@ local openShopFn = nil
 -- RoundService 参照（deps から注入。無ければフォールバック require）
 local RoundRef = nil
 
+-- ▼ 開発トグル：二択固定（保存を出さない）＋「次」は常にロック表示
+local DEV_LOCK_NEXT          = true   -- true の間は canNext=false 固定
+local REMOVE_SAVE_BUTTON     = true   -- true なら保存ボタンを送らない（UI二択）
+
 local function calcMonReward(sum, target, season)
 	-- 目標値は現在使用しないが将来の調整余地として残す
 	local _ = target
@@ -160,16 +164,18 @@ function Score.bind(Remotes, deps)
 		s.lastScore = { total = total or 0, roles = roles, detail = detail }
 		StateHub.pushState(plr)
 
-		-- ★ アンロック判定：通算クリア回数 >= 3
+		-- 旧仕様の解禁判定（参照のみ・ログ用）
 		local clears   = tonumber(s.totalClears or 0) or 0
-		local unlocked = clears >= 3
+		local unlocked_by_clears = (clears >= 3)
+		local canNextFinal = (not DEV_LOCK_NEXT) and unlocked_by_clears or false
+		local canSaveFinal = false -- 常に保存は無効（ボタン非表示）
 
-		-- ★★ DEBUG: 冬クリア時点のサマリ（解禁判定を可視化）
+		-- DEBUG: 冬クリア時点のサマリ
 		print(("[Score] winter clear by %s | clears=%d unlocked=%s season=%s sum=%d target=%d bank=%d")
 			:format(
 				plr.Name,
 				clears,
-				tostring(unlocked),
+				tostring(unlocked_by_clears),
 				tostring(season),
 				s.seasonSum or 0,
 				tgt or 0,
@@ -177,19 +183,22 @@ function Score.bind(Remotes, deps)
 			))
 
 		if Remotes.StageResult then
-			-- ▼ レガシー（options）と正準（ops）の両方を同梱して互換維持
+			-- ▼ レガシー（options）と正準（ops）を送る
 			local optsLegacy = {
-				goHome   = { enabled = true,     label = "トップへ戻る" },
-				goNext   = { enabled = unlocked, label = unlocked and "次のステージへ" or "次のステージへ（ロック中）" },
-				saveQuit = { enabled = unlocked, label = unlocked and "セーブして終了" or "セーブして終了（ロック中）" },
+				goHome = { enabled = true,  label = "このランを終える" },
+				goNext = { enabled = canNextFinal, label = canNextFinal and "次のステージへ" or "次のステージへ（開発中）" },
 			}
+			-- 保存ボタンは送らない（UI二択）。どうしてもキーが必要なUIなら以下を有効化して enabled=false で送る
+			if not REMOVE_SAVE_BUTTON then
+				optsLegacy.saveQuit = { enabled = false, label = "保存する（無効）" }
+			end
+
 			local ops = {
 				home = optsLegacy.goHome,
 				next = optsLegacy.goNext,
-				save = optsLegacy.saveQuit,
 			}
+			-- save は送らない
 
-			-- 送信ペイロード（UIは ResultModal + Nav で処理、C→S は DecideNext に統一）
 			local payload = {
 				season      = season,
 				seasonSum   = s.seasonSum or 0,
@@ -199,14 +208,17 @@ function Score.bind(Remotes, deps)
 				rewardBank  = rewardBank,
 				bankAdded   = rewardBank,
 				clears      = clears,
-				canNext     = unlocked,
-				canSave     = unlocked,
-				message     = unlocked and
-					("冬をクリア！ 2両を獲得。『次のステージ／セーブ』が解禁済み（通算"..clears.."回クリア）") or
-					("冬をクリア！ 2両を獲得。『次のステージ／セーブ』は通算3回クリアで解禁（現在"..clears.."回）"),
-				options     = optsLegacy, -- 互換
-				ops         = ops,        -- 正準
-				locks       = { nextLocked = not ops.next.enabled, saveLocked = not ops.save.enabled },
+
+				-- ▼ UI がこの2フラグを見て分岐する旧実装にも対応
+				canNext     = canNextFinal,   -- ← 開発中は常に false
+				canSave     = canSaveFinal,   -- ← 常に false（保存ボタン出さない）
+
+				message     = (canNextFinal and "冬をクリア！ 2両を獲得。『次のステージ』が解禁済み。") or
+				              "冬をクリア！ 2両を獲得。『次のステージ』は開発中です。",
+
+				options     = optsLegacy, -- 互換（レガシーUI）
+				ops         = ops,        -- 正準（Nav: next('home'|'next')のみ想定）
+				locks       = { nextLocked = not canNextFinal, saveLocked = true },
 				lang        = s.lang,
 			}
 
@@ -215,7 +227,7 @@ function Score.bind(Remotes, deps)
 
 			Remotes.StageResult:FireClient(plr, true, payload)
 		end
-		-- 以降の遷移は C→S: Remotes.DecideNext("home"|"next"|"save") （NavServer が唯一線）
+		-- 以降の遷移は C→S: Remotes.DecideNext("home"|"next") （NavServer が唯一線）
 	end)
 end
 

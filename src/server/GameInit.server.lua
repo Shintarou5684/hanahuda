@@ -9,6 +9,7 @@
 --  - ★ 冬クリア→HOME/保存→HOME 時は“春スナップ”を残さない（hasSave=false を返す）
 --  - ★ P1-1: DecideNext の実装を NavServer に一本化（本ファイルは初期化のみ）
 --  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
+--  - ★ P2-10: ラン終了後は強制NEW（_forceNewOnNextStart フラグを尊重）
 
 --==================================================
 -- Services
@@ -21,11 +22,11 @@ local SSS     = game:GetService("ServerScriptService")
 -- Logger
 --==================================================
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
-local LOG    = Logger.scope("GameInit")  -- ★ reserve word対策：for → scope
+local LOG    = Logger.scope("GameInit")
 Logger.configure({
-	level = Logger.INFO,      -- 公開時は INFO 以上、開発時は DEBUG 推奨
-	timePrefix = true,        -- 時刻プレフィックス
-	dupWindowSec = 0.5,       -- 同一メッセージ抑止窓（秒）
+	level = Logger.INFO,
+	timePrefix = true,
+	dupWindowSec = 0.5,
 })
 
 LOG.info("boot")
@@ -122,9 +123,9 @@ local DevGrantRole = ensureRemote("DevGrantRole")
 DevGrantRyo.OnServerEvent:Connect(function(plr, amount)
 	amount = tonumber(amount) or 1000
 	local s = StateHub.get(plr); if not s then return end
-	s.bank = (s.bank or 0) + amount                -- メモリ状態
+	s.bank = (s.bank or 0) + amount
 	StateHub.pushState(plr)
-	SaveService.addBank(plr, amount)               -- 永続もdirty化
+	SaveService.addBank(plr, amount)
 	LOG.debug("DevGrantRyo | user=%s amount=%d bank=%d", plr.Name, amount, s.bank or -1)
 end)
 
@@ -152,7 +153,6 @@ DevGrantRole.OnServerEvent:Connect(function(plr)
 	takeByPredOrStub(s, function(c) return c.month==8 and c.kind=="bright" end, {month=8, kind="bright", name="芒に月"})
 	takeByPredOrStub(s, function(c) return c.month==3 and c.kind=="bright" end, {month=3, kind="bright", name="桜に幕"})
 
-	-- ★ 修正：s.taken と s を渡す
 	local total, roles, detail = Scoring.evaluate(s.taken or {}, s)
 	s.lastScore = { total = total or 0, roles = roles, detail = detail }
 	StateHub.pushState(plr)
@@ -233,6 +233,9 @@ Players.PlayerAdded:Connect(function(plr)
 	s.year        = prof.year   or 0
 	s.totalClears = prof.clears or 0
 	s.lang        = savedLang
+	-- 念のため NEW強制フラグは初期状態では無効化
+	s._forceNewOnNextStart = false
+
 	StateHub.set(plr, s)
 
 	LOG.debug(
@@ -294,6 +297,7 @@ local function fireReadySoon(plr)
 end
 
 local function startNewRun(plr)
+	-- NEW 開始前に続きスナップは必ず破棄
 	if SaveService.clearActiveRun then pcall(function() SaveService.clearActiveRun(plr) end) end
 	Round.resetRun(plr)
 	fireReadySoon(plr)
@@ -330,7 +334,19 @@ local function continueFromSnapshot(plr, snap:any)
 	LOG.info("continueFromSnapshot | user=%s season=%d atShop=%s", plr.Name, season, tostring(snap.atShop))
 end
 
+-- ★ 統合：NEW/CNT 自動判定（ラン終了後は強制NEW）
 local function startGameAuto(plr)
+	local s = StateHub.get(plr) or {}
+
+	-- ★ NavServer の endRunAndClean が立てるフラグを最優先
+	if s._forceNewOnNextStart then
+		LOG.info("startGameAuto | force NEW (flag) | user=%s", plr.Name)
+		s._forceNewOnNextStart = false -- 一度使ったら解除
+		StateHub.set(plr, s)
+		startNewRun(plr)
+		return
+	end
+
 	local snap = SaveService.getActiveRun(plr)
 	if snap then
 		continueFromSnapshot(plr, snap)
@@ -366,7 +382,7 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 
 	local nextSeason = (s.season or 1) + 1
 	if nextSeason > 4 then
-		-- 冬→春はランリセット（ここは継続プレイのためスナップ維持でOK）
+		-- 冬→春はランリセット（継続プレイのためスナップ維持でOK）
 		Round.resetRun(plr)
 	else
 		Round.newRound(plr, nextSeason)

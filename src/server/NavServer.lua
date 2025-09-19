@@ -1,13 +1,20 @@
--- ServerScriptService/NavServer.lua
--- v0.9.6 P1-1 (+P1-3 Logger) Nav 集約：DecideNext を唯一線に
--- 仕様：
---   * C→S: DecideNext("home"|"next"|"save")
---   * 冬クリア後3択に対応（"next" は totalClears>=3 の解禁判定）
---   * "home"/"save" は“春スナップ”を必ず消し、HomeOpen.hasSave=false を返す
---   * 言語コードは外部 "ja"/"en"（"jp" は "ja" に正規化）
---   * print/warn → Logger に置換
+-- v0.9.7 P1-3 Nav 集約：DecideNext を唯一線に（保存廃止 / 次ステージロック可）
+-- 追加修正:
+--  - ラン終了時に StageResult を強制クローズ通知（残存モーダル対策）
+--  - 次回スタートを強制NEWさせるフラグ s._forceNewOnNextStart = true を付与
+--  - "home" は “このランを終了” として扱い、保留結果やスナップを全消去
+--  - Round.resetRun() は呼ばず state を直接クリア（春スナップ生成を防止）
+--  - HomeOpen は hasSave=false を必ず返す（常に New Game になる）
+--  - "save" は受け取っても即 "home" に変換（保存ボタン廃止の保険）
+--  - 次のステージは開発中ロックをフラグで制御（LOCAL_DEV_NEXT_LOCKED）
 
 local RS  = game:GetService("ReplicatedStorage")
+
+-- ===== 開発用トグル ===============================================
+-- true : つねに「次のステージ」をロック（押してもHOMEに倒す）
+-- false: 既存どおり「通算3回クリアで解禁」
+local LOCAL_DEV_NEXT_LOCKED = true
+-- ================================================================
 
 -- Logger
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
@@ -30,8 +37,9 @@ local function ensureRemote(name: string)
 end
 
 local Remotes = {
-	HomeOpen   = ensureRemote("HomeOpen"),
-	DecideNext = ensureRemote("DecideNext"),
+	HomeOpen    = ensureRemote("HomeOpen"),
+	DecideNext  = ensureRemote("DecideNext"),
+	StageResult = ensureRemote("StageResult"), -- ★ 追加: 強制クローズ用
 }
 
 local function normLang(v:string?): string
@@ -69,17 +77,48 @@ function NavServer.init(deps: Deps)
 	return self
 end
 
--- ★ 補助：HOMEへ戻る前に“春スナップ”を消す
-local function resetRunForHome(Round, SaveService, plr: Player)
-	Round.resetRun(plr) -- 実装都合で春スナップが生成される
+-- ★ “ランを終了”させるハードリセット（春スナップを新規生成しない）
+local function endRunAndClean(StateHub, SaveService, plr: Player)
+	local s = StateHub and StateHub.get and StateHub.get(plr)
+	if not s then return end
+
+	-- ラン関連・結果保留・遷移ロックを全て破棄
+	s.phase         = "home"
+	s.run           = nil
+	s.shop          = nil
+	s.ops           = nil
+	s.options       = nil
+	s.resultPending = nil
+	s.stageResult   = nil
+	s.decideLocks   = nil
+	s.mult          = 1.0
+	-- 念のため季節関連も切る（サーバ復元やUIの誤判定を防止）
+	s.season        = nil
+	s.round         = nil
+
+	-- 次回開始は必ずNEW（GameInit.startGameAuto で見る）
+	s._forceNewOnNextStart = true
+
+	-- 「続き」用スナップも破棄（DataStore側）
 	if SaveService and typeof(SaveService.clearActiveRun) == "function" then
 		pcall(function() SaveService.clearActiveRun(plr) end)
+	end
+
+	-- クライアントの結果モーダルを明示的に閉じさせる（残存対策）
+	-- Client側は {close=true} を受け取ったらモーダルを閉じる実装にしておく
+	pcall(function()
+		Remotes.StageResult:FireClient(plr, { close = true })
+	end)
+
+	-- クライアントへ最新 state を押し出して視覚的にも“切る”
+	if StateHub and StateHub.pushState then
+		pcall(function() StateHub.pushState(plr) end)
 	end
 end
 
 function NavServer:handle(plr: Player, op: string)
 	local StateHub    = self.deps.StateHub
-	local Round       = self.deps.Round
+	local Round       = self.deps.Round         -- 参照は残すが "home" では使わない
 	local ShopService = self.deps.ShopService
 	local SaveService = self.deps.SaveService
 
@@ -95,30 +134,47 @@ function NavServer:handle(plr: Player, op: string)
 		return
 	end
 
+	-- 互換: "save" を送ってきてもすべて "home" として扱う（保存機能は廃止）
+	if op == "save" then
+		op = "home"
+	end
+
 	-- 共通初期化
 	s.mult = 1.0
 
-	-- 解禁判定（例：3クリア以上で "next" 許可）
+	-- 解禁判定（既定: 3クリアで "next" 許可）
 	local clears   = tonumber(s.totalClears or 0) or 0
-	local unlocked = clears >= 3
+	local unlocked = (not LOCAL_DEV_NEXT_LOCKED) and (clears >= 3) or false
+
 	if op ~= "home" and not unlocked then
+		-- ロック中に "next" を送ってきても HOME へ倒す（改造クライアント対策）
 		op = "home"
 	end
-	LOG.info("handle | user=%s op=%s unlocked=%s clears=%d", tostring(plr and plr.Name or "?"), tostring(op), tostring(unlocked), clears)
+
+	LOG.info(
+		"handle | user=%s op=%s unlocked=%s clears=%d",
+		tostring(plr and plr.Name or "?"), tostring(op), tostring(unlocked), clears
+	)
 
 	if op == "home" then
-		resetRunForHome(Round, SaveService, plr)
+		-- ★ ランを終了（続き無し）→ Home
+		endRunAndClean(StateHub, SaveService, plr)
+
 		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = false,
+			hasSave = false, -- ★常に New Game
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
 			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
 		})
-		LOG.info("→ HOME | user=%s hasSave=false bank=%d year=%d clears=%d", plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0)
+		LOG.info(
+			"→ HOME(end-run) | user=%s hasSave=false bank=%d year=%d clears=%d",
+			plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0
+		)
 		return
 
 	elseif op == "next" then
+		-- 次の年へ（解禁済のみ到達）
 		s.year = (s.year or 0) + 25
 		if SaveService and typeof(SaveService.bumpYear) == "function" then
 			SaveService.bumpYear(plr, 25)
@@ -133,23 +189,6 @@ function NavServer:handle(plr: Player, op: string)
 			if StateHub and StateHub.pushState then StateHub.pushState(plr) end
 			LOG.info("→ NEXT (push state only) | user=%s newYear=%d", plr.Name, s.year or 0)
 		end
-		return
-
-	elseif op == "save" then
-		local ok = true
-		if SaveService and typeof(SaveService.flush) == "function" then
-			ok = SaveService.flush(plr) == true
-		end
-		resetRunForHome(Round, SaveService, plr)
-		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = false, -- ★常に START（春スナップは消去済）
-			bank    = s.bank or 0,
-			year    = s.year or 0,
-			clears  = s.totalClears or 0,
-			saved   = ok,
-			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
-		})
-		LOG.info("→ SAVE→HOME | user=%s saved=%s", plr.Name, tostring(ok))
 		return
 	end
 

@@ -1,12 +1,16 @@
 -- StarterPlayerScripts/UI/screens/PatchNotesModal.lua
--- v0.9.7  Patch Notes: 前面フルスクリーンモーダル（スクロール）
+-- v0.9.7-P2-1  Patch Notes: 前面フルスクリーンモーダル（スクロール）
 -- * 外部I/F言語コードを 'ja'/'en' に統一（'jp' 受信時は 'ja' に正規化）
 -- * Locale.get() を優先利用（辞書取得の堅牢化）
+-- * 言語正規化/初期取得を LocaleUtil に統合
 
 local Patch = {}
 Patch.__index = Patch
 
 local RS = game:GetService("ReplicatedStorage")
+
+local Locale        = require(RS:WaitForChild("Config"):WaitForChild("Locale"))
+local LocaleUtil    = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
 
 -- PatchNotes を安全にロード（任意ファイル）
 local function safeLoadPatchNotes()
@@ -25,26 +29,27 @@ end
 local function makeL(dict) return function(k) return dict[k] or k end end
 local function Dget(dict, key, fallback) return (dict and dict[key]) or fallback end
 
--- 言語コード正規化: 'jp' は 'ja' に、その他は 'en' フォールバック
-local function normLang(lang)
-	local s = tostring(lang or ""):lower()
-	if s == "jp" then
-		warn("[Locale] PatchNotesModal: received 'jp'; normalizing to 'ja'")
-		return "ja"
+-- "jp" を受けたら警告して "ja" に、その他は LocaleUtil.norm に委譲
+local function normLangJa(v:string?): string
+	local raw = tostring(v or ""):lower()
+	local n = LocaleUtil.norm(raw) or "en"
+	if raw == "jp" and n == "ja" then
+		warn("[PatchNotesModal] received legacy 'jp'; normalizing to 'ja'")
 	end
-	if s == "ja" or s == "en" then return s end
-	return "en"
+	return n
 end
 
 --========================
 -- Ctor
 --========================
--- opts = { parentGui:ScreenGui, lang:"ja"|"en" (legacy "jp" accepted), Locale:table }
+-- opts = { parentGui:ScreenGui, lang:"ja"|"en" (legacy "jp" accepted) }
 function Patch.new(opts)
 	local self = setmetatable({}, Patch)
 
-	self.Locale = (opts and opts.Locale) or require(RS:WaitForChild("Config"):WaitForChild("Locale"))
-	self.lang   = normLang(opts and opts.lang)
+	self.Locale = Locale
+	-- 指定 > safeGlobal > pickInitial（内部で pick→"en" フォールバック）
+	self.lang   = normLangJa((opts and opts.lang) or LocaleUtil.safeGlobal() or LocaleUtil.pickInitial())
+
 	-- Locale.get を優先（無ければテーブル直参照 → en フォールバック）
 	local dict = (type(self.Locale.get)=="function" and self.Locale.get(self.lang))
 		or self.Locale[self.lang] or self.Locale.en
@@ -211,7 +216,7 @@ end
 -- API
 --========================
 function Patch:setLanguage(lang)
-	local nl = normLang(lang)
+	local nl = normLangJa(lang)
 	if self.lang == nl then return end
 	self.lang = nl
 	-- Locale.get を優先

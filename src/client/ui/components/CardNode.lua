@@ -3,15 +3,16 @@
 -- 右側インフォ / 下部バッジはローカライズ（JA/EN）対応
 -- 依存: ReplicatedStorage/SharedModules/CardImageMap.lua
 -- 任意依存: ReplicatedStorage/Config/Theme.lua, ReplicatedStorage/Config/Locale.lua
--- v0.9.7-P1-4a:
+-- v0.9.7-P1-4b:
 --   ① 札は“真四角”に統一（UICorner/外枠UIStrokeを生成しない）
 --   ② バッジは従来どおりカード幅いっぱい（Size=UDim2.new(1,0,0,h)）
---   ③ 言語ヘルパは現状維持（JP/EN正規化）
+--   ③ 言語正規化を LocaleUtil に統合（"jp"→"ja" 警告は維持）
 
 local TweenService = game:GetService("TweenService")
 local RS = game:GetService("ReplicatedStorage")
 
 local CardImageMap = require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
+local LocaleUtil   = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
 
 -- Optional: Theme / Locale
 local Theme: any = nil
@@ -73,35 +74,36 @@ local function themeImage(key: string, fallback: string)
 end
 
 --========================
--- Locale helpers
+-- Locale helpers（LocaleUtil 統合）
 --========================
 local function normLangJa(v: string?): string?
-	local s = tostring(v or ""):lower()
-	if s == "ja" or s == "jp" then
-		if s == "jp" then warn("[CardNode] received legacy 'jp'; normalizing to 'ja'") end
-		return "ja"
-	elseif s == "en" then
-		return "en"
+	local raw = tostring(v or ""):lower()
+	local n = LocaleUtil.norm(raw) -- "ja"/"en" or nil
+	if raw == "jp" and n == "ja" then
+		warn("[CardNode] received legacy 'jp'; normalizing to 'ja'")
 	end
-	return nil
+	return n
 end
 
 -- "ja"/"en" のみ返す（Locale.getGlobal → Locale.pick → "en"）
 local function curLang(): string
+	-- 1) グローバル設定
 	if Locale and typeof(Locale.getGlobal) == "function" then
 		local ok, v = pcall(Locale.getGlobal)
 		if ok then
-			local n = normLangJa(v)
+			local n = LocaleUtil.norm(v)
 			if n then return n end
 		end
 	end
+	-- 2) OS/環境推奨
 	if Locale and typeof(Locale.pick) == "function" then
 		local ok, v = pcall(Locale.pick)
 		if ok then
-			local n = normLangJa(v)
+			local n = LocaleUtil.norm(v)
 			if n then return n end
 		end
 	end
+	-- 3) 既定
 	return "en"
 end
 
@@ -274,7 +276,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		btn.MouseLeave:Connect(restore)
 	end
 
-	-- 右側の補助ラベル（必要なときのみ）
+	-- 右側インフォの補助ラベル（必要なときのみ）
 	local showInfoRight = (opts and opts.showInfoRight) or legacyShowRight
 	local info: Info?    = (opts and opts.info) or legacyInfo
 	if showInfoRight and info then

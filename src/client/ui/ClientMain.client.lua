@@ -25,7 +25,7 @@ Logger.configure({
 LOG.info("boot")
 
 --========================
--- Locale（存在しない場合のフォールバック込み）
+-- Locale / LocaleUtil
 --========================
 local okLocale, Locale = pcall(function()
 	return require(RS:WaitForChild("Config"):WaitForChild("Locale"))
@@ -44,16 +44,8 @@ if not okLocale or type(Locale) ~= "table" then
 	end
 end
 
--- 受け取った言語コードを "ja"/"en" に正規化（"jp" は "ja" へ変換）
-local function normLang(v)
-	v = tostring(v or ""):lower()
-	if v == "ja" or v == "en" then return v end
-	if v == "jp" then
-		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
-		return "ja"
-	end
-	return nil
-end
+-- 共通ユーティリティ（jp→ja / 不明は nil）
+local LocaleUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
 
 --========================
 -- NavClient
@@ -151,7 +143,7 @@ Router.setDeps({
 	toast = function(msg, dur)
 		pcall(function()
 			local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
-			local lang = normLang(gl) or "en"
+			local lang = LocaleUtil.norm(gl) or "en"
 			local title = (type(Locale.t)=="function" and Locale.t(lang, "TOAST_TITLE"))
 			              or ((lang=="ja") and "通知" or "Notice")
 			game.StarterGui:SetCore("SendNotification", {
@@ -180,7 +172,7 @@ Router.setDeps({
 --========================================
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
-		local nl = normLang(payload.lang) or payload.lang
+		local nl = LocaleUtil.norm(payload.lang) or payload.lang
 		Locale.setGlobal(nl)
 	end
 	Router.show("home", payload)
@@ -194,7 +186,7 @@ ShopOpen.OnClientEvent:Connect(function(payload)
 	if p.lang == nil then
 		p.lang = (Locale.getGlobal and Locale.getGlobal()) or "en"
 	end
-	local nl = normLang(p.lang)
+	local nl = LocaleUtil.norm(p.lang)
 	if nl and nl ~= p.lang then p.lang = nl end
 	Router.show("shop", p)
 	LOG.info("<ShopOpen> routed once | lang=%s", tostring(p.lang))
@@ -202,7 +194,7 @@ end)
 
 RoundReady.OnClientEvent:Connect(function()
 	local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
-	local lang = normLang(gl) or "en"
+	local lang = LocaleUtil.norm(gl) or "en"
 	Router.show("run")
 	if Router and type(Router.call)=="function" then
 		Router.call("run", "setLang", lang)
@@ -213,7 +205,7 @@ end)
 
 StatePush.OnClientEvent:Connect(function(st)
 	if st and st.lang and type(Locale.setGlobal)=="function" then
-		local l = normLang(st.lang)
+		local l = LocaleUtil.norm(st.lang)
 		if l then Locale.setGlobal(l) end
 	end
 	if Router and type(Router.call)=="function" then

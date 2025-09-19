@@ -1,5 +1,5 @@
 -- ReplicatedStorage/SharedModules/score/index.lua
--- v0.9.3-S9 finalize＋equipped受け渡し（挙動不変）
+-- v0.9.3-S10 P4_talisman no-op配管＋equipped受け渡し（挙動不変）
 
 local RunService = game:GetService("RunService")
 local RS = game:GetService("ReplicatedStorage")
@@ -10,9 +10,12 @@ local Ctx = require(script.Parent.ctx)
 local P1 = require(script.Parent.phases.P1_count)
 local P2 = require(script.Parent.phases.P2_roles)
 local P3 = require(script.Parent.phases.P3_matsuri_kito)
-local P4 = require(script.Parent.phases.P4_talisman)
-local P5 = require(script.Parent.phases.P5_omamori)
-local PF = require(script.Parent.phases.finalize)  -- ★ S-9
+local P4 = require(script.Parent.phases.P4_talisman)    -- ← no-op 実体
+local P5 = require(script.Parent.phases.P5_omamori)     -- ← no-op（既存/無ければ本回答のstubを使用）
+local PF = require(script.Parent.phases.finalize)
+
+-- hooks
+local TalHook = require(script.Parent.hooks.talisman)   -- ← ★ 新設フック
 
 -- スコープ付きロガー（タグ=Score）
 local LOG = nil
@@ -40,11 +43,24 @@ local M = {}
 function M.evaluate(takenCards, state)
 	local ctx = Ctx.new()
 
-	-- S-8: state から装備IDを通す（配線のみ）
-	if typeof(state) == "table" then
-		local eq = state.equipped or state.loadout or state.equip or {}
+	-- S2: state → ctx.equipped へ“正式形”で転記（talismanのみ・他は将来拡張）
+	--     旧来の state.equipped/loadout 等があっても、talismanは run.talisman から読むのを優先
+	do
+		local equipped = {}
+		equipped.talisman = TalHook.readEquipped(state) -- => { {id=...}, ... } or {}
+		-- 互換: 既存の他スロットがあれば温存
+		local legacy = (typeof(state)=="table") and (state.equipped or state.loadout or state.equip) or nil
+		if typeof(legacy)=="table" then
+			for k,v in pairs(legacy) do
+				if k ~= "talisman" then
+					equipped[k] = v
+				end
+			end
+		end
 		if typeof(ctx.setEquipped) == "function" then
-			ctx:setEquipped(eq)
+			ctx:setEquipped(equipped)
+		else
+			ctx.equipped = equipped
 		end
 	end
 
@@ -57,10 +73,10 @@ function M.evaluate(takenCards, state)
 	-- P3: 祭事/寅の上乗せ
 	mon, pts = P3.applyMatsuriAndKito(roles, mon, pts, state, ctx)
 
-	-- P4: 護符（no-op, IDsログ）
+	-- P4: 護符（no-op: 装備数ログとledger追記のみ。数値は不変）
 	roles, mon, pts = P4.applyTalisman(roles, mon, pts, state, ctx)
 
-	-- P5: お守り（no-op, IDsログ）
+	-- P5: お守り（no-op/将来ON）
 	roles, mon, pts = P5.applyOmamori(roles, mon, pts, state, ctx)
 
 	-- Dev: ledger出力（Studioのみ）
@@ -75,10 +91,8 @@ function M.evaluate(takenCards, state)
 		end
 	end
 
-	-- ★ S-9: finalize（唯一の式）— 挙動は不変（factor=1 のため）
+	-- finalize（唯一式）— 現状 factor=1 で挙動不変
 	local total, _mon, _pts, factor = PF.finalize(mon, pts, ctx)
-	-- factor は今は 1。将来 add/mul が入ったらここで一括適用。
-
 	return total, roles, { mon = mon, pts = pts }
 end
 

@@ -5,11 +5,13 @@
 -- タグは不透明のパネル色ベース＋濃色文字、タグの“直下”からカードを開始
 -- v0.9.7-P1-4: Theme 完全デフォルト化（色/角丸/余白/比率のUI側フォールバック撤去）
 -- v0.9.7-P1-1: 言語コード外部I/Fを "ja"/"en" に統一（受信 "jp" は警告して "ja" へ正規化）
+-- v0.9.7-P2-2: 言語正規化を LocaleUtil に統合（curLang も共通化）
 
 local RS      = game:GetService("ReplicatedStorage")
 local Config  = RS:WaitForChild("Config")
 local Theme   = require(Config:WaitForChild("Theme"))
 local Locale  = require(Config:WaitForChild("Locale"))
+local LocaleUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
 
 -- CardNode（カード1枚の描画モジュール）
 local UI_ROOT  = script.Parent.Parent
@@ -30,37 +32,20 @@ local function clearChildrenExceptLayouts(parent: Instance)
 	end
 end
 
--- "jp" → "ja" 正規化
+-- "jp" → "ja" 正規化（LocaleUtil 統合）
 local function normLangJa(v: string?): string?
-	local s = tostring(v or ""):lower()
-	if s == "ja" or s == "jp" then
-		if s == "jp" then warn("[TakenRenderer] received legacy 'jp'; normalizing to 'ja'") end
-		return "ja"
-	elseif s == "en" then
-		return "en"
+	local raw = tostring(v or ""):lower()
+	local n = LocaleUtil.norm(raw) -- "ja"/"en" or nil
+	if raw == "jp" and n == "ja" then
+		warn("[TakenRenderer] received legacy 'jp'; normalizing to 'ja'")
 	end
-	return nil
+	return n
 end
 
--- 現在言語（"ja"/"en"。取得不可なら "en"）
+-- 現在言語（"ja"/"en"。取得不可なら "en"）…LocaleUtil へ寄せる
 local function curLang(): string
-	-- Locale.getGlobal
-	if typeof(Locale.getGlobal) == "function" then
-		local ok, v = pcall(Locale.getGlobal)
-		if ok then
-			local n = normLangJa(v)
-			if n then return n end
-		end
-	end
-	-- Locale.pick
-	if typeof(Locale.pick) == "function" then
-		local ok, v = pcall(Locale.pick)
-		if ok then
-			local n = normLangJa(v)
-			if n then return n end
-		end
-	end
-	return "en"
+	-- safeGlobal が取れればそれを、なければ pickInitial（内部で pick→"en" フォールバック）
+	return LocaleUtil.safeGlobal() or LocaleUtil.pickInitial() or "en"
 end
 
 -- kind名 → 表示カテゴリ名（JA/EN）

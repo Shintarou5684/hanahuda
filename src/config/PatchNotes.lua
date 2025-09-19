@@ -22,6 +22,25 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+	-- ★ 0.9.6 を外部向けトーンで追加（0.9.5 以前は変更なし）
+	{
+		ver  = "v0.9.6.1",
+		date = "2025-09-19",
+		changes = {
+			{ ja = "護符（Talisman）を屋台に追加。購入するとボードに自動配置され、状態が画面に分かりやすく反映されます。",
+			  en = "Added Talisman to the Shop. Buying one now auto-places it on your board with clear on-screen feedback." },
+			{ ja = "護符ボードを横一列・比率可変の表示に刷新。端末サイズに合わせてスロットが見やすく並びます（現段階では表示のみ）。",
+			  en = "Refreshed the Talisman Board: single-row, responsive layout for consistent viewing across devices (display-only for now)." },
+			{ ja = "購入した商品は屋台から即時に非表示に。リロール時は品揃えがクリーンに更新されます。",
+			  en = "Purchased items now disappear from the Shop immediately. Reroll updates the lineup cleanly." },
+			{ ja = "屋台更新時のちらつきや一時的な表示ズレを軽減し、操作感を安定化。",
+			  en = "Reduced flicker and transient layout shifts during Shop updates for a smoother experience." },
+			{ ja = "採点（スコア計算）の挙動は今回変更なし。護符の実効果は今後のアップデートで段階的に追加予定です。",
+			  en = "No scoring changes this update. Talisman effects will roll out in future releases." },
+		}
+	},
+
+	-- ここから下は既存（変更なし）
 	{
 		ver  = "v0.9.6",
 		date = "2025-09-17",
