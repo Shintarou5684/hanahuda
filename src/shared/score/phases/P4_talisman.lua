@@ -1,6 +1,6 @@
 -- ReplicatedStorage/SharedModules/score/phases/P4_talisman.lua
--- v0.9.3-S10: P4 受け口の堅牢化（ID正規化＋ledger no-op）
--- ・Hooks.apply があれば呼ぶ（安全 pcall）
+-- v0.9.3-S11: hooks の場所を固定参照（SharedModules/score/hooks/talisman）に変更
+-- ・Hooks.apply があれば呼ぶ（pcallで安全呼び出し）
 -- ・無くても no-op で ledger に記録
 -- ・ctx.equipped.talisman は { "id", ... } / { {id="..."}, ... } の両方を許容
 
@@ -18,17 +18,19 @@ do
 	end
 end
 
--- optional: Hooks（ある場合のみ使用）
-local Hooks_Talisman = nil
-do
-	local ok, mod = pcall(function()
-		local SharedModules = RS:WaitForChild("SharedModules")
-		local Hooks = SharedModules:FindFirstChild("hooks")
-		if not Hooks then return nil end
-		return require(Hooks:WaitForChild("talisman"))
-	end)
-	if ok and mod then Hooks_Talisman = mod end
-end
+-- Hooks（固定パスで参照：SharedModules/score/hooks/talisman）
+-- ※本プロジェクトでは必ず存在する前提
+local Hooks_Talisman = (function()
+	local SharedModules = RS:WaitForChild("SharedModules")
+	local Score         = SharedModules:WaitForChild("score")
+	local HooksFolder   = Score:WaitForChild("hooks")
+	local Mod           = require(HooksFolder:WaitForChild("talisman"))
+	return Mod
+end)()
+
+--========================
+-- utils
+--========================
 
 local function toIdList(eq)
 	-- eq: { "dev_plus1", ... } or { {id="dev_plus1"}, ... }
@@ -51,16 +53,25 @@ local function addLedger(ctx, dmon, dpts, note)
 		ctx:add("P4_talisman", dmon or 0, dpts or 0, note or "")
 	else
 		ctx.ledger = ctx.ledger or {}
-		table.insert(ctx.ledger, { phase = "P4_talisman", dmon = dmon or 0, dpts = dpts or 0, note = note or "" })
+		table.insert(ctx.ledger, {
+			phase = "P4_talisman",
+			dmon  = dmon or 0,
+			dpts  = dpts or 0,
+			note  = note or "",
+		})
 	end
 end
+
+--========================
+-- API
+--========================
 
 local P4 = {}
 
 function P4.applyTalisman(roles, mon, pts, state, ctx)
 	local mon0, pts0 = mon, pts
 
-	-- 1) 可能なら Hooks.apply を呼ぶ（no-opでもOK）
+	-- 1) Hooks.apply を呼ぶ（no-opでもOK）
 	if Hooks_Talisman and typeof(Hooks_Talisman.apply) == "function" then
 		local ok, r_roles, r_mon, r_pts = pcall(Hooks_Talisman.apply, roles, mon, pts, state, ctx)
 		if ok and r_roles ~= nil and r_mon ~= nil and r_pts ~= nil then
@@ -83,7 +94,8 @@ function P4.applyTalisman(roles, mon, pts, state, ctx)
 	-- 4) Studioログ
 	local RunService = game:GetService("RunService")
 	if LOG and RunService:IsStudio() then
-		LOG.info(("[P4_talisman] equipped=%d %s dmon=%.3f dpts=%.3f"):format(#ids, note, dmon, dpts))
+		LOG.info(("[P4_talisman] equipped=%d %s dmon=%.3f dpts=%.3f")
+			:format(#ids, note, dmon, dpts))
 	end
 
 	return roles, mon, pts
