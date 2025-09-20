@@ -1,11 +1,12 @@
--- src/client/ui/components/controllers/ShopWires.lua
--- v0.9.3-P1-3 ShopWires：Shop画面のイベント配線・UI更新のみ
+-- StarterPlayerScripts/UI/components/controllers/ShopWires.lua
+-- v0.9.3-P1-4 ShopWires：Shop画面のイベント配線・UI更新のみ（Locale-first）
 -- ポリシー:
 --  - リロールは「所持金>=費用」でのみ可否判定（残回数は見ない）
 --  - 二重送出防止：UIを即時無効化し、nonce を付与してサーバへ送信
 --  - UIの再有効化はサーバからの ShopOpen ペイロード受信時に判定して行う
 --  - （重要）ShopOpen の受信は ClientMain に一本化。本モジュールはリスナーを持たない。
 --  - P1-3: 共通 Logger 導入（print/warn を LOG.* へ）
+--  - P1-4: ShopI18n 依存を廃止し、Locale 直参照に統一
 
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -17,7 +18,9 @@ local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 local Logger = require(SharedModules:WaitForChild("Logger"))
 local LOG    = Logger.scope("ShopWires")
 
-local ShopI18n  = require(script.Parent.Parent:WaitForChild("i18n"):WaitForChild("ShopI18n"))
+-- Locale
+local Config = RS:WaitForChild("Config")
+local Locale = require(Config:WaitForChild("Locale"))
 
 local M = {}
 
@@ -36,7 +39,7 @@ end
 function M.applyInfoPlaceholder(self)
   if not (self and self._nodes and self._nodes.infoText) then return end
   local lang = ShopFormat.normLang(self._lang)
-  self._nodes.infoText.Text = ShopI18n.t(lang, "info_placeholder")
+  self._nodes.infoText.Text = Locale.t(lang, "SHOP_UI_INFO_PLACEHOLDER")
 end
 
 function M.wireButtons(self)
@@ -50,7 +53,9 @@ function M.wireButtons(self)
     self:hide()
     if self.deps and self.deps.toast then
       local lang = ShopFormat.normLang(self._lang)
-      self.deps.toast(ShopI18n.t(lang, "toast_closed"), 2)
+      -- SHOP_UI_* に相当キーが無いので軽い直書き（必要なら Locale に追加可）
+      local msg = (lang == "ja") and "屋台を閉じました" or "Shop closed"
+      self.deps.toast(msg, 2)
     end
     if self.deps and self.deps.remotes and self.deps.remotes.ShopDone then
       self.deps.remotes.ShopDone:FireServer()

@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-20 01:41:36
+- Generated: 2025-09-20 19:49:57
 - Max lines/file: 300
 
 ## Folder Tree
@@ -11,7 +11,8 @@ hanahuda
 ├── _unused
 │   └── src
 │       └── client
-│           └── _unused_dev_patch_diary_2025-09-14.md
+│           ├── _unused_dev_patch_diary_2025-09-14.md
+│           └── ShopI18n.lua
 ├── BGM
 │   ├── BGM.ogg
 │   ├── omise.ogg
@@ -81,7 +82,6 @@ hanahuda
 │   │       │   ├── controllers
 │   │       │   │   └── ShopWires.lua
 │   │       │   ├── i18n
-│   │       │   │   └── ShopI18n.lua
 │   │       │   ├── renderers
 │   │       │   │   ├── FieldRenderer.lua
 │   │       │   │   ├── HandRenderer.lua
@@ -128,9 +128,10 @@ hanahuda
 │   │   ├── NavServer.lua
 │   │   ├── RemotesInit.server.lua
 │   │   ├── SaveService.lua
-│   │   ├── TalismanService.server.lua
+│   │   ├── TalismanService.lua
 │   │   └── UiResync.server.lua
 │   └── shared
+│       ├── hooks
 │       ├── score
 │       │   ├── hooks
 │       │   │   ├── init.lua
@@ -170,6 +171,7 @@ hanahuda
 │       └── TalismanState.lua
 ├── aftman.toml
 ├── default.project.json
+├── PROJECT_SNAPSHOT.md
 ├── README.md
 └── snapshot.py
 ```
@@ -241,6 +243,166 @@ hanahuda
 ### 追記ルール（メモ）
 - 先頭が最新。新しい更新は上に追記。
 - 社外公開が必要になったら、公開用 `PatchNotes.lua` へ転記＆サニタイズ。
+```
+
+### _unused/src/client/ShopI18n.lua
+```lua
+-- src/client/ui/components/i18n/ShopI18n.lua
+-- v0.9.ADAPTER ShopI18n → Locale 委譲アダプタ
+-- 目的:
+--  - 既存呼び出し(ShopI18n.t(lang, key, ...))はそのまま
+--  - 内部で Locale.t(lang, "SHOP_UI_*") に委譲（マッピング付き）
+--  - Locale 未定義キーはレガシー内蔵辞書へフォールバック
+--
+-- ログ:
+--  - 初期化時: [ShopI18n] adapter active
+--  - マッピング使用時: [ShopI18n] map old_key -> SHOP_UI_*
+--  - フォールバック時: [ShopI18n] fallback legacy for key=...
+
+local RS = game:GetService("ReplicatedStorage")
+
+-- Locale / Logger
+local Config        = RS:WaitForChild("Config")
+local Locale        = require(Config:WaitForChild("Locale"))
+local SharedModules = RS:WaitForChild("SharedModules")
+local Logger        = require(SharedModules:WaitForChild("Logger"))
+local LOG           = Logger.scope("ShopI18n")
+
+local M = {}
+
+--========================
+-- 旧→新キー マッピング
+--========================
+local MAP_OLD_TO_NEW = {
+  title_mvp            = "SHOP_UI_TITLE",
+  deck_btn_show        = "SHOP_UI_VIEW_DECK",
+  deck_btn_hide        = "SHOP_UI_HIDE_DECK",
+  reroll_btn_fmt       = "SHOP_UI_REROLL_FMT",
+  info_title           = "SHOP_UI_INFO_TITLE",
+  info_placeholder     = "SHOP_UI_INFO_PLACEHOLDER",
+  deck_title_fmt       = "SHOP_UI_DECK_TITLE_FMT",
+  deck_empty           = "SHOP_UI_DECK_EMPTY",
+  summary_cleared_fmt  = "SHOP_UI_SUMMARY_CLEARED_FMT",
+  summary_items_fmt    = "SHOP_UI_SUMMARY_ITEMS_FMT",
+  summary_money_fmt    = "SHOP_UI_SUMMARY_MONEY_FMT",
+  close_btn            = "SHOP_UI_CLOSE_BTN",
+  toast_closed         = "SHOP_UI_TOAST_CLOSED",     -- （Locale未定義なら下のレガシーにフォールバック）
+  label_category       = "SHOP_UI_LABEL_CATEGORY",
+  label_price          = "SHOP_UI_LABEL_PRICE",
+  no_desc              = "SHOP_UI_NO_DESC",
+  insufficient_suffix  = "SHOP_UI_INSUFFICIENT_SUFFIX",
+}
+
+--========================
+-- レガシー辞書（フォールバック用）
+--========================
+local en_legacy = {
+  title_mvp           = "Shop (MVP)",
+  deck_btn_show       = "View Deck",
+  deck_btn_hide       = "Hide Deck",
+  reroll_btn_fmt      = "Reroll (-%d)",
+  info_title          = "Item Info",
+  info_placeholder    = "(Hover or click an item)",
+  deck_title_fmt      = "Current Deck (%d cards)",
+  deck_empty          = "(no cards)",
+  summary_cleared_fmt = "Cleared! Total:%d / Target:%d\nReward: %d mon (Have: %d)\n",
+  summary_items_fmt   = "Items: %d",
+  summary_money_fmt   = "Money: %d mon",
+  close_btn           = "Close shop and next season",
+  toast_closed        = "Closed the shop. On to next season.",
+  label_category      = "Category: %s",
+  label_price         = "Price: %s",
+  no_desc             = "(no description)",
+  insufficient_suffix = " (insufficient)",
+}
+
+local ja_legacy = {
+  title_mvp           = "屋台（MVP）",
+  deck_btn_show       = "デッキを見る",
+  deck_btn_hide       = "デッキを隠す",
+  reroll_btn_fmt      = "リロール（-%d 文）",
+  info_title          = "アイテム情報",
+  info_placeholder    = "（アイテムにマウスを乗せるか、クリックしてください）",
+  deck_title_fmt      = "現在のデッキ（%d 枚）",
+  deck_empty          = "(カード無し)",
+  summary_cleared_fmt = "達成！ 合計:%d / 目標:%d\n報酬：%d 文（所持：%d 文）\n",
+  summary_items_fmt   = "商品数: %d 点",
+  summary_money_fmt   = "所持文: %d 文",
+  close_btn           = "屋台を閉じて次の季節へ",
+  toast_closed        = "屋台を閉じました。次の季節へ。",
+  label_category      = "カテゴリ: %s",
+  label_price         = "価格: %s",
+  no_desc             = "(説明なし)",
+  insufficient_suffix = "（不足）",
+}
+
+local function pickLegacy(lang: string?)
+  local use = Locale.normalize(lang)
+  return (use == "en") and en_legacy or ja_legacy
+end
+
+--========================
+-- 本体: t(lang, key, ...)
+--========================
+local function resolveKey(key: string)
+  -- 旧キー → 新キー
+  local mapped = MAP_OLD_TO_NEW[key]
+  if mapped then return mapped, true end
+  -- 既に新キー（SHOP_UI_...）を直接呼ばれた場合もそのまま許容
+  if string.sub(key, 1, 8) == "SHOP_UI_" then
+    return key, false
+  end
+  return nil, false
+end
+
+local function safeFormat(fmtStr: string, ...)
+  if select("#", ...) == 0 then return fmtStr end
+  local ok, out = pcall(string.format, fmtStr, ...)
+  return ok and out or fmtStr
+end
+
+function M.t(lang: string?, key: string, ...)
+  key = tostring(key or "")
+  if key == "" then return "" end
+
+  local use = Locale.normalize(lang)
+  local newKey, mapped = resolveKey(key)
+  if newKey then
+    local res = Locale.t(use, newKey, ...)
+    if res ~= newKey then
+      if mapped then
+        LOG.debug("adapter map %s -> %s | lang=%s", key, newKey, use)
+      end
+      return res
+    end
+    -- 委譲先に未定義 → 下へフォールバック
+    LOG.debug("adapter miss Locale for key=%s (mapped=%s)", newKey, tostring(mapped))
+  else
+    LOG.debug("adapter pass-through (legacy key) key=%s", key)
+  end
+
+  -- ===== フォールバック：レガシー辞書 =====
+  local legacy = pickLegacy(use)
+  local base = legacy[key]
+  if base ~= nil then
+    LOG.debug("fallback legacy for key=%s | lang=%s", key, use)
+    return safeFormat(base, ...)
+  end
+
+  -- 最終フォールバック：新キーを持っていればそれも見る
+  if newKey and legacy[newKey] then
+    LOG.debug("fallback legacy(newKey) for key=%s -> %s | lang=%s", key, newKey, use)
+    return safeFormat(legacy[newKey], ...)
+  end
+
+  -- 何も無ければキーをそのまま返す
+  LOG.warn("missing i18n key (no Locale, no legacy) key=%s", key)
+  return key
+end
+
+LOG.info("adapter active (Locale-first)")
+
+return M
 ```
 
 ### aftman.toml
@@ -591,7 +753,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-20 01:41:36
+- Generated: 2025-09-20 19:49:57
 - Max lines/file: 300
 
 ## Folder Tree
@@ -601,7 +763,8 @@ hanahuda
 ├── _unused
 │   └── src
 │       └── client
-│           └── _unused_dev_patch_diary_2025-09-14.md
+│           ├── _unused_dev_patch_diary_2025-09-14.md
+│           └── ShopI18n.lua
 ├── BGM
 │   ├── BGM.ogg
 │   ├── omise.ogg
@@ -671,7 +834,6 @@ hanahuda
 │   │       │   ├── controllers
 │   │       │   │   └── ShopWires.lua
 │   │       │   ├── i18n
-│   │       │   │   └── ShopI18n.lua
 │   │       │   ├── renderers
 │   │       │   │   ├── FieldRenderer.lua
 │   │       │   │   ├── HandRenderer.lua
@@ -718,9 +880,10 @@ hanahuda
 │   │   ├── NavServer.lua
 │   │   ├── RemotesInit.server.lua
 │   │   ├── SaveService.lua
-│   │   ├── TalismanService.server.lua
+│   │   ├── TalismanService.lua
 │   │   └── UiResync.server.lua
 │   └── shared
+│       ├── hooks
 │       ├── score
 │       │   ├── hooks
 │       │   │   ├── init.lua
@@ -760,6 +923,7 @@ hanahuda
 │       └── TalismanState.lua
 ├── aftman.toml
 ├── default.project.json
+├── PROJECT_SNAPSHOT.md
 ├── README.md
 └── snapshot.py
 ```
@@ -833,61 +997,59 @@ hanahuda
 - 社外公開が必要になったら、公開用 `PatchNotes.lua` へ転記＆サニタイズ。
 ```
 
-### aftman.toml
-```toml
-[tools]
-rojo = "rojo-rbx/rojo@7.4.0"
-```
+### _unused/src/client/ShopI18n.lua
+```lua
+-- src/client/ui/components/i18n/ShopI18n.lua
+-- v0.9.ADAPTER ShopI18n → Locale 委譲アダプタ
+-- 目的:
+--  - 既存呼び出し(ShopI18n.t(lang, key, ...))はそのまま
+--  - 内部で Locale.t(lang, "SHOP_UI_*") に委譲（マッピング付き）
+--  - Locale 未定義キーはレガシー内蔵辞書へフォールバック
+--
+-- ログ:
+--  - 初期化時: [ShopI18n] adapter active
+--  - マッピング使用時: [ShopI18n] map old_key -> SHOP_UI_*
+--  - フォールバック時: [ShopI18n] fallback legacy for key=...
 
-### BGM/BGM.ogg
-```text
-[binary file] size=2693901 bytes
-```
+local RS = game:GetService("ReplicatedStorage")
 
-### BGM/omise.ogg
-```text
-[binary file] size=2548556 bytes
-```
+-- Locale / Logger
+local Config        = RS:WaitForChild("Config")
+local Locale        = require(Config:WaitForChild("Locale"))
+local SharedModules = RS:WaitForChild("SharedModules")
+local Logger        = require(SharedModules:WaitForChild("Logger"))
+local LOG           = Logger.scope("ShopI18n")
 
-### BGM/TOP.mp3
-```text
-[binary file] size=2356304 bytes
-```
+local M = {}
 
-### default.project.json
-```json
-{
-  "name": "hanahuda",
-  "tree": {
-    "$className": "DataModel",
+--========================
+-- 旧→新キー マッピング
+--========================
+local MAP_OLD_TO_NEW = {
+  title_mvp            = "SHOP_UI_TITLE",
+  deck_btn_show        = "SHOP_UI_VIEW_DECK",
+  deck_btn_hide        = "SHOP_UI_HIDE_DECK",
+  reroll_btn_fmt       = "SHOP_UI_REROLL_FMT",
+  info_title           = "SHOP_UI_INFO_TITLE",
+  info_placeholder     = "SHOP_UI_INFO_PLACEHOLDER",
+  deck_title_fmt       = "SHOP_UI_DECK_TITLE_FMT",
+  deck_empty           = "SHOP_UI_DECK_EMPTY",
+  summary_cleared_fmt  = "SHOP_UI_SUMMARY_CLEARED_FMT",
+  summary_items_fmt    = "SHOP_UI_SUMMARY_ITEMS_FMT",
+  summary_money_fmt    = "SHOP_UI_SUMMARY_MONEY_FMT",
+  close_btn            = "SHOP_UI_CLOSE_BTN",
+  toast_closed         = "SHOP_UI_TOAST_CLOSED",     -- （Locale未定義なら下のレガシーにフォールバック）
+  label_category       = "SHOP_UI_LABEL_CATEGORY",
+  label_price          = "SHOP_UI_LABEL_PRICE",
+  no_desc              = "SHOP_UI_NO_DESC",
+  insufficient_suffix  = "SHOP_UI_INSUFFICIENT_SUFFIX",
+}
 
-    "ReplicatedStorage": {
-      "$className": "ReplicatedStorage",
-
-      "Config": {
-        "$className": "Folder",
-        "$path": "src/config"
-      },
-
-      "SharedModules": {
-        "$className": "Folder",
-        "$path": "src/shared"
-      },
-
-      "Remotes": {
-        "$className": "Folder",
-        "$path": "src/remotes"
-      }
-    },
-
-    "ServerScriptService": {
-      "$className": "ServerScriptService",
-      "$path": "src/server"
-    },
-
-    "StarterPlayer": {
-      "$className": "StarterPlayer",
-      "StarterPlayerScripts": {
+--========================
+-- レガシー辞書（フォールバック用）
+--========================
+local en_legacy = {
+  title_mvp           = "Shop (MVP)",
 ... (truncated)
 ```
 
@@ -1730,14 +1892,15 @@ end
 
 ### src/client/ui/components/controllers/ShopWires.lua
 ```lua
--- src/client/ui/components/controllers/ShopWires.lua
--- v0.9.3-P1-3 ShopWires：Shop画面のイベント配線・UI更新のみ
+-- StarterPlayerScripts/UI/components/controllers/ShopWires.lua
+-- v0.9.3-P1-4 ShopWires：Shop画面のイベント配線・UI更新のみ（Locale-first）
 -- ポリシー:
 --  - リロールは「所持金>=費用」でのみ可否判定（残回数は見ない）
 --  - 二重送出防止：UIを即時無効化し、nonce を付与してサーバへ送信
 --  - UIの再有効化はサーバからの ShopOpen ペイロード受信時に判定して行う
 --  - （重要）ShopOpen の受信は ClientMain に一本化。本モジュールはリスナーを持たない。
 --  - P1-3: 共通 Logger 導入（print/warn を LOG.* へ）
+--  - P1-4: ShopI18n 依存を廃止し、Locale 直参照に統一
 
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -1749,7 +1912,9 @@ local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 local Logger = require(SharedModules:WaitForChild("Logger"))
 local LOG    = Logger.scope("ShopWires")
 
-local ShopI18n  = require(script.Parent.Parent:WaitForChild("i18n"):WaitForChild("ShopI18n"))
+-- Locale
+local Config = RS:WaitForChild("Config")
+local Locale = require(Config:WaitForChild("Locale"))
 
 local M = {}
 
@@ -1768,7 +1933,7 @@ end
 function M.applyInfoPlaceholder(self)
   if not (self and self._nodes and self._nodes.infoText) then return end
   local lang = ShopFormat.normLang(self._lang)
-  self._nodes.infoText.Text = ShopI18n.t(lang, "info_placeholder")
+  self._nodes.infoText.Text = Locale.t(lang, "SHOP_UI_INFO_PLACEHOLDER")
 end
 
 function M.wireButtons(self)
@@ -1782,7 +1947,9 @@ function M.wireButtons(self)
     self:hide()
     if self.deps and self.deps.toast then
       local lang = ShopFormat.normLang(self._lang)
-      self.deps.toast(ShopI18n.t(lang, "toast_closed"), 2)
+      -- SHOP_UI_* に相当キーが無いので軽い直書き（必要なら Locale に追加可）
+      local msg = (lang == "ja") and "屋台を閉じました" or "Shop closed"
+      self.deps.toast(msg, 2)
     end
     if self.deps and self.deps.remotes and self.deps.remotes.ShopDone then
       self.deps.remotes.ShopDone:FireServer()
@@ -1928,86 +2095,6 @@ function DevTools.create(parent: Instance, deps: any, opts: Options?)
 end
 
 return DevTools
-```
-
-### src/client/ui/components/i18n/ShopI18n.lua
-```lua
--- src/client/ui/components/i18n/ShopI18n.lua
--- v0.9.SIMPLE Shop専用I18nアダプタ（残回数系キーを撤去）
-
-local M = {}
-
-local en = {
-  title_mvp           = "Shop (MVP)",
-  deck_btn_show       = "View Deck",
-  deck_btn_hide       = "Hide Deck",
-  reroll_btn_fmt      = "Reroll (-%d)",
-
-  info_title          = "Item Info",
-  info_placeholder    = "(Hover or click an item)",
-
-  deck_title_fmt      = "Current Deck (%d cards)",
-  deck_empty          = "(no cards)",
-
-  summary_cleared_fmt = "Cleared! Total:%d / Target:%d\nReward: %d mon (Have: %d)\n",
-  summary_items_fmt   = "Items: %d",
-  summary_money_fmt   = "Money: %d mon",
-
-  close_btn           = "Close shop and next season",
-  toast_closed        = "Closed the shop. On to next season.",
-
-  label_category      = "Category: %s",
-  label_price         = "Price: %s",
-  no_desc             = "(no description)",
-  insufficient_suffix = " (insufficient)",
-}
-
-local ja = {
-  title_mvp           = "屋台（MVP）",
-  deck_btn_show       = "デッキを見る",
-  deck_btn_hide       = "デッキを隠す",
-  reroll_btn_fmt      = "リロール（-%d 文）",
-
-  info_title          = "アイテム情報",
-  info_placeholder    = "（アイテムにマウスを乗せるか、クリックしてください）",
-
-  deck_title_fmt      = "現在のデッキ（%d 枚）",
-  deck_empty          = "(カード無し)",
-
-  summary_cleared_fmt = "達成！ 合計:%d / 目標:%d\n報酬：%d 文（所持：%d 文）\n",
-  summary_items_fmt   = "商品数: %d 点",
-  summary_money_fmt   = "所持文: %d 文",
-
-  close_btn           = "屋台を閉じて次の季節へ",
-  toast_closed        = "屋台を閉じました。次の季節へ。",
-
-  label_category      = "カテゴリ: %s",
-  label_price         = "価格: %s",
-  no_desc             = "(説明なし)",
-  insufficient_suffix = "（不足）",
-}
-
-local dict = { en = en, ja = ja }
-
-local function pick(lang:string?)
-  lang = tostring(lang or ""):lower()
-  if lang == "en" then return "en" end
-  if lang == "ja" or lang == "jp" then return "ja" end
-  return "ja"
-end
-
-function M.t(lang:string?, key:string, ...)
-  local use = pick(lang)
-  local pack = dict[use] or dict.ja
-  local base = (pack and pack[key]) or (dict.en and dict.en[key]) or key
-  if select("#", ...) > 0 then
-    local ok, res = pcall(string.format, base, ...)
-    if ok then return res else return base end
-  end
-  return base
-end
-
-return M
 ```
 
 ### src/client/ui/components/Overlay.lua
@@ -2558,20 +2645,23 @@ return M
 ### src/client/ui/components/renderers/ShopRenderer.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/ShopRenderer.lua
--- v0.9.SIMPLE-7
+-- v0.9.SIMPLE-8 (Locale-first, no ShopI18n)
 --  - 下段 TalismanArea に護符ボードをマウント（初回のみ）
 --  - payload.talisman を表示（nilならデフォルト6枠表示）
 --  - items を描画前に self:isItemHidden(id) でフィルタ（既存）
+--  - 画面固定文言は Locale.t(lang,"SHOP_UI_*") を直接参照
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 
+local Config = RS:WaitForChild("Config")
+local Locale = require(Config:WaitForChild("Locale"))
+
 local Logger = require(SharedModules:WaitForChild("Logger"))
 local LOG    = Logger.scope("ShopRenderer")
 
 local ShopCells = require(script.Parent.Parent:WaitForChild("ShopCells"))
-local ShopI18n  = require(script.Parent.Parent:WaitForChild("i18n"):WaitForChild("ShopI18n"))
 
 -- TalismanBoard の安全取得（UI/components から辿る）
 local function requireTalismanBoard()
@@ -2599,7 +2689,7 @@ function M.render(self)
 
 	local p = self._payload or {}
 	local items = p.items or p.stock or {}
-	local lang = self._lang or ShopFormat.normLang(p.lang)
+	local lang = (self._lang or ShopFormat.normLang(p.lang))
 	local mon = tonumber(p.mon or p.totalMon or 0) or 0
 	local rerollCost = tonumber(p.rerollCost or 1) or 1
 
@@ -2607,8 +2697,9 @@ function M.render(self)
 	if nodes.taliArea and not self._taliBoard then
 		local TB = requireTalismanBoard()
 		if TB then
+			local title = Locale.t(lang, "SHOP_UI_TALISMAN_BOARD")
 			self._taliBoard = TB.new(nodes.taliArea, {
-				title = (lang == "ja") and "護符ボード" or "Talisman Board",
+				title = title,
 				widthScale = 0.9,
 				padScale   = 0.01,
 			})
@@ -2616,6 +2707,7 @@ function M.render(self)
 			inst.AnchorPoint = Vector2.new(0.5, 0)
 			inst.Position    = UDim2.fromScale(0.5, 0)
 			inst.ZIndex      = 2
+			LOG.info("mount TalismanBoard | lang=%s title=%s", tostring(lang), tostring(title))
 		else
 			LOG.warn("TalismanBoard module not found; skip mount")
 		end
@@ -2626,6 +2718,7 @@ function M.render(self)
 		self._taliBoard:setLang(langFix)
 		-- p.talisman が来なければ内部で defaultData() が出る想定
 		self._taliBoard:setData(p.talisman)
+		-- タイトルは言語切替時に変えたい場合は setTitle があればそちらへ
 	end
 
 	-- ★ 一時SoldOutフィルタ
@@ -2647,14 +2740,14 @@ function M.render(self)
 
 	-- タイトル・ボタン
 	if nodes.title then
-		nodes.title.Text = ShopI18n.t(lang, "title_mvp")
+		nodes.title.Text = Locale.t(lang, "SHOP_UI_TITLE")
 	end
 	if nodes.deckBtn then
-		local txt = self._deckOpen and ShopI18n.t(lang, "deck_btn_hide") or ShopI18n.t(lang, "deck_btn_show")
+		local txt = self._deckOpen and Locale.t(lang, "SHOP_UI_HIDE_DECK") or Locale.t(lang, "SHOP_UI_VIEW_DECK")
 		nodes.deckBtn.Text = txt
 	end
 	if nodes.rerollBtn then
-		nodes.rerollBtn.Text = ShopI18n.t(lang, "reroll_btn_fmt", rerollCost)
+		nodes.rerollBtn.Text = Locale.t(lang, "SHOP_UI_REROLL_FMT"):format(rerollCost)
 		local can = (p.canReroll ~= false) and (mon >= rerollCost)
 		nodes.rerollBtn.Active = can
 		nodes.rerollBtn.AutoButtonColor = can
@@ -2662,10 +2755,10 @@ function M.render(self)
 		nodes.rerollBtn.BackgroundTransparency = 0
 	end
 	if nodes.infoTitle then
-		nodes.infoTitle.Text = ShopI18n.t(lang, "info_title")
+		nodes.infoTitle.Text = Locale.t(lang, "SHOP_UI_INFO_TITLE")
 	end
 	if nodes.closeBtn then
-		nodes.closeBtn.Text = ShopI18n.t(lang, "close_btn")
+		nodes.closeBtn.Text = Locale.t(lang, "SHOP_UI_CLOSE_BTN")
 	end
 
 	-- 右パネル
@@ -2682,8 +2775,8 @@ function M.render(self)
 
 		if deckPanel and deckTitle and deckText then
 			local n, lst = ShopFormat.deckListFromSnapshot(p.currentDeck)
-			deckTitle.Text = ShopI18n.t(lang, "deck_title_fmt", n)
-			deckText.Text  = (n > 0) and lst or ShopI18n.t(lang, "deck_empty")
+			deckTitle.Text = Locale.t(lang, "SHOP_UI_DECK_TITLE_FMT"):format(n)
+			deckText.Text  = (n > 0) and lst or Locale.t(lang, "SHOP_UI_DECK_EMPTY")
 		end
 	end
 
@@ -2741,17 +2834,18 @@ function M.render(self)
 	-- サマリ
 	local s = {}
 	if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
-		table.insert(s, ShopI18n.t(
-			lang,
-			"summary_cleared_fmt",
-			tonumber(p.seasonSum or 0),
-			tonumber(p.target or 0),
-			tonumber(p.rewardMon or 0),
-			tonumber(p.totalMon or mon or 0)
-		))
+		table.insert(s,
+			Locale.t(lang, "SHOP_UI_SUMMARY_CLEARED_FMT")
+				:format(
+					tonumber(p.seasonSum or 0),
+					tonumber(p.target or 0),
+					tonumber(p.rewardMon or 0),
+					tonumber(p.totalMon or mon or 0)
+				)
+		)
 	end
-	table.insert(s, ShopI18n.t(lang, "summary_items_fmt", #vis))
-	table.insert(s, ShopI18n.t(lang, "summary_money_fmt", mon))
+	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_ITEMS_FMT"):format(#vis))
+	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_MONEY_FMT"):format(mon))
 	if nodes.summary then
 		nodes.summary.Text = table.concat(s, "\n")
 	end
@@ -3325,14 +3419,11 @@ function M.create(parent: Instance): ResultAPI
 ### src/client/ui/components/ShopCells.lua
 ```lua
 -- StarterPlayerScripts/UI/components/ShopCells.lua
--- v0.9.H ShopCells：商品カードのUIリファイン（Theme薄適用 + 軽いホバー）
--- - 角丸/ストローク/色を Theme から適用
--- - 価格バンドをダーク帯（Badge系）に
--- - ホバーでカードのストロークを少し強調
--- - 既存のクリック/説明表示/購入フローは据え置き
--- P0-12: 二重クリック対策
---  - 価格帯を TextLabel 化し、Active=false / Selectable=false（入力は親ボタンへ）
---  - Activated は本体ボタンのみ接続
+-- v0.9.I ShopCells：整形ロジックを ShopFormat/Locale に統一（S5）
+--  - 価格/タイトル/説明/フェイス名のローカル実装を削除
+--  - 文字列は ShopFormat と Locale に委譲
+--  - 「不足」接尾辞/ラベル文言は Locale の SHOP_UI_* を使用
+--  - 既存のUI/入力/購入フローは据え置き
 
 local RS = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -3341,10 +3432,10 @@ local TweenService = game:GetService("TweenService")
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 
--- Theme & I18n
-local Config   = RS:WaitForChild("Config")
-local Theme    = require(Config:WaitForChild("Theme"))
-local ShopI18n = require(script.Parent:WaitForChild("i18n"):WaitForChild("ShopI18n"))
+-- Theme & Locale
+local Config = RS:WaitForChild("Config")
+local Theme  = require(Config:WaitForChild("Theme"))
+local Locale = require(Config:WaitForChild("Locale"))
 
 local M = {}
 
@@ -3372,38 +3463,6 @@ local function addStroke(gui: Instance, color: Color3?, thickness: number?, tran
 	return ok and stroke or nil
 end
 
-local function fmtPrice(n: number?): string
-	return ("%d 文"):format(tonumber(n or 0))
-end
-
-local function itemTitle(it: any): string
-	if it and it.name then return tostring(it.name) end
-	return tostring(it and it.id or "???")
-end
-
-local function itemDesc(it: any, lang: string): string
-	if not it then return "" end
-	if lang == "en" then
-		return (it.descEN or it.descEn or it.name or it.id or "")
-	else
-		return (it.descJP or it.descJa or it.name or it.id or "")
-	end
-end
-
--- UIに出すのは “名前だけ”
-local ZODIAC_NAME: {[string]: string} = {
-	kito_ko="子", kito_ushi="丑", kito_tora="寅", kito_u="卯", kito_tatsu="辰", kito_mi="巳",
-	kito_uma="午", kito_hitsuji="未", kito_saru="申", kito_tori="酉", kito_inu="戌", kito_i="亥",
-}
-local function faceName(it: any): string
-	if not it then return "???" end
-	if it.displayName and tostring(it.displayName) ~= "" then return tostring(it.displayName) end
-	if it.short and tostring(it.short) ~= "" then return tostring(it.short) end
-	if it.shortName and tostring(it.shortName) ~= "" then return tostring(it.shortName) end
-	if it.id and ZODIAC_NAME[it.id] then return ZODIAC_NAME[it.id] end
-	return tostring(it.name or it.id or "???")
-end
-
 --========================
 -- メイン：カード生成
 --========================
@@ -3411,7 +3470,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	-- カード本体（和紙パネル風）
 	local btn = Instance.new("TextButton")
 	btn.Name = it.id or "Item"
-	btn.Text = faceName(it)
+	btn.Text = ShopFormat.faceName(it)
 	btn.TextSize = 28
 	btn.Font = Enum.Font.GothamBold
 	btn.TextColor3 = Theme.COLORS.TextDefault
@@ -3422,28 +3481,28 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	addCorner(btn, Theme.PANEL_RADIUS)
 	local stroke = addStroke(btn, Theme.COLORS.PanelStroke, 1, 0)
 
-	-- 価格バンド（TextLabel に変更し、入力は親へパス）
+	-- 価格バンド（TextLabel にし、入力は親へパス）
 	local priceBand = Instance.new("TextLabel")
 	priceBand.Name = "Price"
 	priceBand.BackgroundColor3 = Theme.COLORS.BadgeBg
 	priceBand.Size = UDim2.new(1,0,0,20)
 	priceBand.Position = UDim2.new(0,0,1,-20)
-	priceBand.Text = fmtPrice(it.price)
+	priceBand.Text = ShopFormat.fmtPrice(it.price)
 	priceBand.TextSize = 14
 	priceBand.Font = Enum.Font.Gotham
 	priceBand.TextColor3 = Color3.fromRGB(245,245,245)
 	priceBand.ZIndex = 11
-	priceBand.Active = false       -- ★ 入力を自身で取らない
-	priceBand.Selectable = false   -- ★ 選択不可
+	priceBand.Active = false       -- 入力を自身で取らない
+	priceBand.Selectable = false   -- 選択不可
 	priceBand.Parent = btn
 	addStroke(priceBand, Theme.COLORS.BadgeStroke, 1, 0.2)
 
 	-- 購入可否の視覚
 	local affordable = (tonumber(mon or 0) >= tonumber(it.price or 0))
 	if not affordable then
-		priceBand.Text = fmtPrice(it.price) .. ShopI18n.t(lang, "insufficient_suffix")
+		priceBand.Text = ShopFormat.fmtPrice(it.price) .. Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX")
 		priceBand.BackgroundTransparency = 0.15
-		btn.AutoButtonColor = true -- クリックは許可（従来通りサーバ側で弾く）
+		btn.AutoButtonColor = true -- クリックは許可（サーバ側で弾く）
 	end
 
 	-- ホバー：枠と背景をわずかに強調
@@ -3461,24 +3520,23 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 
 	btn.MouseEnter:Connect(hoverIn)
 	btn.MouseLeave:Connect(hoverOut)
-	-- priceBand は Label なので個別の MouseEnter/Leave 接続は不要（親で拾える）
 
-	-- 説明表示（Infoパネルへ）
+	-- 説明表示（右の Info パネルへ）
 	local function showDesc()
-		local desc = itemDesc(it, lang)
+		local title = ShopFormat.itemTitle(it, lang)
+		local desc  = ShopFormat.itemDesc(it, lang)
 		local lines = {
-			("<b>%s</b>"):format(it.name or itemTitle(it)),
-			ShopI18n.t(lang, "label_category", tostring(it.category or "-")),
-			ShopI18n.t(lang, "label_price", fmtPrice(it.price)),
+			string.format("<b>%s</b>", title),
+			Locale.t(lang, "SHOP_UI_LABEL_CATEGORY"):format(tostring(it.category or "-")),
+			Locale.t(lang, "SHOP_UI_LABEL_PRICE"):format(ShopFormat.fmtPrice(it.price)),
 			"",
-			(desc ~= "" and desc or ShopI18n.t(lang, "no_desc")),
+			(desc ~= "" and desc or Locale.t(lang, "SHOP_UI_NO_DESC")),
 		}
 		if nodes and nodes.infoText then
 			nodes.infoText.Text = table.concat(lines, "\n")
 		end
 	end
 	btn.MouseEnter:Connect(showDesc)
-	-- priceBand からの説明表示も、親の MouseEnter で一貫化
 
 	-- 購入（Activated は本体のみ）
 	local function doBuy()
@@ -3486,8 +3544,6 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 		handlers.onBuy(it)
 	end
 	btn.Activated:Connect(doBuy)
-	-- ※ 二重送出防止のため priceBand 側の Activated 接続は無し（Labelなので発火もしない）
-
 end
 
 return M
@@ -6158,10 +6214,10 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 ### src/client/ui/screens/ShopScreen.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.7-P2-10 ShopScreen（Server-first talisman + jp→ja + idempotent redraw）
---  - show(payload) で payload.state.run.talisman を即時反映（サーバ確定を優先）
---  - payload.lang を尊重し "jp"→"ja" 正規化
---  - 自動配置は「護符配列が無い or 空スロットがある」時のみ（既存の空き検知で担保）
+-- v0.9.7-P2-11 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
+--  - payload.lang を Locale.normalize で正規化し _lang に保持（'jp'→'ja' を含む）
+--  - show/setData/update で _lang を子へ伝播（TalismanBoard 含む）
+--  - サーバ確定 talisman を優先反映（差分時のみ）
 --  - 同一データの再描画を抑止（talisman シグネチャ比較）
 
 local Shop = {}
@@ -6174,6 +6230,7 @@ local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 
 local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
+local Locale = require(Config:WaitForChild("Locale"))
 
 local Logger = require(SharedModules:WaitForChild("Logger"))
 local LOG = (typeof(Logger.scope) == "function" and Logger.scope("ShopScreen"))
@@ -6208,11 +6265,12 @@ export type Payload = {
 -- helpers
 --==================================================
 
-local function normToJa(lang: string?)
-	local v = ShopFormat.normLang(lang)
-	if v == "jp" then
+local function normalizeLang(lang: string?): string
+	-- Locale.normalize が 'jp'→'ja' を内包
+	local v = Locale.normalize(lang)
+	-- 念のため 'jp' の名残を検知してログ（フォレンジック用）
+	if tostring(lang or ""):lower() == "jp" and v == "ja" then
 		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
-		return "ja"
 	end
 	return v
 end
@@ -6311,7 +6369,7 @@ function Shop.new(deps)
 	do
 		local parent = nodes.taliArea or gui  -- 念のためフォールバック
 		self._taliBoard = TalismanBoard.new(parent, {
-			title      = "護符ボード",
+			title      = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE"),
 			widthScale = 0.95,   -- 下段にフィット
 			padScale   = 0.01,
 		})
@@ -6432,7 +6490,7 @@ end
 
 function Shop:setData(payload: Payload)
 	if payload and payload.lang then
-		local nl = normToJa(payload.lang)
+		local nl = normalizeLang(payload.lang)
 		if nl and nl ~= payload.lang then payload.lang = nl end
 		self._lang = nl or self._lang
 	end
@@ -6455,8 +6513,6 @@ function Shop:setData(payload: Payload)
 end
 
 function Shop:show(payload: Payload?)
-	if payload then
-		if payload.lang then
 ... (truncated)
 ```
 
@@ -6528,8 +6584,6 @@ return DisplayMode
 --  3) Locale.setGlobal(lang) / Locale.getGlobal() / Locale.changed (Signal)
 --  4) jp入力時は warn を一度だけ出す（内部では常に ja に変換）
 -- P0-10: OSロケール検出のスタイルを簡素化
---  - 変更点: pcall(game.GetService, game, "Players") → local Players = game:GetService("Players")
---  - 目的: 可読性向上（挙動は不変。LocalPlayer が無い場合は "en" フォールバック）
 
 local Locale = {}
 
@@ -6564,11 +6618,10 @@ local function _norm(lang:string?)
 	return nil
 end
 
--- ===== OS言語検出（P0-10改修） =====
+-- ===== OS言語検出 =====
 local Players = game:GetService("Players")
 
 local function detectLang()
-	-- Client 以外（サーバ/テスト環境）では LocalPlayer は nil → "en" フォールバック
 	local lp = Players.LocalPlayer
 	if lp and lp.LocaleId then
 		local lid = string.lower(lp.LocaleId)
@@ -6636,6 +6689,54 @@ local en = {
 
 	-- 空役（P0-8）
 	ROLES_NONE = "No roles",
+
+	-- ===== Shop: Items (Locale-first) =====
+	SHOP_ITEM_kito_ushi_NAME = "Ox: Double Mon",
+	SHOP_ITEM_kito_ushi_DESC = "Double your current mon immediately (capped).",
+
+	SHOP_ITEM_kito_tora_NAME = "Tiger: +1 point on taken cards",
+	SHOP_ITEM_kito_tora_DESC = "Permanent: taken cards score +1 (stackable).",
+
+	SHOP_ITEM_kito_tori_NAME = "Rooster: Convert to Bright",
+	SHOP_ITEM_kito_tori_DESC = "Convert one non-bright in run config to Bright (or queue +1 for next season).",
+
+	SHOP_ITEM_sai_kasu_NAME  = "Kasu Festival",
+	SHOP_ITEM_sai_kasu_DESC  = "Festival: Kasu +1 level (scoring +1x and +1pt per Lv).",
+
+	SHOP_ITEM_sai_tanzaku_NAME = "Tanzaku Festival",
+	SHOP_ITEM_sai_tanzaku_DESC = "Festival: Tanzaku +1 level (scoring +1x and +3pt per Lv).",
+
+	SHOP_ITEM_spectral_blackhole_NAME = "Black Hole",
+	SHOP_ITEM_spectral_blackhole_DESC = "Instant: All festival levels +1.",
+
+	SHOP_ITEM_tali_dev_plus1_NAME       = "Talisman: +1 pt",
+	SHOP_ITEM_tali_dev_plus1_DESC       = "After scoring, add +1 point (dev).",
+	SHOP_ITEM_tali_dev_gokou_plus5_NAME = "Talisman: Gokou +5",
+	SHOP_ITEM_tali_dev_gokou_plus5_DESC = "+5 points only when Gokou triggers (dev).",
+	SHOP_ITEM_tali_dev_sake_plus3_NAME  = "Talisman: Sake +3",
+	SHOP_ITEM_tali_dev_sake_plus3_DESC  = "+3 points when Sake is involved (dev).",
+
+	-- ===== Shop: UI (migrated from ShopI18n) =====
+	SHOP_UI_TITLE                 = "Shop (MVP)",
+	SHOP_UI_VIEW_DECK             = "View Deck",
+	SHOP_UI_HIDE_DECK             = "Hide Deck",
+	SHOP_UI_REROLL_FMT            = "Reroll (-%d)",
+	SHOP_UI_INFO_TITLE            = "Item Info",
+	SHOP_UI_INFO_PLACEHOLDER      = "(Hover or click an item)",
+	SHOP_UI_DECK_TITLE_FMT        = "Current Deck (%d cards)",
+	SHOP_UI_DECK_EMPTY            = "(no cards)",
+	SHOP_UI_CLOSE_BTN             = "Close shop and next season",
+	SHOP_UI_SUMMARY_CLEARED_FMT   = "Cleared! Total:%d / Target:%d\nReward: %d mon (Have: %d)\n",
+	SHOP_UI_SUMMARY_ITEMS_FMT     = "Items: %d",
+	SHOP_UI_SUMMARY_MONEY_FMT     = "Money: %d mon",
+	SHOP_UI_LABEL_CATEGORY        = "Category: %s",
+	SHOP_UI_LABEL_PRICE           = "Price: %s",
+	SHOP_UI_NO_DESC               = "(no description)",
+	SHOP_UI_INSUFFICIENT_SUFFIX   = " (insufficient)",
+
+	-- Extra (for Talisman UI / toasts)
+	SHOP_UI_TALISMAN_BOARD_TITLE  = "Talisman Board",
+	SHOP_UI_NO_EMPTY_SLOT         = "No empty slot available",
 }
 
 local ja = {
@@ -6686,6 +6787,54 @@ local ja = {
 
 	-- 空役（P0-8）
 	ROLES_NONE = "役なし",
+
+	-- ===== Shop: Items (Locale-first) =====
+	SHOP_ITEM_kito_ushi_NAME = "丑：所持文を2倍",
+	SHOP_ITEM_kito_ushi_DESC = "所持文を即時2倍（上限あり）。",
+
+	SHOP_ITEM_kito_tora_NAME = "寅：取り札の得点+1",
+	SHOP_ITEM_kito_tora_DESC = "以後、取り札の得点+1（恒常バフ／スタック可）。",
+
+	SHOP_ITEM_kito_tori_NAME = "酉：1枚を光札に変換",
+	SHOP_ITEM_kito_tori_DESC = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
+
+	SHOP_ITEM_sai_kasu_NAME  = "カス祭り",
+	SHOP_ITEM_sai_kasu_DESC  = "カス役に祭事レベル+1（採点時に倍率+1/Lv、点+1/Lv）。",
+
+	SHOP_ITEM_sai_tanzaku_NAME = "短冊祭り",
+	SHOP_ITEM_sai_tanzaku_DESC = "短冊役に祭事レベル+1（採点時に倍率+1/Lv、点+3/Lv）。",
+
+	SHOP_ITEM_spectral_blackhole_NAME = "黒天",
+	SHOP_ITEM_spectral_blackhole_DESC = "即時：すべての祭事レベルを+1。",
+
+	SHOP_ITEM_tali_dev_plus1_NAME       = "護符：+1点",
+	SHOP_ITEM_tali_dev_plus1_DESC       = "採点後、常時+1点を加算（開発用）。",
+	SHOP_ITEM_tali_dev_gokou_plus5_NAME = "護符：五光+5",
+	SHOP_ITEM_tali_dev_gokou_plus5_DESC = "五光成立時のみ、+5点（開発用）。",
+	SHOP_ITEM_tali_dev_sake_plus3_NAME  = "護符：酒+3",
+	SHOP_ITEM_tali_dev_sake_plus3_DESC  = "酒が関与したとき、+3点（開発用）。",
+
+	-- ===== Shop: UI (migrated from ShopI18n) =====
+	SHOP_UI_TITLE                 = "屋台（MVP）",
+	SHOP_UI_VIEW_DECK             = "デッキを見る",
+	SHOP_UI_HIDE_DECK             = "デッキを隠す",
+	SHOP_UI_REROLL_FMT            = "リロール（-%d 文）",
+	SHOP_UI_INFO_TITLE            = "アイテム情報",
+	SHOP_UI_INFO_PLACEHOLDER      = "（アイテムにマウスを乗せるか、クリックしてください）",
+	SHOP_UI_DECK_TITLE_FMT        = "現在のデッキ（%d 枚）",
+	SHOP_UI_DECK_EMPTY            = "(カード無し)",
+	SHOP_UI_CLOSE_BTN             = "屋台を閉じて次の季節へ",
+	SHOP_UI_SUMMARY_CLEARED_FMT   = "達成！ 合計:%d / 目標:%d\n報酬：%d 文（所持：%d 文）\n",
+	SHOP_UI_SUMMARY_ITEMS_FMT     = "商品数: %d 点",
+	SHOP_UI_SUMMARY_MONEY_FMT     = "所持文: %d 文",
+	SHOP_UI_LABEL_CATEGORY        = "カテゴリ: %s",
+	SHOP_UI_LABEL_PRICE           = "価格: %s",
+	SHOP_UI_NO_DESC               = "(説明なし)",
+	SHOP_UI_INSUFFICIENT_SUFFIX   = "（不足）",
+
+	-- Extra (for Talisman UI / toasts)
+	SHOP_UI_TALISMAN_BOARD_TITLE  = "護符ボード",
+	SHOP_UI_NO_EMPTY_SLOT         = "空きスロットがありません",
 }
 
 Locale._data = { en = en, ja = ja }
@@ -6727,37 +6876,7 @@ function Locale.setGlobal(lang)
 	L("setGlobal", "set shared language", {in_lang=lang, from=before, to=_current})
 	if _current ~= before then
 		_changed:Fire(_current)
-	end
-end
-
-function Locale.getGlobal()
-	local res = _current or detectLang()
-	L("getGlobal", "get shared language", {stored=_current, resolved=res})
-	return res
-end
-
---=== 取得系 ============================================================
-function Locale.get(lang)
-	local key = _norm(lang) or Locale.pick()
-	L("get", "resolve table", {in_lang=lang, resolved=key})
-	return Locale._data[key] or Locale._data.en
-end
-
-function Locale.t(lang, key)
-	local use = _norm(lang) or Locale.getGlobal()
-	if Locale._verbose then
-		L("t", "translate", {in_lang=lang, use=use, key=key})
-	end
-	local d = Locale.get(use)
-	return (d[key] or Locale._data.en[key] or key)
-end
-
--- 明示的に正規化を呼びたい場合の補助（ShopFormat 等で使用可）
-function Locale.normalize(lang)
-	return _norm(lang) or "en"
-end
-
-return Locale
+... (truncated)
 ```
 
 ### src/config/PatchNotes.lua
@@ -8252,7 +8371,7 @@ end
 return Spectral
 ```
 
-### src/server/TalismanService.server.lua
+### src/server/TalismanService.lua
 ```lua
 -- ServerScriptService/TalismanService.server.lua
 -- v0.9.7-P2a  Talisman server bridge（正本：サーバのみが更新）
@@ -10204,8 +10323,8 @@ return P3
 ### src/shared/score/phases/P4_talisman.lua
 ```lua
 -- ReplicatedStorage/SharedModules/score/phases/P4_talisman.lua
--- v0.9.3-S10: P4 受け口の堅牢化（ID正規化＋ledger no-op）
--- ・Hooks.apply があれば呼ぶ（安全 pcall）
+-- v0.9.3-S11: hooks の場所を固定参照（SharedModules/score/hooks/talisman）に変更
+-- ・Hooks.apply があれば呼ぶ（pcallで安全呼び出し）
 -- ・無くても no-op で ledger に記録
 -- ・ctx.equipped.talisman は { "id", ... } / { {id="..."}, ... } の両方を許容
 
@@ -10223,17 +10342,19 @@ do
 	end
 end
 
--- optional: Hooks（ある場合のみ使用）
-local Hooks_Talisman = nil
-do
-	local ok, mod = pcall(function()
-		local SharedModules = RS:WaitForChild("SharedModules")
-		local Hooks = SharedModules:FindFirstChild("hooks")
-		if not Hooks then return nil end
-		return require(Hooks:WaitForChild("talisman"))
-	end)
-	if ok and mod then Hooks_Talisman = mod end
-end
+-- Hooks（固定パスで参照：SharedModules/score/hooks/talisman）
+-- ※本プロジェクトでは必ず存在する前提
+local Hooks_Talisman = (function()
+	local SharedModules = RS:WaitForChild("SharedModules")
+	local Score         = SharedModules:WaitForChild("score")
+	local HooksFolder   = Score:WaitForChild("hooks")
+	local Mod           = require(HooksFolder:WaitForChild("talisman"))
+	return Mod
+end)()
+
+--========================
+-- utils
+--========================
 
 local function toIdList(eq)
 	-- eq: { "dev_plus1", ... } or { {id="dev_plus1"}, ... }
@@ -10256,16 +10377,25 @@ local function addLedger(ctx, dmon, dpts, note)
 		ctx:add("P4_talisman", dmon or 0, dpts or 0, note or "")
 	else
 		ctx.ledger = ctx.ledger or {}
-		table.insert(ctx.ledger, { phase = "P4_talisman", dmon = dmon or 0, dpts = dpts or 0, note = note or "" })
+		table.insert(ctx.ledger, {
+			phase = "P4_talisman",
+			dmon  = dmon or 0,
+			dpts  = dpts or 0,
+			note  = note or "",
+		})
 	end
 end
+
+--========================
+-- API
+--========================
 
 local P4 = {}
 
 function P4.applyTalisman(roles, mon, pts, state, ctx)
 	local mon0, pts0 = mon, pts
 
-	-- 1) 可能なら Hooks.apply を呼ぶ（no-opでもOK）
+	-- 1) Hooks.apply を呼ぶ（no-opでもOK）
 	if Hooks_Talisman and typeof(Hooks_Talisman.apply) == "function" then
 		local ok, r_roles, r_mon, r_pts = pcall(Hooks_Talisman.apply, roles, mon, pts, state, ctx)
 		if ok and r_roles ~= nil and r_mon ~= nil and r_pts ~= nil then
@@ -10288,7 +10418,8 @@ function P4.applyTalisman(roles, mon, pts, state, ctx)
 	-- 4) Studioログ
 	local RunService = game:GetService("RunService")
 	if LOG and RunService:IsStudio() then
-		LOG.info(("[P4_talisman] equipped=%d %s dmon=%.3f dpts=%.3f"):format(#ids, note, dmon, dpts))
+		LOG.info(("[P4_talisman] equipped=%d %s dmon=%.3f dpts=%.3f")
+			:format(#ids, note, dmon, dpts))
 	end
 
 	return roles, mon, pts
@@ -10299,39 +10430,84 @@ return P4
 
 ### src/shared/score/phases/P5_omamori.lua
 ```lua
--- P5: Omamori（お守り）受け口 — いまは no-op（ledger対応＋S-8: 装備ID表示）
+-- ReplicatedStorage/SharedModules/score/phases/P5_omamori.lua
+-- v0.9.3-S11: hooks の場所を固定参照（SharedModules/score/hooks/omamori）
+-- いまは no-op（ledger対応＋装備IDログ）。Hooks.apply があれば安全に呼ぶ。
+
 local RS = game:GetService("ReplicatedStorage")
 
-local Hooks_Omamori = nil
-do
-	local ok, mod = pcall(function()
-		local SharedModules = RS:WaitForChild("SharedModules")
-		local Hooks = SharedModules:FindFirstChild("hooks")
-		if not Hooks then return nil end
-		return require(Hooks:WaitForChild("omamori"))
-	end)
-	if ok and mod then Hooks_Omamori = mod end
+-- Hooks（固定パスで参照：SharedModules/score/hooks/omamori）
+-- ※本プロジェクトでは必ず存在する前提
+local Hooks_Omamori = (function()
+	local SharedModules = RS:WaitForChild("SharedModules")
+	local Score         = SharedModules:WaitForChild("score")
+	local HooksFolder   = Score:WaitForChild("hooks")
+	local Mod           = require(HooksFolder:WaitForChild("omamori"))
+	return Mod
+end)()
+
+--========================
+-- utils
+--========================
+
+local function toIdList(eq)
+	-- eq: { "id", ... } or { {id="..."}, ... }
+	local out = {}
+	if typeof(eq) ~= "table" then return out end
+	for i = 1, #eq do
+		local v = eq[i]
+		if typeof(v) == "string" then
+			table.insert(out, v)
+		elseif typeof(v) == "table" and v.id ~= nil then
+			table.insert(out, tostring(v.id))
+		end
+	end
+	return out
 end
+
+local function addLedger(ctx, dmon, dpts, note)
+	ctx = ctx or {}
+	if typeof(ctx.add) == "function" then
+		ctx:add("P5_omamori", dmon or 0, dpts or 0, note or "")
+	else
+		ctx.ledger = ctx.ledger or {}
+		table.insert(ctx.ledger, {
+			phase = "P5_omamori",
+			dmon  = dmon or 0,
+			dpts  = dpts or 0,
+			note  = note or "",
+		})
+	end
+end
+
+--========================
+-- API
+--========================
 
 local P5 = {}
 
 function P5.applyOmamori(roles, mon, pts, state, ctx)
 	local mon0, pts0 = mon, pts
+
+	-- 1) Hooks.apply を呼ぶ（no-opでもOK）
 	if Hooks_Omamori and typeof(Hooks_Omamori.apply) == "function" then
 		local ok, r_roles, r_mon, r_pts = pcall(Hooks_Omamori.apply, roles, mon, pts, state, ctx)
 		if ok and r_roles ~= nil and r_mon ~= nil and r_pts ~= nil then
 			roles, mon, pts = r_roles, r_mon, r_pts
 		end
 	end
-	-- S-8: 装備IDログ（no-op）
-	local ids = (ctx and ctx.equipped and ctx.equipped.omamori) or {}
+
+	-- 2) 装備IDログ（no-op）。両形式に対応してCSV化
+	local eq = (ctx and ctx.equipped and ctx.equipped.omamori) or {}
+	local ids = toIdList(eq)
 	local note = "omamori effects"
-	if typeof(ids)=="table" and #ids > 0 then
+	if #ids > 0 then
 		note = note .. " IDs=" .. table.concat(ids, ",")
 	end
-	if ctx and typeof(ctx.add) == "function" then
-		ctx:add("P5_omamori", mon - mon0, pts - pts0, note)
-	end
+
+	-- 3) ledger 追記（差分0か、Hooksが数値変更していればその差分）
+	addLedger(ctx, (mon - mon0), (pts - pts0), note)
+
 	return roles, mon, pts
 end
 
@@ -10771,36 +10947,61 @@ return ShopDefs
 ### src/shared/ShopFormat.lua
 ```lua
 -- ReplicatedStorage/SharedModules/ShopFormat.lua
--- v0.9.A ShopFormat：SHOP向けの整形系ユーティリティを集約（挙動は従来通り）
+-- v0.9.B ShopFormat：SHOP向けの整形系ユーティリティ（Locale優先 + 後方互換）
 local ShopFormat = {}
 
 --==================================================
--- 言語正規化（"en" / "ja"）
+-- 依存（Locale 一元化）
+--==================================================
+local RS = game:GetService("ReplicatedStorage")
+local Config = RS:WaitForChild("Config")
+local Locale = require(Config:WaitForChild("Locale"))
+
+--==================================================
+-- 言語正規化（Locale に委譲）
 --==================================================
 function ShopFormat.normLang(s: string?): string
-	if s == "en" then return "en" end
-	if s == "ja" or s == "jp" then return "ja" end
-	return "ja"
+	return Locale.normalize(s)
 end
 
 --==================================================
--- 価格表記（※従来通り「文」固定。英語UIでもここはそのまま）
+-- 価格表記（※従来通り「文」固定。英語UIでもこのまま）
 --==================================================
 function ShopFormat.fmtPrice(n: number?): string
 	return ("%d 文"):format(tonumber(n or 0))
 end
 
 --==================================================
--- タイトル/説明
+-- タイトル/説明（Locale.t 最優先 → 既存フィールドへフォールバック）
 --==================================================
-function ShopFormat.itemTitle(it: any): string
-	if it and it.name then return tostring(it.name) end
-	return tostring(it and it.id or "???")
+-- 後方互換：lang 省略可（省略時は Locale の共有言語を使用）
+function ShopFormat.itemTitle(it: any, lang: string?): string
+	if not it then return "???" end
+	local id = tostring(it.id or "")
+	if id ~= "" then
+		local key = ("SHOP_ITEM_%s_NAME"):format(id)
+		local s = Locale.t(lang, key)
+		if s and s ~= key then
+			return s
+		end
+	end
+	-- フォールバック：従来 name → id
+	return tostring(it.name or (id ~= "" and id) or "???")
 end
 
-function ShopFormat.itemDesc(it: any, lang: string): string
+function ShopFormat.itemDesc(it: any, lang: string?): string
 	if not it then return "" end
-	if lang == "en" then
+	local id = tostring(it.id or "")
+	if id ~= "" then
+		local key = ("SHOP_ITEM_%s_DESC"):format(id)
+		local s = Locale.t(lang, key)
+		if s and s ~= key then
+			return s
+		end
+	end
+	-- 既存フィールドへフォールバック
+	local use = Locale.normalize(lang)
+	if use == "en" then
 		return (it.descEN or it.descEn or it.name or it.id or "")
 	else
 		return (it.descJP or it.descJa or it.name or it.id or "")

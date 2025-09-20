@@ -285,7 +285,7 @@ function Run.new(deps)
 
 	-- 状態更新
 	local function onState(st)
-		self.info.Text = Format.stateLineText(st) or ""
+		self.info.Text = Format.stateLineText(st, self._lang) or ""
 
 		if self.goalText then
 			local g = (typeof(st) == "table") and tonumber(st.goal) or nil

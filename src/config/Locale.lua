@@ -6,8 +6,6 @@
 --  3) Locale.setGlobal(lang) / Locale.getGlobal() / Locale.changed (Signal)
 --  4) jp入力時は warn を一度だけ出す（内部では常に ja に変換）
 -- P0-10: OSロケール検出のスタイルを簡素化
---  - 変更点: pcall(game.GetService, game, "Players") → local Players = game:GetService("Players")
---  - 目的: 可読性向上（挙動は不変。LocalPlayer が無い場合は "en" フォールバック）
 
 local Locale = {}
 
@@ -42,11 +40,10 @@ local function _norm(lang:string?)
 	return nil
 end
 
--- ===== OS言語検出（P0-10改修） =====
+-- ===== OS言語検出 =====
 local Players = game:GetService("Players")
 
 local function detectLang()
-	-- Client 以外（サーバ/テスト環境）では LocalPlayer は nil → "en" フォールバック
 	local lp = Players.LocalPlayer
 	if lp and lp.LocaleId then
 		local lid = string.lower(lp.LocaleId)
@@ -114,6 +111,54 @@ local en = {
 
 	-- 空役（P0-8）
 	ROLES_NONE = "No roles",
+
+	-- ===== Shop: Items (Locale-first) =====
+	SHOP_ITEM_kito_ushi_NAME = "Ox: Double Mon",
+	SHOP_ITEM_kito_ushi_DESC = "Double your current mon immediately (capped).",
+
+	SHOP_ITEM_kito_tora_NAME = "Tiger: +1 point on taken cards",
+	SHOP_ITEM_kito_tora_DESC = "Permanent: taken cards score +1 (stackable).",
+
+	SHOP_ITEM_kito_tori_NAME = "Rooster: Convert to Bright",
+	SHOP_ITEM_kito_tori_DESC = "Convert one non-bright in run config to Bright (or queue +1 for next season).",
+
+	SHOP_ITEM_sai_kasu_NAME  = "Kasu Festival",
+	SHOP_ITEM_sai_kasu_DESC  = "Festival: Kasu +1 level (scoring +1x and +1pt per Lv).",
+
+	SHOP_ITEM_sai_tanzaku_NAME = "Tanzaku Festival",
+	SHOP_ITEM_sai_tanzaku_DESC = "Festival: Tanzaku +1 level (scoring +1x and +3pt per Lv).",
+
+	SHOP_ITEM_spectral_blackhole_NAME = "Black Hole",
+	SHOP_ITEM_spectral_blackhole_DESC = "Instant: All festival levels +1.",
+
+	SHOP_ITEM_tali_dev_plus1_NAME       = "Talisman: +1 pt",
+	SHOP_ITEM_tali_dev_plus1_DESC       = "After scoring, add +1 point (dev).",
+	SHOP_ITEM_tali_dev_gokou_plus5_NAME = "Talisman: Gokou +5",
+	SHOP_ITEM_tali_dev_gokou_plus5_DESC = "+5 points only when Gokou triggers (dev).",
+	SHOP_ITEM_tali_dev_sake_plus3_NAME  = "Talisman: Sake +3",
+	SHOP_ITEM_tali_dev_sake_plus3_DESC  = "+3 points when Sake is involved (dev).",
+
+	-- ===== Shop: UI (migrated from ShopI18n) =====
+	SHOP_UI_TITLE                 = "Shop (MVP)",
+	SHOP_UI_VIEW_DECK             = "View Deck",
+	SHOP_UI_HIDE_DECK             = "Hide Deck",
+	SHOP_UI_REROLL_FMT            = "Reroll (-%d)",
+	SHOP_UI_INFO_TITLE            = "Item Info",
+	SHOP_UI_INFO_PLACEHOLDER      = "(Hover or click an item)",
+	SHOP_UI_DECK_TITLE_FMT        = "Current Deck (%d cards)",
+	SHOP_UI_DECK_EMPTY            = "(no cards)",
+	SHOP_UI_CLOSE_BTN             = "Close shop and next season",
+	SHOP_UI_SUMMARY_CLEARED_FMT   = "Cleared! Total:%d / Target:%d\nReward: %d mon (Have: %d)\n",
+	SHOP_UI_SUMMARY_ITEMS_FMT     = "Items: %d",
+	SHOP_UI_SUMMARY_MONEY_FMT     = "Money: %d mon",
+	SHOP_UI_LABEL_CATEGORY        = "Category: %s",
+	SHOP_UI_LABEL_PRICE           = "Price: %s",
+	SHOP_UI_NO_DESC               = "(no description)",
+	SHOP_UI_INSUFFICIENT_SUFFIX   = " (insufficient)",
+
+	-- Extra (for Talisman UI / toasts)
+	SHOP_UI_TALISMAN_BOARD_TITLE  = "Talisman Board",
+	SHOP_UI_NO_EMPTY_SLOT         = "No empty slot available",
 }
 
 local ja = {
@@ -164,6 +209,54 @@ local ja = {
 
 	-- 空役（P0-8）
 	ROLES_NONE = "役なし",
+
+	-- ===== Shop: Items (Locale-first) =====
+	SHOP_ITEM_kito_ushi_NAME = "丑：所持文を2倍",
+	SHOP_ITEM_kito_ushi_DESC = "所持文を即時2倍（上限あり）。",
+
+	SHOP_ITEM_kito_tora_NAME = "寅：取り札の得点+1",
+	SHOP_ITEM_kito_tora_DESC = "以後、取り札の得点+1（恒常バフ／スタック可）。",
+
+	SHOP_ITEM_kito_tori_NAME = "酉：1枚を光札に変換",
+	SHOP_ITEM_kito_tori_DESC = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
+
+	SHOP_ITEM_sai_kasu_NAME  = "カス祭り",
+	SHOP_ITEM_sai_kasu_DESC  = "カス役に祭事レベル+1（採点時に倍率+1/Lv、点+1/Lv）。",
+
+	SHOP_ITEM_sai_tanzaku_NAME = "短冊祭り",
+	SHOP_ITEM_sai_tanzaku_DESC = "短冊役に祭事レベル+1（採点時に倍率+1/Lv、点+3/Lv）。",
+
+	SHOP_ITEM_spectral_blackhole_NAME = "黒天",
+	SHOP_ITEM_spectral_blackhole_DESC = "即時：すべての祭事レベルを+1。",
+
+	SHOP_ITEM_tali_dev_plus1_NAME       = "護符：+1点",
+	SHOP_ITEM_tali_dev_plus1_DESC       = "採点後、常時+1点を加算（開発用）。",
+	SHOP_ITEM_tali_dev_gokou_plus5_NAME = "護符：五光+5",
+	SHOP_ITEM_tali_dev_gokou_plus5_DESC = "五光成立時のみ、+5点（開発用）。",
+	SHOP_ITEM_tali_dev_sake_plus3_NAME  = "護符：酒+3",
+	SHOP_ITEM_tali_dev_sake_plus3_DESC  = "酒が関与したとき、+3点（開発用）。",
+
+	-- ===== Shop: UI (migrated from ShopI18n) =====
+	SHOP_UI_TITLE                 = "屋台（MVP）",
+	SHOP_UI_VIEW_DECK             = "デッキを見る",
+	SHOP_UI_HIDE_DECK             = "デッキを隠す",
+	SHOP_UI_REROLL_FMT            = "リロール（-%d 文）",
+	SHOP_UI_INFO_TITLE            = "アイテム情報",
+	SHOP_UI_INFO_PLACEHOLDER      = "（アイテムにマウスを乗せるか、クリックしてください）",
+	SHOP_UI_DECK_TITLE_FMT        = "現在のデッキ（%d 枚）",
+	SHOP_UI_DECK_EMPTY            = "(カード無し)",
+	SHOP_UI_CLOSE_BTN             = "屋台を閉じて次の季節へ",
+	SHOP_UI_SUMMARY_CLEARED_FMT   = "達成！ 合計:%d / 目標:%d\n報酬：%d 文（所持：%d 文）\n",
+	SHOP_UI_SUMMARY_ITEMS_FMT     = "商品数: %d 点",
+	SHOP_UI_SUMMARY_MONEY_FMT     = "所持文: %d 文",
+	SHOP_UI_LABEL_CATEGORY        = "カテゴリ: %s",
+	SHOP_UI_LABEL_PRICE           = "価格: %s",
+	SHOP_UI_NO_DESC               = "(説明なし)",
+	SHOP_UI_INSUFFICIENT_SUFFIX   = "（不足）",
+
+	-- Extra (for Talisman UI / toasts)
+	SHOP_UI_TALISMAN_BOARD_TITLE  = "護符ボード",
+	SHOP_UI_NO_EMPTY_SLOT         = "空きスロットがありません",
 }
 
 Locale._data = { en = en, ja = ja }
@@ -230,7 +323,6 @@ function Locale.t(lang, key)
 	return (d[key] or Locale._data.en[key] or key)
 end
 
--- 明示的に正規化を呼びたい場合の補助（ShopFormat 等で使用可）
 function Locale.normalize(lang)
 	return _norm(lang) or "en"
 end

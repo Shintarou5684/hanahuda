@@ -1,34 +1,59 @@
 -- ReplicatedStorage/SharedModules/ShopFormat.lua
--- v0.9.A ShopFormat：SHOP向けの整形系ユーティリティを集約（挙動は従来通り）
+-- v0.9.B ShopFormat：SHOP向けの整形系ユーティリティ（Locale優先 + 後方互換）
 local ShopFormat = {}
 
 --==================================================
--- 言語正規化（"en" / "ja"）
+-- 依存（Locale 一元化）
+--==================================================
+local RS = game:GetService("ReplicatedStorage")
+local Config = RS:WaitForChild("Config")
+local Locale = require(Config:WaitForChild("Locale"))
+
+--==================================================
+-- 言語正規化（Locale に委譲）
 --==================================================
 function ShopFormat.normLang(s: string?): string
-	if s == "en" then return "en" end
-	if s == "ja" or s == "jp" then return "ja" end
-	return "ja"
+	return Locale.normalize(s)
 end
 
 --==================================================
--- 価格表記（※従来通り「文」固定。英語UIでもここはそのまま）
+-- 価格表記（※従来通り「文」固定。英語UIでもこのまま）
 --==================================================
 function ShopFormat.fmtPrice(n: number?): string
 	return ("%d 文"):format(tonumber(n or 0))
 end
 
 --==================================================
--- タイトル/説明
+-- タイトル/説明（Locale.t 最優先 → 既存フィールドへフォールバック）
 --==================================================
-function ShopFormat.itemTitle(it: any): string
-	if it and it.name then return tostring(it.name) end
-	return tostring(it and it.id or "???")
+-- 後方互換：lang 省略可（省略時は Locale の共有言語を使用）
+function ShopFormat.itemTitle(it: any, lang: string?): string
+	if not it then return "???" end
+	local id = tostring(it.id or "")
+	if id ~= "" then
+		local key = ("SHOP_ITEM_%s_NAME"):format(id)
+		local s = Locale.t(lang, key)
+		if s and s ~= key then
+			return s
+		end
+	end
+	-- フォールバック：従来 name → id
+	return tostring(it.name or (id ~= "" and id) or "???")
 end
 
-function ShopFormat.itemDesc(it: any, lang: string): string
+function ShopFormat.itemDesc(it: any, lang: string?): string
 	if not it then return "" end
-	if lang == "en" then
+	local id = tostring(it.id or "")
+	if id ~= "" then
+		local key = ("SHOP_ITEM_%s_DESC"):format(id)
+		local s = Locale.t(lang, key)
+		if s and s ~= key then
+			return s
+		end
+	end
+	-- 既存フィールドへフォールバック
+	local use = Locale.normalize(lang)
+	if use == "en" then
 		return (it.descEN or it.descEn or it.name or it.id or "")
 	else
 		return (it.descJP or it.descJa or it.name or it.id or "")

@@ -1,8 +1,8 @@
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.7-P2-10 ShopScreen（Server-first talisman + jp→ja + idempotent redraw）
---  - show(payload) で payload.state.run.talisman を即時反映（サーバ確定を優先）
---  - payload.lang を尊重し "jp"→"ja" 正規化
---  - 自動配置は「護符配列が無い or 空スロットがある」時のみ（既存の空き検知で担保）
+-- v0.9.7-P2-11 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
+--  - payload.lang を Locale.normalize で正規化し _lang に保持（'jp'→'ja' を含む）
+--  - show/setData/update で _lang を子へ伝播（TalismanBoard 含む）
+--  - サーバ確定 talisman を優先反映（差分時のみ）
 --  - 同一データの再描画を抑止（talisman シグネチャ比較）
 
 local Shop = {}
@@ -15,6 +15,7 @@ local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 
 local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
+local Locale = require(Config:WaitForChild("Locale"))
 
 local Logger = require(SharedModules:WaitForChild("Logger"))
 local LOG = (typeof(Logger.scope) == "function" and Logger.scope("ShopScreen"))
@@ -49,11 +50,12 @@ export type Payload = {
 -- helpers
 --==================================================
 
-local function normToJa(lang: string?)
-	local v = ShopFormat.normLang(lang)
-	if v == "jp" then
+local function normalizeLang(lang: string?): string
+	-- Locale.normalize が 'jp'→'ja' を内包
+	local v = Locale.normalize(lang)
+	-- 念のため 'jp' の名残を検知してログ（フォレンジック用）
+	if tostring(lang or ""):lower() == "jp" and v == "ja" then
 		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
-		return "ja"
 	end
 	return v
 end
@@ -152,7 +154,7 @@ function Shop.new(deps)
 	do
 		local parent = nodes.taliArea or gui  -- 念のためフォールバック
 		self._taliBoard = TalismanBoard.new(parent, {
-			title      = "護符ボード",
+			title      = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE"),
 			widthScale = 0.95,   -- 下段にフィット
 			padScale   = 0.01,
 		})
@@ -273,7 +275,7 @@ end
 
 function Shop:setData(payload: Payload)
 	if payload and payload.lang then
-		local nl = normToJa(payload.lang)
+		local nl = normalizeLang(payload.lang)
 		if nl and nl ~= payload.lang then payload.lang = nl end
 		self._lang = nl or self._lang
 	end
@@ -298,7 +300,7 @@ end
 function Shop:show(payload: Payload?)
 	if payload then
 		if payload.lang then
-			local nl = normToJa(payload.lang)
+			local nl = normalizeLang(payload.lang)
 			if nl and nl ~= payload.lang then payload.lang = nl end
 			self._lang = nl or self._lang
 		end
@@ -315,6 +317,11 @@ function Shop:show(payload: Payload?)
 	if self._taliBoard then
 		self._taliBoard:setLang(self._lang or "ja")
 		self._taliBoard:setData(self:_snapBoard())
+		-- タイトルは言語に合わせて更新（Locale.t はフォールバック内蔵）
+		local inst = self._taliBoard:getInstance()
+		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
+			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
+		end
 	end
 
 	self:_render()
@@ -331,7 +338,7 @@ end
 function Shop:update(payload: Payload?)
 	if payload then
 		if payload.lang then
-			local nl = normToJa(payload.lang)
+			local nl = normalizeLang(payload.lang)
 			if nl and nl ~= payload.lang then payload.lang = nl end
 			self._lang = nl or self._lang
 		end
@@ -346,6 +353,10 @@ function Shop:update(payload: Payload?)
 	if self._taliBoard then
 		self._taliBoard:setLang(self._lang or "ja")
 		self._taliBoard:setData(self:_snapBoard())
+		local inst = self._taliBoard:getInstance()
+		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
+			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
+		end
 	end
 
 	self:_render()
@@ -353,10 +364,14 @@ function Shop:update(payload: Payload?)
 end
 
 function Shop:setLang(lang: string?)
-	self._lang = normToJa(lang)
+	self._lang = normalizeLang(lang)
 	ShopWires.applyInfoPlaceholder(self)
 	if self._taliBoard then
 		self._taliBoard:setLang(self._lang or "ja")
+		local inst = self._taliBoard:getInstance()
+		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
+			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
+		end
 	end
 end
 
@@ -380,7 +395,7 @@ function Shop:autoPlace(talismanId: string, item: any?)
 	if not idx then
 		local toast = self.deps and self.deps.toast
 		if typeof(toast) == "function" then
-			toast((self._lang=="ja") and "空きスロットがありません" or "No empty slot available")
+			toast(Locale.t(self._lang, "SHOP_UI_NO_EMPTY_SLOT"))
 		end
 		LOG.info("[Shop] autoPlace aborted: no empty slot")
 		return
@@ -405,6 +420,10 @@ function Shop:autoPlace(talismanId: string, item: any?)
 	self._lastPlaced = { index = idx, id = talismanId }
 	if self._taliBoard then
 		self._taliBoard:setData(self._preview)
+		local inst = self._taliBoard:getInstance()
+		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
+			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
+		end
 	end
 
 	-- サーバ確定

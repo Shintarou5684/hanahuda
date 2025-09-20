@@ -1,18 +1,21 @@
 -- StarterPlayerScripts/UI/screens/ShopRenderer.lua
--- v0.9.SIMPLE-7
+-- v0.9.SIMPLE-8 (Locale-first, no ShopI18n)
 --  - 下段 TalismanArea に護符ボードをマウント（初回のみ）
 --  - payload.talisman を表示（nilならデフォルト6枠表示）
 --  - items を描画前に self:isItemHidden(id) でフィルタ（既存）
+--  - 画面固定文言は Locale.t(lang,"SHOP_UI_*") を直接参照
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 
+local Config = RS:WaitForChild("Config")
+local Locale = require(Config:WaitForChild("Locale"))
+
 local Logger = require(SharedModules:WaitForChild("Logger"))
 local LOG    = Logger.scope("ShopRenderer")
 
 local ShopCells = require(script.Parent.Parent:WaitForChild("ShopCells"))
-local ShopI18n  = require(script.Parent.Parent:WaitForChild("i18n"):WaitForChild("ShopI18n"))
 
 -- TalismanBoard の安全取得（UI/components から辿る）
 local function requireTalismanBoard()
@@ -40,7 +43,7 @@ function M.render(self)
 
 	local p = self._payload or {}
 	local items = p.items or p.stock or {}
-	local lang = self._lang or ShopFormat.normLang(p.lang)
+	local lang = (self._lang or ShopFormat.normLang(p.lang))
 	local mon = tonumber(p.mon or p.totalMon or 0) or 0
 	local rerollCost = tonumber(p.rerollCost or 1) or 1
 
@@ -48,8 +51,9 @@ function M.render(self)
 	if nodes.taliArea and not self._taliBoard then
 		local TB = requireTalismanBoard()
 		if TB then
+			local title = Locale.t(lang, "SHOP_UI_TALISMAN_BOARD")
 			self._taliBoard = TB.new(nodes.taliArea, {
-				title = (lang == "ja") and "護符ボード" or "Talisman Board",
+				title = title,
 				widthScale = 0.9,
 				padScale   = 0.01,
 			})
@@ -57,6 +61,7 @@ function M.render(self)
 			inst.AnchorPoint = Vector2.new(0.5, 0)
 			inst.Position    = UDim2.fromScale(0.5, 0)
 			inst.ZIndex      = 2
+			LOG.info("mount TalismanBoard | lang=%s title=%s", tostring(lang), tostring(title))
 		else
 			LOG.warn("TalismanBoard module not found; skip mount")
 		end
@@ -67,6 +72,7 @@ function M.render(self)
 		self._taliBoard:setLang(langFix)
 		-- p.talisman が来なければ内部で defaultData() が出る想定
 		self._taliBoard:setData(p.talisman)
+		-- タイトルは言語切替時に変えたい場合は setTitle があればそちらへ
 	end
 
 	-- ★ 一時SoldOutフィルタ
@@ -88,14 +94,14 @@ function M.render(self)
 
 	-- タイトル・ボタン
 	if nodes.title then
-		nodes.title.Text = ShopI18n.t(lang, "title_mvp")
+		nodes.title.Text = Locale.t(lang, "SHOP_UI_TITLE")
 	end
 	if nodes.deckBtn then
-		local txt = self._deckOpen and ShopI18n.t(lang, "deck_btn_hide") or ShopI18n.t(lang, "deck_btn_show")
+		local txt = self._deckOpen and Locale.t(lang, "SHOP_UI_HIDE_DECK") or Locale.t(lang, "SHOP_UI_VIEW_DECK")
 		nodes.deckBtn.Text = txt
 	end
 	if nodes.rerollBtn then
-		nodes.rerollBtn.Text = ShopI18n.t(lang, "reroll_btn_fmt", rerollCost)
+		nodes.rerollBtn.Text = Locale.t(lang, "SHOP_UI_REROLL_FMT"):format(rerollCost)
 		local can = (p.canReroll ~= false) and (mon >= rerollCost)
 		nodes.rerollBtn.Active = can
 		nodes.rerollBtn.AutoButtonColor = can
@@ -103,10 +109,10 @@ function M.render(self)
 		nodes.rerollBtn.BackgroundTransparency = 0
 	end
 	if nodes.infoTitle then
-		nodes.infoTitle.Text = ShopI18n.t(lang, "info_title")
+		nodes.infoTitle.Text = Locale.t(lang, "SHOP_UI_INFO_TITLE")
 	end
 	if nodes.closeBtn then
-		nodes.closeBtn.Text = ShopI18n.t(lang, "close_btn")
+		nodes.closeBtn.Text = Locale.t(lang, "SHOP_UI_CLOSE_BTN")
 	end
 
 	-- 右パネル
@@ -123,8 +129,8 @@ function M.render(self)
 
 		if deckPanel and deckTitle and deckText then
 			local n, lst = ShopFormat.deckListFromSnapshot(p.currentDeck)
-			deckTitle.Text = ShopI18n.t(lang, "deck_title_fmt", n)
-			deckText.Text  = (n > 0) and lst or ShopI18n.t(lang, "deck_empty")
+			deckTitle.Text = Locale.t(lang, "SHOP_UI_DECK_TITLE_FMT"):format(n)
+			deckText.Text  = (n > 0) and lst or Locale.t(lang, "SHOP_UI_DECK_EMPTY")
 		end
 	end
 
@@ -182,17 +188,18 @@ function M.render(self)
 	-- サマリ
 	local s = {}
 	if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
-		table.insert(s, ShopI18n.t(
-			lang,
-			"summary_cleared_fmt",
-			tonumber(p.seasonSum or 0),
-			tonumber(p.target or 0),
-			tonumber(p.rewardMon or 0),
-			tonumber(p.totalMon or mon or 0)
-		))
+		table.insert(s,
+			Locale.t(lang, "SHOP_UI_SUMMARY_CLEARED_FMT")
+				:format(
+					tonumber(p.seasonSum or 0),
+					tonumber(p.target or 0),
+					tonumber(p.rewardMon or 0),
+					tonumber(p.totalMon or mon or 0)
+				)
+		)
 	end
-	table.insert(s, ShopI18n.t(lang, "summary_items_fmt", #vis))
-	table.insert(s, ShopI18n.t(lang, "summary_money_fmt", mon))
+	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_ITEMS_FMT"):format(#vis))
+	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_MONEY_FMT"):format(mon))
 	if nodes.summary then
 		nodes.summary.Text = table.concat(s, "\n")
 	end
