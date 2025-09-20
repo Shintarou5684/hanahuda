@@ -22,6 +22,22 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+	-- ★ 0.9.6.3（外部向け・簡潔）
+	{
+		ver  = "v0.9.6.3",
+		date = "2025-09-21",
+		changes = {
+			{ ja = "護符の自動配置と表示同期を改善。購入後すぐに反映され、状況がより分かりやすくなりました。",
+			  en = "Improved Talisman auto-placement and sync. Purchases now reflect instantly with clearer feedback." },
+			{ ja = "言語設定を調整（ja/en に統一）。英語モード時、情報パネルなどの表記が正しく英語で表示されます。",
+			  en = "Language handling refined (standardized to ja/en). Info panels now correctly show English when selected." },
+			{ ja = "祭事を拡充：カス／短冊に加え、タネ・赤短・青短・猪鹿蝶・花見・月見・三光・四光・五光を追加。採点時に効果が加算されます。",
+			  en = "Expanded Festivals: added Seed, Akatan, Aotan, Inoshikacho, Hanami, Tsukimi, Sanko, Yonkou, and Gokou (scores gain additional bonuses during tally)." },
+			{ ja = "屋台の表示更新を微調整し、購入・リロール後の見た目の安定性を向上。",
+			  en = "Minor Shop polish for more stable visuals after purchase and reroll." },
+		}
+	},
+
 	-- ★ 0.9.6 を外部向けトーンで追加（0.9.5 以前は変更なし）
 	{
 		ver  = "v0.9.6.1",

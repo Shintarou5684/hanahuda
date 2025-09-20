@@ -6,6 +6,42 @@
 
 ## 更新記録 / Change Log
 
+v0.9.6.3 — 2025-09-21
+
+護符のロード/配置まわりを修正：TalismanService を ServerScript → ModuleScript 化し、require(SSS:WaitForChild("TalismanService")) が通る構成に統一。PlaceOnSlot はここだけが正本、ACK で unlocked/slots を都度返却 — (Refactored TalismanService to ModuleScript; single source of truth; reliable ACK payload).
+
+Shop→Client の護符同期：ShopService.open の ShopOpen ペイロードに state.run.talisman をそのまま同梱（補完なし）。クライアントは state.run.talisman を参照して自動配置/空スロ判定 — (Ship raw talisman board in ShopOpen; no shaping).
+
+自動配置のブロック原因を解消：unlocked=2 でも空スロが埋まって判定落ちするケースを、サーバ側の「スロ埋まり時 no-op→ACK 最新断面」で復帰できるよう整備 — (No-op overwrites now return fresh board snapshot).
+
+ログを強化：placed / rejected / noop / ensureFor を Logger.scope("TalismanService") で要点出力。ショップ入店・購入・リロールにも talisman# を併記 — (Sharper logs around placement and shop lifecycle).
+
+言語コードの正規化：外部I/Fは ja/en に統一。jp を受け取った場合は警告ログのうえ ja へ正規化 — (Normalize jp → ja).
+
+左上情報パネルの英語対応（部分）：役名の整形を FormatUtil.rolesToLines で i18n 化（en/ja 字句を辞書化、未定義は英語フォールバック）。パネルのベース行は暫定で日本語固定のまま（TODO）— (Role labels localized; base state line remains JP for now).
+
+祭事を拡充：定義テーブルに以下を追加し、採点に反映
+
+新規：タネ祭 / 赤短祭 / 青短祭 / 猪鹿蝶祭 / 花見祭 / 月見祭 / 三光祭 / 四光祭 / 五光祭
+
+既存：カス祭 / 短冊祭
+
+役→祭事マッピングを刷新（雨四光は三光系に合流、四光/五光を個別に紐付け）— (Added full festival set; updated role↔festival maps).
+
+係数の扱いを明文化：現行 P3 は「倍率×」ではなく 加点+ として解釈（mon += lv * coeff[1], pts += lv * coeff[2]）。将来「本当の倍率」を導入する場合は P3 を別フェーズ/後段で乗算に — (Documented additive interpretation; prepared path for true multipliers).
+
+Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格・説明テキスト含む）。ShopEffects.Sai はレベルを +1 する汎用ロジックを維持し、数値効果はスコアリング側（P3）で集約 — (Sai effects remain level-only; scoring owns numbers).
+
+スペクタル維持：spectral_blackhole（全祭事+1）を現仕様に追随（レベル加算→P3で加点）— (Spectral stays compatible).
+
+影響範囲
+
+サーバ：ServerScriptService/TalismanService（ModuleScript化）、ShopService、ShopEffects/init.lua (+Sai)
+
+共有：SharedModules/score/constants.lua（祭事係数・対応表）、score/phases/P3_matsuri_kito.lua（加点適用）
+
+クライアント：StarterPlayerScripts/UI/lib/FormatUtil.lua（役名 i18n）
+
 ### v0.9.5 — 2025-09-17
 - **Fix-All P0 完了**：P0-1〜P0-12 を一括修正 — (Completed all P0 blockers).
 - **ResultModal / Nav 統一**：UI は `Nav.next("home"|"next"|"save")` のみ呼ぶ。内部は `DecideNext` に集約 — (Unified navigation on client; single remote).
