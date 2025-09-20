@@ -48,17 +48,73 @@ ShopDefs.POOLS = {
 
 	-- 祭事
 	sai = {
+		-- 既存：カス祭
 		{
 			id = "sai_kasu", name = "カス祭り", category = "sai", price = 3, effect = "sai_kasu",
 			descJP = "カス役に祭事レベル+1（採点時に倍率+1/Lv、点+1/Lv）。",
 			descEN = "Festival: Kasu +1 level (scoring +1x and +1pt per Lv).",
 		},
+		-- 既存：短冊祭
 		{
 			id = "sai_tanzaku", name = "短冊祭り", category = "sai", price = 4, effect = "sai_tanzaku",
 			descJP = "短冊役に祭事レベル+1（採点時に倍率+1/Lv、点+3/Lv）。",
 			descEN = "Festival: Tanzaku +1 level (scoring +1x and +3pt per Lv).",
 		},
-		-- TODO: akatan/aotan/inoshika 等追加
+
+		-- ★ 追加：タネ祭
+		{
+			id = "sai_seed", name = "タネ祭り", category = "sai", price = 4, effect = "sai_seed",
+			descJP = "タネ役に祭事レベル+1（採点時に倍率+1/Lv、点+3/Lv）。",
+			descEN = "Festival: Seeds +1 level (scoring +1x and +3pt per Lv).",
+		},
+		-- ★ 追加：赤短祭
+		{
+			id = "sai_akatan", name = "赤短祭り", category = "sai", price = 6, effect = "sai_akatan",
+			descJP = "赤短役に祭事レベル+1（採点時に倍率+1.5/Lv、点+5/Lv）。",
+			descEN = "Festival: Red Ribbons +1 level (+1.5x and +5pt per Lv).",
+		},
+		-- ★ 追加：青短祭
+		{
+			id = "sai_aotan", name = "青短祭り", category = "sai", price = 6, effect = "sai_aotan",
+			descJP = "青短役に祭事レベル+1（採点時に倍率+1.5/Lv、点+5/Lv）。",
+			descEN = "Festival: Blue Ribbons +1 level (+1.5x and +5pt per Lv).",
+		},
+		-- ★ 追加：猪鹿蝶祭
+		{
+			id = "sai_inoshika", name = "猪鹿蝶祭り", category = "sai", price = 7, effect = "sai_inoshika",
+			descJP = "猪鹿蝶役に祭事レベル+1（採点時に倍率+2/Lv、点+15/Lv）。",
+			descEN = "Festival: Boar–Deer–Butterfly +1 level (+2x and +15pt per Lv).",
+		},
+		-- ★ 追加：花見祭
+		{
+			id = "sai_hanami", name = "花見祭り", category = "sai", price = 7, effect = "sai_hanami",
+			descJP = "「花見で一杯」に祭事レベル+1（採点時に倍率+2/Lv、点+15/Lv）。",
+			descEN = "Festival: Hanami Sake +1 level (+2x and +15pt per Lv).",
+		},
+		-- ★ 追加：月見祭
+		{
+			id = "sai_tsukimi", name = "月見祭り", category = "sai", price = 7, effect = "sai_tsukimi",
+			descJP = "「月見で一杯」に祭事レベル+1（採点時に倍率+2/Lv、点+15/Lv）。",
+			descEN = "Festival: Tsukimi Sake +1 level (+2x and +15pt per Lv).",
+		},
+		-- ★ 追加：三光祭（雨四光も同じ係数で扱う前提）
+		{
+			id = "sai_sankou", name = "三光祭り", category = "sai", price = 8, effect = "sai_sankou",
+			descJP = "三光／雨四光に祭事レベル+1（採点時に倍率+2/Lv、点+20/Lv）。",
+			descEN = "Festival: Three Brights / Rain Four +1 level (+2x and +20pt per Lv).",
+		},
+		-- ★ 追加：四光祭
+		{
+			id = "sai_shikou", name = "四光祭り", category = "sai", price = 9, effect = "sai_shikou",
+			descJP = "四光に祭事レベル+1（採点時に倍率+2/Lv、点+20/Lv）。",
+			descEN = "Festival: Four Brights +1 level (+2x and +20pt per Lv).",
+		},
+		-- ★ 追加：五光祭
+		{
+			id = "sai_gokou", name = "五光祭り", category = "sai", price = 10, effect = "sai_gokou",
+			descJP = "五光に祭事レベル+1（採点時に倍率+3/Lv、点+30/Lv）。",
+			descEN = "Festival: Five Brights +1 level (+3x and +30pt per Lv).",
+		},
 	},
 
 	-- スペクタル（将来系）
