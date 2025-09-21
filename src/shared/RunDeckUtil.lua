@@ -3,11 +3,17 @@
 -- 変更:
 --  - getUnlockedTalismanSlots(state): state.run から安全に読取り、無ければ 0 を返す
 --  - ensureTalisman(state, opts): 護符テーブルの存在と最低限の形を保証（不足キーのみ補完）
+--  - ★ 追加（KITOプール基盤）:
+--      ensureUids(state) / getDeckVersion(state) / bumpDeckVersion(state)
+--      buildUidIndexMap(state) / applyDeckPatchByUid(state, patch)
+--      entryWithKindLike(srcEntry, targetKind)
 
--- v0.9.0 ラン構成ユーティリティ（唯一の正本：run.configSnapshot）
+-- v0.9.0+ ラン構成ユーティリティ（唯一の正本：run.configSnapshot）
 -- ここだけを読み書きする。季節ごとの山札は毎季これをクローンして生成。
 
-local RS         = game:GetService("ReplicatedStorage")
+local RS          = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+
 local SharedMods = RS:WaitForChild("SharedModules")
 local CardEngine = require(SharedMods:WaitForChild("CardEngine"))
 
@@ -186,6 +192,116 @@ function M.ensureTalisman(state, opts)
 	end
 
 	return b
+end
+
+--==================================================
+-- ★ KITOプール基盤：Deck Versioning / UID / 差分適用
+--==================================================
+
+-- Deck内の各エントリに uid を保証（存在時は上書きしない）
+function M.ensureUids(state:any)
+	if typeof(state) ~= "table" then return end
+	local deck = (state and state.deck) or {}
+	for i, e in ipairs(deck) do
+		if typeof(e) == "table" and e.uid == nil then
+			local gid = string.gsub(HttpService:GenerateGUID(false), "-", "")
+			e.uid = string.sub(gid, 1, 8) .. "_" .. tostring(i)
+		end
+	end
+end
+
+-- デッキ版数を取得（無ければ1から開始）。state.run.deckVersion を優先。
+function M.getDeckVersion(state:any): number
+	if typeof(state) ~= "table" then return 1 end
+	state.run = state.run or {}
+	local v = tonumber(state.run.deckVersion or state.deckVersion or 0) or 0
+	if v <= 0 then v = 1 end
+	state.run.deckVersion = v
+	return v
+end
+
+-- デッキ版数を+1して返す
+function M.bumpDeckVersion(state:any): number
+	local v = M.getDeckVersion(state) + 1
+	state.run = state.run or {}
+	state.run.deckVersion = v
+	return v
+end
+
+-- uid→index のマップを構築
+function M.buildUidIndexMap(state:any): {[string]:number}
+	local map = {}
+	local deck = (state and state.deck) or {}
+	for i, e in ipairs(deck) do
+		if typeof(e) == "table" and e.uid then
+			map[e.uid] = i
+		end
+	end
+	return map
+end
+
+-- uid 指定差分を適用
+-- patch = {
+--   replace = { [uid]=entryTable, ... }?,  -- entry.uid は無視され uid を再付与
+--   remove  = { [uid]=true, ... }?         -- 対象 uid のカードをデッキから削除
+-- }
+function M.applyDeckPatchByUid(state:any, patch:{replace:any?, remove:any?})
+	if typeof(state) ~= "table" then return false end
+	local deck = state.deck
+	if typeof(deck) ~= "table" then return false end
+
+	local map = M.buildUidIndexMap(state)
+
+	-- 置換系
+	if patch and typeof(patch.replace) == "table" then
+		for uid, entry in pairs(patch.replace) do
+			local idx = map[uid]
+			if idx then
+				local copy = table.clone(entry)
+				copy.uid = uid
+				deck[idx] = copy
+			end
+		end
+	end
+
+	-- 削除系（降順で消す）
+	if patch and typeof(patch.remove) == "table" then
+		local rm = {}
+		for uid, flag in pairs(patch.remove) do
+			if flag and map[uid] then table.insert(rm, map[uid]) end
+		end
+		table.sort(rm, function(a,b) return a>b end)
+		for _, idx in ipairs(rm) do
+			table.remove(deck, idx)
+		end
+	end
+
+	M.bumpDeckVersion(state)
+	return true
+end
+
+-- 同月で kind が近い（=指定kind）の定義エントリに安全変換
+-- src: 現在のデッキエントリ {month, idx, kind, ...}
+-- 戻り値: 変換後の「定義に基づく」エントリ（uidは含まない）
+function M.entryWithKindLike(src:any, targetKind:string)
+	if typeof(src) ~= "table" then return nil end
+	local m = tonumber(src.month or 0) or 0
+	if m <= 0 then return nil end
+	local defs = CardEngine.cardsByMonth[m]
+	if typeof(defs) ~= "table" then return nil end
+	for i, def in ipairs(defs) do
+		if def and tostring(def.kind) == tostring(targetKind) then
+			return {
+				month = m,
+				idx   = i,
+				kind  = def.kind,
+				name  = def.name,
+				tags  = def.tags and table.clone(def.tags) or nil,
+				code  = CardEngine.toCode(m, i),
+			}
+		end
+	end
+	return nil
 end
 
 return M

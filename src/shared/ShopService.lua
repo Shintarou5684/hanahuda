@@ -23,10 +23,17 @@ local ShopOpen   = Remotes:WaitForChild("ShopOpen")
 local BuyItem    = Remotes:WaitForChild("BuyItem")
 local ShopReroll = Remotes:WaitForChild("ShopReroll")
 
+-- ★ UI分岐用の Balance と、候補通知 Remote（RemotesInit で生成済みを待つ）
+local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+local EvKitoStart = Remotes:WaitForChild("KitoPickStart")
+
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
 local RunDeckUtil   = require(SharedModules:WaitForChild("RunDeckUtil"))
 local CardEngine    = require(SharedModules:WaitForChild("CardEngine"))
+
+-- ★ 候補生成/送信の一元管理（セッション保持含む）
+local KitoPickCore  = require(SSS:WaitForChild("KitoPickCore"))
 
 -- ★ 護符の正本はサーバ一元管理（不足キー補完のみ）
 local TaliService   = require(SSS:WaitForChild("TalismanService"))
@@ -309,6 +316,25 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			found.name or found.id, tostring(found.category), price, tonumber(s.mon or 0),
 			tostring(found.effect or found.id)
 		)
+
+		-- ★ UI 分岐：フラグONかつ酉は「効果適用せず、候補提示（Coreへ移譲）」に切替
+		if Balance.KITO_UI_ENABLED == true and (found.effect == "kito_tori" or found.id == "kito_tori") then
+			-- 在庫を減らして保存（購入は完了）
+			if s.shop and s.shop.stock and foundIndex then
+				table.remove(s.shop.stock, foundIndex)
+			end
+			if Service._pushState then Service._pushState(plr) end
+			snapShop(plr, s)
+
+			-- ★ 移譲：セッション作成・保持・FireClient を KitoPickCore に任せる
+			local started = KitoPickCore.startFor(plr, s, "kito_tori", "bright")
+			local uiMsg = started and "酉：対象を選んでください（候補を表示中…）" or "酉：選択候補が用意できませんでした"
+
+			LOG.info("[BUY][RES] ok=true msg=%s matsuri(after)=%s", uiMsg, matsuriJSON(s))
+			openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, uiMsg) })
+			return
+		end
+		-- ★ 分岐ここまで（UI OFF なら従来どおり効果適用へ）
 
 		local effOk, effMsg = true, ""
 		if ShopEffects then

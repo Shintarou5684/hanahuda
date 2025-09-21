@@ -22,7 +22,14 @@ local function ensureRE(parent, name)
 end
 
 local remotes = ensureFolder(RS, "Remotes")
+
+-- 既存
 ensureRE(remotes, "PlaceOnSlot")     -- C→S
 ensureRE(remotes, "TalismanPlaced")  -- S→C (ACK)
+
+-- ★ KITO ピック用（起動時に必ず用意）
+ensureRE(remotes, "KitoPickStart")   -- S→C: 候補提示
+ensureRE(remotes, "KitoPickDecide")  -- C→S: 決定（uid を返す）
+ensureRE(remotes, "KitoPickResult")  -- S→C: 結果トースト等
 
 print("[RemotesInit] Remotes ready →", remotes:GetFullName())

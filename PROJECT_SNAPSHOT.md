@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-20 19:49:57
+- Generated: 2025-09-21 10:54:09
 - Max lines/file: 300
 
 ## Folder Tree
@@ -80,8 +80,8 @@ hanahuda
 │   │   └── ui
 │   │       ├── components
 │   │       │   ├── controllers
+│   │       │   │   ├── KitoPickWires.client.lua
 │   │       │   │   └── ShopWires.lua
-│   │       │   ├── i18n
 │   │       │   ├── renderers
 │   │       │   │   ├── FieldRenderer.lua
 │   │       │   │   ├── HandRenderer.lua
@@ -112,6 +112,7 @@ hanahuda
 │   │       ├── ClientMain.client.lua
 │   │       └── ScreenRouter.lua
 │   ├── config
+│   │   ├── Balance.lua
 │   │   ├── DisplayMode.lua
 │   │   ├── Locale.lua
 │   │   ├── PatchNotes.lua
@@ -125,6 +126,8 @@ hanahuda
 │   │   │   ├── Sai.lua
 │   │   │   └── Spectral.lua
 │   │   ├── GameInit.server.lua
+│   │   ├── KitoPickCore.lua
+│   │   ├── KitoPickServer.lua
 │   │   ├── NavServer.lua
 │   │   ├── RemotesInit.server.lua
 │   │   ├── SaveService.lua
@@ -153,11 +156,13 @@ hanahuda
 │       │   └── index.lua
 │       ├── CardEngine.lua
 │       ├── CardImageMap.lua
+│       ├── DeckSampler.lua
 │       ├── LocaleUtil.lua
 │       ├── Logger.lua
 │       ├── Modifiers.lua
 │       ├── NavClient.lua
 │       ├── PickService.lua
+│       ├── PoolEditor.lua
 │       ├── RerollService.lua
 │       ├── RoundService.lua
 │       ├── RunDeckUtil.lua
@@ -187,6 +192,42 @@ hanahuda
 ---
 
 ## 更新記録 / Change Log
+
+v0.9.6.3 — 2025-09-21
+
+護符のロード/配置まわりを修正：TalismanService を ServerScript → ModuleScript 化し、require(SSS:WaitForChild("TalismanService")) が通る構成に統一。PlaceOnSlot はここだけが正本、ACK で unlocked/slots を都度返却 — (Refactored TalismanService to ModuleScript; single source of truth; reliable ACK payload).
+
+Shop→Client の護符同期：ShopService.open の ShopOpen ペイロードに state.run.talisman をそのまま同梱（補完なし）。クライアントは state.run.talisman を参照して自動配置/空スロ判定 — (Ship raw talisman board in ShopOpen; no shaping).
+
+自動配置のブロック原因を解消：unlocked=2 でも空スロが埋まって判定落ちするケースを、サーバ側の「スロ埋まり時 no-op→ACK 最新断面」で復帰できるよう整備 — (No-op overwrites now return fresh board snapshot).
+
+ログを強化：placed / rejected / noop / ensureFor を Logger.scope("TalismanService") で要点出力。ショップ入店・購入・リロールにも talisman# を併記 — (Sharper logs around placement and shop lifecycle).
+
+言語コードの正規化：外部I/Fは ja/en に統一。jp を受け取った場合は警告ログのうえ ja へ正規化 — (Normalize jp → ja).
+
+左上情報パネルの英語対応（部分）：役名の整形を FormatUtil.rolesToLines で i18n 化（en/ja 字句を辞書化、未定義は英語フォールバック）。パネルのベース行は暫定で日本語固定のまま（TODO）— (Role labels localized; base state line remains JP for now).
+
+祭事を拡充：定義テーブルに以下を追加し、採点に反映
+
+新規：タネ祭 / 赤短祭 / 青短祭 / 猪鹿蝶祭 / 花見祭 / 月見祭 / 三光祭 / 四光祭 / 五光祭
+
+既存：カス祭 / 短冊祭
+
+役→祭事マッピングを刷新（雨四光は三光系に合流、四光/五光を個別に紐付け）— (Added full festival set; updated role↔festival maps).
+
+係数の扱いを明文化：現行 P3 は「倍率×」ではなく 加点+ として解釈（mon += lv * coeff[1], pts += lv * coeff[2]）。将来「本当の倍率」を導入する場合は P3 を別フェーズ/後段で乗算に — (Documented additive interpretation; prepared path for true multipliers).
+
+Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格・説明テキスト含む）。ShopEffects.Sai はレベルを +1 する汎用ロジックを維持し、数値効果はスコアリング側（P3）で集約 — (Sai effects remain level-only; scoring owns numbers).
+
+スペクタル維持：spectral_blackhole（全祭事+1）を現仕様に追随（レベル加算→P3で加点）— (Spectral stays compatible).
+
+影響範囲
+
+サーバ：ServerScriptService/TalismanService（ModuleScript化）、ShopService、ShopEffects/init.lua (+Sai)
+
+共有：SharedModules/score/constants.lua（祭事係数・対応表）、score/phases/P3_matsuri_kito.lua（加点適用）
+
+クライアント：StarterPlayerScripts/UI/lib/FormatUtil.lua（役名 i18n）
 
 ### v0.9.5 — 2025-09-17
 - **Fix-All P0 完了**：P0-1〜P0-12 を一括修正 — (Completed all P0 blockers).
@@ -753,7 +794,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-20 19:49:57
+- Generated: 2025-09-21 10:54:09
 - Max lines/file: 300
 
 ## Folder Tree
@@ -832,8 +873,8 @@ hanahuda
 │   │   └── ui
 │   │       ├── components
 │   │       │   ├── controllers
+│   │       │   │   ├── KitoPickWires.client.lua
 │   │       │   │   └── ShopWires.lua
-│   │       │   ├── i18n
 │   │       │   ├── renderers
 │   │       │   │   ├── FieldRenderer.lua
 │   │       │   │   ├── HandRenderer.lua
@@ -864,6 +905,7 @@ hanahuda
 │   │       ├── ClientMain.client.lua
 │   │       └── ScreenRouter.lua
 │   ├── config
+│   │   ├── Balance.lua
 │   │   ├── DisplayMode.lua
 │   │   ├── Locale.lua
 │   │   ├── PatchNotes.lua
@@ -877,6 +919,8 @@ hanahuda
 │   │   │   ├── Sai.lua
 │   │   │   └── Spectral.lua
 │   │   ├── GameInit.server.lua
+│   │   ├── KitoPickCore.lua
+│   │   ├── KitoPickServer.lua
 │   │   ├── NavServer.lua
 │   │   ├── RemotesInit.server.lua
 │   │   ├── SaveService.lua
@@ -905,11 +949,13 @@ hanahuda
 │       │   └── index.lua
 │       ├── CardEngine.lua
 │       ├── CardImageMap.lua
+│       ├── DeckSampler.lua
 │       ├── LocaleUtil.lua
 │       ├── Logger.lua
 │       ├── Modifiers.lua
 │       ├── NavClient.lua
 │       ├── PickService.lua
+│       ├── PoolEditor.lua
 │       ├── RerollService.lua
 │       ├── RoundService.lua
 │       ├── RunDeckUtil.lua
@@ -939,6 +985,42 @@ hanahuda
 ---
 
 ## 更新記録 / Change Log
+
+v0.9.6.3 — 2025-09-21
+
+護符のロード/配置まわりを修正：TalismanService を ServerScript → ModuleScript 化し、require(SSS:WaitForChild("TalismanService")) が通る構成に統一。PlaceOnSlot はここだけが正本、ACK で unlocked/slots を都度返却 — (Refactored TalismanService to ModuleScript; single source of truth; reliable ACK payload).
+
+Shop→Client の護符同期：ShopService.open の ShopOpen ペイロードに state.run.talisman をそのまま同梱（補完なし）。クライアントは state.run.talisman を参照して自動配置/空スロ判定 — (Ship raw talisman board in ShopOpen; no shaping).
+
+自動配置のブロック原因を解消：unlocked=2 でも空スロが埋まって判定落ちするケースを、サーバ側の「スロ埋まり時 no-op→ACK 最新断面」で復帰できるよう整備 — (No-op overwrites now return fresh board snapshot).
+
+ログを強化：placed / rejected / noop / ensureFor を Logger.scope("TalismanService") で要点出力。ショップ入店・購入・リロールにも talisman# を併記 — (Sharper logs around placement and shop lifecycle).
+
+言語コードの正規化：外部I/Fは ja/en に統一。jp を受け取った場合は警告ログのうえ ja へ正規化 — (Normalize jp → ja).
+
+左上情報パネルの英語対応（部分）：役名の整形を FormatUtil.rolesToLines で i18n 化（en/ja 字句を辞書化、未定義は英語フォールバック）。パネルのベース行は暫定で日本語固定のまま（TODO）— (Role labels localized; base state line remains JP for now).
+
+祭事を拡充：定義テーブルに以下を追加し、採点に反映
+
+新規：タネ祭 / 赤短祭 / 青短祭 / 猪鹿蝶祭 / 花見祭 / 月見祭 / 三光祭 / 四光祭 / 五光祭
+
+既存：カス祭 / 短冊祭
+
+役→祭事マッピングを刷新（雨四光は三光系に合流、四光/五光を個別に紐付け）— (Added full festival set; updated role↔festival maps).
+
+係数の扱いを明文化：現行 P3 は「倍率×」ではなく 加点+ として解釈（mon += lv * coeff[1], pts += lv * coeff[2]）。将来「本当の倍率」を導入する場合は P3 を別フェーズ/後段で乗算に — (Documented additive interpretation; prepared path for true multipliers).
+
+Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格・説明テキスト含む）。ShopEffects.Sai はレベルを +1 する汎用ロジックを維持し、数値効果はスコアリング側（P3）で集約 — (Sai effects remain level-only; scoring owns numbers).
+
+スペクタル維持：spectral_blackhole（全祭事+1）を現仕様に追随（レベル加算→P3で加点）— (Spectral stays compatible).
+
+影響範囲
+
+サーバ：ServerScriptService/TalismanService（ModuleScript化）、ShopService、ShopEffects/init.lua (+Sai)
+
+共有：SharedModules/score/constants.lua（祭事係数・対応表）、score/phases/P3_matsuri_kito.lua（加点適用）
+
+クライアント：StarterPlayerScripts/UI/lib/FormatUtil.lua（役名 i18n）
 
 ### v0.9.5 — 2025-09-17
 - **Fix-All P0 完了**：P0-1〜P0-12 を一括修正 — (Completed all P0 blockers).
@@ -1009,47 +1091,6 @@ hanahuda
 -- ログ:
 --  - 初期化時: [ShopI18n] adapter active
 --  - マッピング使用時: [ShopI18n] map old_key -> SHOP_UI_*
---  - フォールバック時: [ShopI18n] fallback legacy for key=...
-
-local RS = game:GetService("ReplicatedStorage")
-
--- Locale / Logger
-local Config        = RS:WaitForChild("Config")
-local Locale        = require(Config:WaitForChild("Locale"))
-local SharedModules = RS:WaitForChild("SharedModules")
-local Logger        = require(SharedModules:WaitForChild("Logger"))
-local LOG           = Logger.scope("ShopI18n")
-
-local M = {}
-
---========================
--- 旧→新キー マッピング
---========================
-local MAP_OLD_TO_NEW = {
-  title_mvp            = "SHOP_UI_TITLE",
-  deck_btn_show        = "SHOP_UI_VIEW_DECK",
-  deck_btn_hide        = "SHOP_UI_HIDE_DECK",
-  reroll_btn_fmt       = "SHOP_UI_REROLL_FMT",
-  info_title           = "SHOP_UI_INFO_TITLE",
-  info_placeholder     = "SHOP_UI_INFO_PLACEHOLDER",
-  deck_title_fmt       = "SHOP_UI_DECK_TITLE_FMT",
-  deck_empty           = "SHOP_UI_DECK_EMPTY",
-  summary_cleared_fmt  = "SHOP_UI_SUMMARY_CLEARED_FMT",
-  summary_items_fmt    = "SHOP_UI_SUMMARY_ITEMS_FMT",
-  summary_money_fmt    = "SHOP_UI_SUMMARY_MONEY_FMT",
-  close_btn            = "SHOP_UI_CLOSE_BTN",
-  toast_closed         = "SHOP_UI_TOAST_CLOSED",     -- （Locale未定義なら下のレガシーにフォールバック）
-  label_category       = "SHOP_UI_LABEL_CATEGORY",
-  label_price          = "SHOP_UI_LABEL_PRICE",
-  no_desc              = "SHOP_UI_NO_DESC",
-  insufficient_suffix  = "SHOP_UI_INSUFFICIENT_SUFFIX",
-}
-
---========================
--- レガシー辞書（フォールバック用）
---========================
-local en_legacy = {
-  title_mvp           = "Shop (MVP)",
 ... (truncated)
 ```
 
@@ -1888,6 +1929,115 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	return btn
 end
 ... (truncated)
+```
+
+### src/client/ui/components/controllers/KitoPickWires.client.lua
+```lua
+-- src/client/ui/components/controllers/KitoPickWires.client.lua
+-- 目的: KitoPick の最小配線（UIは仮。まずは自動決定で往復確認）
+-- メモ:
+--  - Balance.KITO_UI_ENABLED が true のときのみ動作
+--  - Balance.KITO_UI_AUTO_DECIDE が true（既定）なら自動で1枚選択して送信
+--  - 将来本UIが入ったら KITO_UI_AUTO_DECIDE=false にすれば自動選択は止まる
+
+local RS = game:GetService("ReplicatedStorage")
+
+-- 依存
+local Config        = RS:WaitForChild("Config")
+local Balance       = require(Config:WaitForChild("Balance"))
+
+local Remotes       = RS:WaitForChild("Remotes")
+local EvStart       = Remotes:WaitForChild("KitoPickStart")
+local EvDecide      = Remotes:WaitForChild("KitoPickDecide")
+local EvResult      = Remotes:WaitForChild("KitoPickResult")
+
+local Logger        = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG           = Logger.scope("KitoPickClient")
+
+-- ─────────────────────────────────────────────────────────────
+-- 重複接続ガード（Play Solo 再起動や二重require対策）
+-- ─────────────────────────────────────────────────────────────
+if script:GetAttribute("wired") then
+	-- 既に接続済み
+	return
+end
+script:SetAttribute("wired", true)
+
+-- ─────────────────────────────────────────────────────────────
+-- 設定
+-- ─────────────────────────────────────────────────────────────
+local AUTO_DECIDE = (Balance.KITO_UI_AUTO_DECIDE ~= false)  -- 既定: true
+local ENABLED     = (Balance.KITO_UI_ENABLED == true)
+
+-- ─────────────────────────────────────────────────────────────
+-- ユーティリティ
+-- ─────────────────────────────────────────────────────────────
+local function briefList(list)
+	local n = type(list) == "table" and #list or 0
+	return tostring(n)
+end
+
+-- 「最初の非 targetKind」を優先、全て targetKind なら先頭
+local function chooseUid(payload)
+	if type(payload) ~= "table" or type(payload.list) ~= "table" or #payload.list == 0 then
+		return nil
+	end
+	local tk = tostring(payload.targetKind or "bright")
+	for _, ent in ipairs(payload.list) do
+		if ent and ent.kind ~= tk then
+			return ent.uid
+		end
+	end
+	return payload.list[1].uid
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- 受信: 候補提示
+-- ─────────────────────────────────────────────────────────────
+EvStart.OnClientEvent:Connect(function(payload)
+	if not ENABLED then
+		LOG.debug("[KitoPickStart] UI disabled; ignoring")
+		return
+	end
+
+	local ok = type(payload) == "table" and type(payload.list) == "table"
+	LOG.info("[KitoPickStart] ok=%s size=%s target=%s session=%s",
+		tostring(ok), ok and briefList(payload.list) or "?",
+		tostring(payload and payload.targetKind),
+		tostring(payload and payload.sessionId)
+	)
+
+	if not ok or #payload.list == 0 then return end
+
+	-- 本番UIが入るまでは自動決定で確定まで通す
+	if not AUTO_DECIDE then
+		-- ここでUIへ payload を流す（後付け）
+		return
+	end
+
+	local pickUid = chooseUid(payload)
+	if not pickUid then
+		LOG.warn("[KitoPickDecide] no candidate uid")
+		return
+	end
+
+	EvDecide:FireServer({
+		sessionId  = payload.sessionId,
+		uid        = pickUid,
+		targetKind = payload.targetKind or "bright",
+	})
+	LOG.info("[KitoPickDecide] sent uid=%s (auto)", tostring(pickUid))
+end)
+
+-- ─────────────────────────────────────────────────────────────
+-- 受信: 結果
+-- ─────────────────────────────────────────────────────────────
+EvResult.OnClientEvent:Connect(function(res)
+	if type(res) ~= "table" then return end
+	LOG.info("[KitoPickResult] ok=%s msg=%s target=%s",
+		tostring(res.ok), tostring(res.message), tostring(res.targetKind))
+	-- TODO: 後付けのトースト/モーダルへ通知
+end)
 ```
 
 ### src/client/ui/components/controllers/ShopWires.lua
@@ -4474,7 +4624,15 @@ local Locale = require(RS:WaitForChild("Config"):WaitForChild("Locale"))
 
 local M = {}
 
--- 役名のローカライズ辞書
+-- 言語コードの正規化
+local function normLang(lang: string?)
+	local v = tostring(lang or ""):lower()
+	if v == "jp" then v = "ja" end
+	if v ~= "ja" and v ~= "en" then v = "en" end
+	return v
+end
+
+-- 役名のローカライズ辞書（"ja" を正規キーに）
 local ROLE_NAMES = {
   en = {
     five_bright      = "Five Brights",
@@ -4490,7 +4648,7 @@ local ROLE_NAMES = {
     hanami           = "Hanami Sake",
     tsukimi          = "Tsukimi Sake",
   },
-  jp = {
+  ja = {
     five_bright      = "五光",
     four_bright      = "四光",
     rain_four_bright = "雨四光",
@@ -4509,7 +4667,7 @@ local ROLE_NAMES = {
 -- 役集合を「a / b / c」形式の文字列に
 -- roles: { [role_key]=true or number } / array でもOK（キーを拾う）
 function M.rolesToLines(roles, langOpt)
-  local lang = langOpt or (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+  local lang = normLang(langOpt or (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en")
   local names = ROLE_NAMES[lang] or ROLE_NAMES.en
 
   if typeof(roles) ~= "table" then
@@ -4520,8 +4678,10 @@ function M.rolesToLines(roles, langOpt)
   local list = {}
 
   -- roles が map でも配列でも対応
-  for k,v in pairs(roles) do
-    local key = (typeof(k)=="string") and k or (typeof(v)=="string" and v) or nil
+  for k, v in pairs(roles) do
+    local key = (typeof(k) == "string") and k
+             or (typeof(v) == "string") and v
+             or nil
     if key then
       local disp = names[key] or key
       table.insert(list, disp)
@@ -4533,25 +4693,50 @@ function M.rolesToLines(roles, langOpt)
     return Locale.t(lang, "ROLES_NONE")
   end
 
-  table.sort(list, function(a,b) return tostring(a) < tostring(b) end)
+  table.sort(list, function(a, b) return tostring(a) < tostring(b) end)
   return table.concat(list, " / ")
 end
 
--- 既存の日本語固定行はそのまま（範囲外）。必要になったらi18n化する。
-function M.stateLineText(st)
-  local ytxt = (st and st.year and tonumber(st.year) and st.year > 0) and tostring(st.year) or "----"
-  local seasonTxt = (st and (st.seasonStr or (st.season and ("季節"..tostring(st.season))))) or "季節--"
-  local target = (st and st.target) or 0
-  local sum    = (st and st.sum)    or 0
-  local hands  = (st and st.hands)  or 0
-  local reroll = (st and st.rerolls) or 0
-  local mult   = (st and st.mult)   or 1
-  local bank   = (st and st.bank)   or 0
-  local dleft  = (st and st.deckLeft) or 0
-  local hleft  = (st and st.handLeft) or 0
+-- 状態行（英/日対応）
+-- 呼び出し側から lang を渡す想定（nilなら "en"）
+function M.stateLineText(st, langOpt)
+  local lang = normLang(langOpt or (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en")
 
-  return ("年:%s  季節:%s  目標:%d  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d")
-    :format(ytxt, seasonTxt, target, sum, hands, reroll, mult, bank, dleft, hleft)
+  -- できるだけ多くのキーに対応（サーバ実装差異の吸収）
+  local y   = tonumber(st and (st.year or st.y)) or 0
+  local s   = tonumber(st and (st.season or st.s)) or 0
+  local goal= st and (st.goal or st.target)
+  local sum = tonumber(st and (st.sum or st.seasonSum)) or 0
+  local handsLeft   = tonumber(st and (st.hands or st.handLeft or st.handsLeft or st.handRemain)) or 0
+  local rerollsLeft = tonumber(st and (st.rerolls or st.rerollRemain or st.rerollsLeft)) or 0
+  local mult = tonumber(st and (st.mult or st.multiplier)) or 1
+  local bank = tonumber(st and (st.bank)) or 0
+  local deckLeft = tonumber(st and (st.deckLeft or st.deck or st.deckCount)) or 0
+  local handCount= tonumber(st and (st.hand or st.handCount)) or 0
+
+  local yearTxt = (y > 0) and tostring(y) or ((lang=="ja") and "----" or "----")
+
+  -- season は文字列優先（例: "春/夏/秋/冬" をサーバが渡すケース）
+  local seasonStr = nil
+  if st and typeof(st.seasonStr) == "string" then seasonStr = st.seasonStr end
+  if not seasonStr or seasonStr == "" then
+    local seasJa = {"春","夏","秋","冬"}
+    local seasEn = {"Spring","Summer","Autumn","Winter"}
+    local tbl = (lang=="ja") and seasJa or seasEn
+    seasonStr = (s>=1 and s<=#tbl) and tbl[s] or ((lang=="ja") and ("季節"..tostring(s)) or ("S"..tostring(s)))
+  end
+
+  if lang == "ja" then
+    return string.format(
+      "年:%s  季節:%s  目標:%s  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d",
+      yearTxt, seasonStr, tostring(goal or "—"), sum, handsLeft, rerollsLeft, mult, bank, deckLeft, handCount
+    )
+  else
+    return string.format(
+      "Year:%s  Season:%s  Goal:%s  Total:%d  Hand left:%d  Rerolls:%d  Mult:%.1fx  Bank:%d  Deck:%d  Hand:%d",
+      yearTxt, seasonStr, tostring(goal or "—"), sum, handsLeft, rerollsLeft, mult, bank, deckLeft, handCount
+    )
+  end
 end
 
 return M
@@ -5815,7 +6000,7 @@ function Run.new(deps)
 
 	-- 状態更新
 	local function onState(st)
-		self.info.Text = Format.stateLineText(st) or ""
+		self.info.Text = Format.stateLineText(st, self._lang) or ""
 
 		if self.goalText then
 			local g = (typeof(st) == "table") and tonumber(st.goal) or nil
@@ -6549,6 +6734,37 @@ function Shrine:hide() self.gui.Enabled = false end
 return Shrine
 ```
 
+### src/config/Balance.lua
+```lua
+-- ReplicatedStorage/Config/Balance.lua
+-- 祈祷（KITO）関連の調整用ノブ集
+-- UIは後付け可能なようにフラグで切替え
+
+local Balance = {}
+
+-- ▼ プールの基本設定
+Balance.KITO_POOL_SIZE      = 12  -- サンプル提示枚数（UIなし時も内部で使用）
+Balance.KITO_POOL_TTL_SEC   = 45  -- セッション有効秒数（開始→決定の猶予）
+
+-- ▼ UI導入のトグル
+--   false: サーバ自動選択（旧挙動／内部で即確定）
+--   true : UIでプレイヤーが選択（Shop購入後に候補を提示）
+Balance.KITO_UI_ENABLED     = true
+
+-- ▼ UIが未実装の間だけ使う自動決定フラグ（KitoPickWires で参照）
+--   true : 候補受信後にクライアントが自動で1枚決定→Decide送信
+--   false: 自動決定をしない（本UIでの手動選択を想定）
+Balance.KITO_UI_AUTO_DECIDE = true
+
+-- ▼ 自動選択モード時の選択枚数（酉：1枚変換などは通常1）
+Balance.KITO_AUTO_PICK_COUNT = 1
+
+-- ▼ UI時に提示する枚数（未指定なら KITO_POOL_SIZE を使用）
+Balance.KITO_UI_PICK_COUNT   = Balance.KITO_POOL_SIZE
+
+return Balance
+```
+
 ### src/config/DisplayMode.lua
 ```lua
 -- src/config/DisplayMode.lua
@@ -6905,6 +7121,22 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+	-- ★ 0.9.6.3（外部向け・簡潔）
+	{
+		ver  = "v0.9.6.3",
+		date = "2025-09-21",
+		changes = {
+			{ ja = "護符の自動配置と表示同期を改善。購入後すぐに反映され、状況がより分かりやすくなりました。",
+			  en = "Improved Talisman auto-placement and sync. Purchases now reflect instantly with clearer feedback." },
+			{ ja = "言語設定を調整（ja/en に統一）。英語モード時、情報パネルなどの表記が正しく英語で表示されます。",
+			  en = "Language handling refined (standardized to ja/en). Info panels now correctly show English when selected." },
+			{ ja = "祭事を拡充：カス／短冊に加え、タネ・赤短・青短・猪鹿蝶・花見・月見・三光・四光・五光を追加。採点時に効果が加算されます。",
+			  en = "Expanded Festivals: added Seed, Akatan, Aotan, Inoshikacho, Hanami, Tsukimi, Sanko, Yonkou, and Gokou (scores gain additional bonuses during tally)." },
+			{ ja = "屋台の表示更新を微調整し、購入・リロール後の見た目の安定性を向上。",
+			  en = "Minor Shop polish for more stable visuals after purchase and reroll." },
+		}
+	},
+
 	-- ★ 0.9.6 を外部向けトーンで追加（0.9.5 以前は変更なし）
 	{
 		ver  = "v0.9.6.1",
@@ -7540,6 +7772,249 @@ local function startNewRun(plr)
 ... (truncated)
 ```
 
+### src/server/KitoPickCore.lua
+```lua
+-- ServerScriptService/KitoPickCore.lua
+-- 目的: KITO ピックのセッション生成/保持/失効と候補送信の中核
+local RS   = game:GetService("ReplicatedStorage")
+local SSS  = game:GetService("ServerScriptService")
+
+local Balance    = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+local PoolEditor = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
+local Logger     = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG        = Logger.scope("KitoPickCore")
+
+local Remotes   = RS:WaitForChild("Remotes")
+local EvStart   = Remotes:WaitForChild("KitoPickStart") -- RemoteEvent
+
+local Core = {}
+
+-- ユーザー別セッション保持
+local sessions: {[number]: any} = {}
+
+-- 送信用サマリ
+local function summarize(e)
+	if type(e) ~= "table" then return nil end
+	return { uid=e.uid, code=e.code, name=e.name, kind=e.kind, month=e.month }
+end
+
+-- 便宜: 先頭N件のUIDを "uid1,uid2,..." で返す
+local function headUidList(uids: {string}?, n: number)
+	local out = {}
+	if type(uids) == "table" then
+		for i = 1, math.min(#uids, n) do
+			out[#out+1] = tostring(uids[i])
+		end
+	end
+	return table.concat(out, ",")
+end
+
+-- 公開: 現在のセッション（あれば）を見る
+function Core.peek(userId: number)
+	local s = sessions[userId]
+	LOG.debug("[Peek] userId=%s has=%s sess=%s ver=%s",
+		tostring(userId),
+		tostring(s ~= nil),
+		s and tostring(s.id) or "-",
+		s and tostring(s.version) or "-")
+	return s
+end
+
+-- 公開: セッションを消費（取得して同時に削除）
+function Core.consume(userId: number)
+	local s = sessions[userId]
+	if s then
+		LOG.debug("[Consume] userId=%s take sess=%s ver=%s (expiresAt=%s)",
+			tostring(userId), tostring(s.id), tostring(s.version), tostring(s.expiresAt))
+	else
+		LOG.debug("[Consume] userId=%s no-session", tostring(userId))
+	end
+	sessions[userId] = nil
+	return s
+end
+
+-- 内部: セッションを保存（上書き）
+local function put(userId: number, sess: any)
+	local existed = sessions[userId] ~= nil
+	sessions[userId] = sess
+	LOG.debug("[Put] userId=%s replace=%s sess=%s ver=%s uids#=%s",
+		tostring(userId), tostring(existed),
+		tostring(sess and sess.id), tostring(sess and sess.version),
+		tostring(sess and sess.uids and #sess.uids or 0))
+end
+
+-- 公開: 候補提示セッションを開始してクライアントへ送信
+-- effectId: "kito_tori" / targetKind: "bright"
+function Core.startFor(player: Player, state: any, effectId: string, targetKind: string)
+	if Balance.KITO_UI_ENABLED ~= true then
+		LOG.debug("[StartFor] UI disabled; ignored | u=%s", player and player.Name or "?")
+		return false
+	end
+	if tostring(effectId) ~= "kito_tori" then
+		LOG.debug("[StartFor] unsupported effect=%s | u=%s", tostring(effectId), player and player.Name or "?")
+		return false
+	end
+	if type(state) ~= "table" or type(state.deck) ~= "table" or #state.deck == 0 then
+		LOG.debug("[StartFor] no live deck; u=%s", player and player.Name or "?")
+		return false
+	end
+
+	local k = Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12
+	local sess = PoolEditor.start(state, k)
+	if not (sess and type(sess.uids) == "table" and #sess.uids > 0) then
+		LOG.info("[StartFor] no candidates; aborted | u=%s", player and player.Name or "?")
+		return false
+	end
+
+	-- セーブ（上書き）
+	put(player.UserId, sess)
+
+	-- 要約を作成
+	local list = {}
+	local sameKind, otherKind = 0, 0
+	local tgtKind = targetKind or "bright"
+	for _, uid in ipairs(sess.uids) do
+		local e = sess.snap[uid]
+		if e then
+			if e.kind == tgtKind then sameKind += 1 else otherKind += 1 end
+			local sum = summarize(e)
+			if sum then table.insert(list, sum) end
+		end
+	end
+
+	-- 送信
+	local payload = {
+		sessionId  = sess.id,
+		version    = sess.version,
+		expiresAt  = sess.expiresAt,
+		effectId   = effectId,
+		targetKind = tgtKind,
+		list       = list,
+	}
+	EvStart:FireClient(player, payload)
+
+	-- 詳細ログ
+	LOG.info(
+		"[StartFor] u=%s sess=%s size=%d tgt=%s sameKind=%d otherKind=%d head5=[%s]",
+		player and player.Name or "?",
+		tostring(sess.id),
+		#list,
+		tostring(tgtKind),
+		sameKind, otherKind,
+		headUidList(sess.uids, 5)
+	)
+
+	return true
+end
+
+return Core
+```
+
+### src/server/KitoPickServer.lua
+```lua
+-- ServerScriptService/KitoPickServer.lua
+-- 目的: KITOの「12枚提示→選択→確定」をサーバで管理（UIは後付け）
+local LOG = Logger.scope("KitoPickServer")
+LOG.info("ready (Decide handler wired)")
+
+local RS       = game:GetService("ReplicatedStorage")
+local SSS      = game:GetService("ServerScriptService")
+local Players  = game:GetService("Players")
+
+local Balance      = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+local RunDeckUtil  = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
+local PoolEditor   = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
+local CardEngine   = require(RS:WaitForChild("SharedModules"):WaitForChild("CardEngine"))
+local Logger       = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG          = Logger.scope("KitoPickServer")
+
+local Remotes   = RS:WaitForChild("Remotes")
+local EvStart   = Remotes:WaitForChild("KitoPickStart")    :: RemoteEvent
+local EvDecide  = Remotes:WaitForChild("KitoPickDecide")   :: RemoteEvent
+local EvResult  = Remotes:WaitForChild("KitoPickResult")   :: RemoteEvent
+
+-- Core（セッションの正本）
+local Core = require(SSS:WaitForChild("KitoPickCore"))
+
+-- Live state（あなたの StateHub API 名に合わせてOK）
+local StateHub = require(SSS:WaitForChild("StateHub"))
+local function getLiveState(player) return StateHub.get(player) end
+
+-- ------- 任意: C→S Start を受けた場合も Core に移譲して開始 -------
+EvStart.OnServerEvent:Connect(function(player, effectId, targetKind)
+	if Balance.KITO_UI_ENABLED ~= true then return end
+	local state = getLiveState(player)
+	LOG.info("[Start][REQ] u=%s eff=%s tgt=%s deck=%s",
+		player and player.Name or "?", tostring(effectId), tostring(targetKind),
+		(type(state)=="table" and type(state.deck)=="table") and #state.deck or "nil")
+	Core.startFor(player, state, tostring(effectId or "kito_tori"), tostring(targetKind or "bright"))
+end)
+
+-- ------- C→S: 決定（sessionId, uid, targetKind） -------
+EvDecide.OnServerEvent:Connect(function(player, payload)
+	if Balance.KITO_UI_ENABLED ~= true then return end
+	if type(payload) ~= "table" then return end
+
+	local wantId   = tostring(payload.sessionId or "")
+	local pickUid  = tostring(payload.uid or "")
+	local target   = tostring(payload.targetKind or "bright")
+	if wantId == "" or pickUid == "" then
+		LOG.warn("[Decide][BADPAYLOAD] u=%s sid=%s uid=%s", player and player.Name or "?", wantId, pickUid)
+		return
+	end
+
+	-- Core のセッションを参照（存在＆ID一致チェック）
+	local peek = Core.peek(player.UserId)
+	if not peek then
+		LOG.warn("[Decide][NOSESS] u=%s sid=%s (peek=nil)", player and player.Name or "?", wantId)
+		return
+	end
+	if peek.id ~= wantId then
+		LOG.warn("[Decide][SID-MISMATCH] u=%s want=%s have=%s", player and player.Name or "?", wantId, tostring(peek.id))
+		return
+	end
+
+	-- 以降は消費（取り出して削除）
+	local sess = Core.consume(player.UserId)
+	local state = getLiveState(player)
+	if type(state) ~= "table" or type(state.deck) ~= "table" then
+		LOG.warn("[Decide][NOSTATE] u=%s", player and player.Name or "?")
+		return
+	end
+
+	-- 変換
+	local okMut, mutInfo = PoolEditor.mutate(sess, { kind = "convertKind", targetKind = target, uids = { pickUid } })
+	if not okMut then
+		LOG.warn("[Decide][MUTATE-NG] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+	end
+	local okCommit, reason = PoolEditor.commit(state, sess)
+
+	local label = (sess.snap and sess.snap[pickUid] and (sess.snap[pickUid].name or sess.snap[pickUid].code)) or pickUid
+	local msg
+	if okCommit then
+		msg = ("酉：%s を %s に変換しました（確定）"):format(label, target)
+		LOG.info("[Decide][OK] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+	else
+		msg = ("酉：変換に失敗しました（%s）"):format(tostring(reason))
+		LOG.warn("[Decide][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
+			player and player.Name or "?", wantId, pickUid, target, tostring(reason))
+	end
+
+	-- クライアントへ結果
+	EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
+
+	-- 屋台再描画（notice に結果掲載）
+	local ShopService = require(SSS:WaitForChild("ShopService"))
+	ShopService.open(player, state, { notice = msg })
+end)
+
+-- ------- プレイヤー離脱で掃除（Core 側は startFor/consume 管理なので明示不要だが念のため） -------
+Players.PlayerRemoving:Connect(function(p)
+	Core.consume(p.UserId) -- 存在すれば破棄
+	LOG.debug("[Cleanup] user left; consumed any pending session for uid=%s", tostring(p.UserId))
+end)
+```
+
 ### src/server/NavServer.lua
 ```lua
 -- v0.9.7 P1-3 Nav 集約：DecideNext を唯一線に（保存廃止 / 次ステージロック可）
@@ -7768,8 +8243,15 @@ local function ensureRE(parent, name)
 end
 
 local remotes = ensureFolder(RS, "Remotes")
+
+-- 既存
 ensureRE(remotes, "PlaceOnSlot")     -- C→S
 ensureRE(remotes, "TalismanPlaced")  -- S→C (ACK)
+
+-- ★ KITO ピック用（起動時に必ず用意）
+ensureRE(remotes, "KitoPickStart")   -- S→C: 候補提示
+ensureRE(remotes, "KitoPickDecide")  -- C→S: 決定（uid を返す）
+ensureRE(remotes, "KitoPickResult")  -- S→C: 結果トースト等
 
 print("[RemotesInit] Remotes ready →", remotes:GetFullName())
 ```
@@ -8162,20 +8644,23 @@ return M
 
 ### src/server/ShopEffects/Kito.lua
 ```lua
--- v0.9.1 祈祷：ラン構成(config)を直接更新する安全設計（寅Lvをstate.kitoへ反映）
+-- v0.9.3 祈祷：プール確定ルート優先（uid差分適用）＋共通ヘルパ導入
+--        フォールバック: ラン構成(configSnapshot)を直接更新（旧実装互換・寅Lvはstate.kitoへ反映）
 -- I/F:
 --   Kito.apply(effectId, state, ctx) -> (ok:boolean, message:string)
 
 local RS = game:GetService("ReplicatedStorage")
+
 local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
 local CardEngine  = require(RS:WaitForChild("SharedModules"):WaitForChild("CardEngine"))
+local PoolEditor  = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
 
 local Kito = {}
 
 Kito.ID = {
 	USHI = "kito_ushi",   -- 所持文を即時2倍（上限あり）
 	TORA = "kito_tora",   -- 取り札の得点+1（恒常バフ）
-	TORI = "kito_tori",   -- ランダム1枚を bright へ変換（候補無し→次季に繰越）
+	TORI = "kito_tori",   -- ランダム1枚を bright へ変換（プール確定・候補無し→次季に繰越）
 }
 
 local DEFAULTS = { CAP_MON = 999999 }
@@ -8192,6 +8677,75 @@ local function ensureKito(state)
 	return state.kito
 end
 
+--========================
+-- 共通ヘルパ：1枚変換（プール確定→SNAP構成 フォールバック）
+--========================
+-- opts = { targetKind:string, preferNonTarget:boolean?, rng:any? }
+local function pool_convert_one(state:any, opts)
+	local targetKind      = tostring(opts and opts.targetKind or "")
+	local preferNonTarget = not (opts and opts.preferNonTarget == false)
+
+	-- --- プール確定（ライブデッキ） ---
+	if typeof(state) == "table" and typeof(state.deck) == "table" and #state.deck > 0 then
+		local sess = PoolEditor.start(state, 1)
+		if sess and typeof(sess.uids) == "table" and #sess.uids > 0 then
+			local pick, pickedLabel = {}, nil
+			for _, uid in ipairs(sess.uids) do
+				local e = sess.snap[uid]
+				if e then
+					if preferNonTarget and e.kind ~= targetKind then
+						table.insert(pick, uid)
+						pickedLabel = e.name or e.code
+						break
+					end
+				end
+			end
+			if #pick == 0 then
+				pick = { sess.uids[1] }
+				local e = sess.snap[pick[1]]
+				pickedLabel = e and (e.name or e.code) or "(unknown)"
+			end
+
+			PoolEditor.mutate(sess, { kind = "convertKind", targetKind = targetKind, uids = pick })
+			local ok, reason = PoolEditor.commit(state, sess)
+			if ok then
+				return true, ("【POOL確定】%s→%s"):format(pickedLabel or "対象", targetKind)
+			else
+				-- 版数不一致/期限切れなど。フォールバックへ。
+				-- reason: "deck changed; please retry" / "session expired" など
+			end
+		end
+	end
+
+	-- --- フォールバック（SNAP構成編集） ---
+	local deck = RunDeckUtil.loadConfig(state, true)
+	if not deck or #deck == 0 then
+		local b = ensureBonus(state)
+		b.queueBrightNext = (b.queueBrightNext or 0) + 1
+		return true, ("【SNAP構成】候補なし→次季に変換予約(+1) target=%s"):format(targetKind)
+	end
+
+	-- 既存の安全APIで bright 変換のみ対応（他kindは必要になったらCardEngine側を拡張）
+	if targetKind == "bright" then
+		local ok2, idx = CardEngine.convertRandomNonBrightToBright(deck, opts and opts.rng)
+		if ok2 then
+			local label = deck[idx].name or deck[idx].code
+			RunDeckUtil.saveConfig(state, deck)
+			return true, ("【SNAP構成】%s→%s"):format(label, targetKind)
+		else
+			local b = ensureBonus(state)
+			b.queueBrightNext = (b.queueBrightNext or 0) + 1
+			return true, ("【SNAP構成】対象なし→次季に変換予約(+1) target=%s"):format(targetKind)
+		end
+	end
+
+	return false, "unsupported fallback for kind=" .. targetKind
+end
+
+--========================
+-- 各 祈祷
+--========================
+
 -- 丑：所持文2倍（プレイヤー状態のみ変更）
 local function effect_ushi(state, ctx)
 	local cap = (ctx and ctx.capMon) or DEFAULTS.CAP_MON
@@ -8204,40 +8758,30 @@ end
 -- 寅：取り札の得点+1（恒常）
 -- ※ UI後方互換のため bonus.takenPointPlus も増やすが、参照の唯一真実は state.kito.tora
 local function effect_tora(state, _ctx)
-	-- 後方互換（旧UI/計算で利用している可能性あり）
 	local b = ensureBonus(state)
 	b.takenPointPlus = (b.takenPointPlus or 0) + 1
-
-	-- 採点（Scoring）側が参照する干支レベル
 	local k = ensureKito(state)
 	k.tora = (tonumber(k.tora) or 0) + 1
-
 	return true, msg(("寅：取り札の得点+1（累計+%d / Lv=%d）"):format(b.takenPointPlus, k.tora))
 end
 
--- 酉：ラン構成の非brightを1枚brightへ
--- 候補無しなら queueBrightNext を +1（次季で消化）
+-- 酉：1枚を bright へ（プール確定優先）
 local function effect_tori(state, ctx)
-	-- ラン構成（48枚）をロード（無ければ初期化）
-	local deck = RunDeckUtil.loadConfig(state, true) -- true=必要なら初期化
-	if not deck or #deck == 0 then
-		local b = ensureBonus(state)
-		b.queueBrightNext = (b.queueBrightNext or 0) + 1
-		return true, msg("酉：構成が空のため、次の季節開始時に1枚brightへ変換（+1スタック）")
+	local ok, info = pool_convert_one(state, {
+		targetKind = "bright",
+		preferNonTarget = true,
+		rng = ctx and ctx.rng,
+	})
+	if ok then
+		return true, ("酉：1枚を光札に変換 %s"):format(info)
+	else
+		return false, ("酉：変換失敗 %s"):format(info)
 	end
-
-	local ok, idx = CardEngine.convertRandomNonBrightToBright(deck, ctx and ctx.rng)
-	if not ok then
-		local b = ensureBonus(state)
-		b.queueBrightNext = (b.queueBrightNext or 0) + 1
-		return true, msg("酉：対象無し。次の季節開始時に1枚brightへ変換（+1スタック）")
-	end
-
-	local label = deck[idx].name or deck[idx].code
-	RunDeckUtil.saveConfig(state, deck)
-	return true, msg(("酉：%s を bright に変換しました"):format(label))
 end
 
+--========================
+-- ディスパッチ
+--========================
 local DISPATCH = {
 	[Kito.ID.USHI] = effect_ushi,
 	[Kito.ID.TORA] = effect_tora,
@@ -8881,6 +9425,59 @@ end
 return M
 ```
 
+### src/shared/DeckSampler.lua
+```lua
+-- ReplicatedStorage/SharedModules/DeckSampler.lua
+-- 目的: ラン中デッキ(state.deck)から K 枚ぶんの "uid" 候補を無作為抽出する。
+-- 依存: Balance.KITO_POOL_SIZE / RunDeckUtil.ensureUids
+
+local RS = game:GetService("ReplicatedStorage")
+
+local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
+
+local M = {}
+
+-- ランごとに安定しすぎない程度の RNG を取得（ない場合は時刻ベース）
+local function pickRng(state:any)
+	-- 将来 seed を run.meta などに保存するならここで掴む
+	return Random.new(os.clock() * 1e6 % 2^31)
+end
+
+-- デッキから uid の配列を K 個ぶん返す（Kが未指定なら既定値）
+function M.sampleUids(state:any, k:number?): {string}
+	if typeof(state) ~= "table" then return {} end
+	if typeof(state.deck) ~= "table" then return {} end
+
+	RunDeckUtil.ensureUids(state)
+	local deck = state.deck
+	local total = #deck
+	if total <= 0 then return {} end
+
+	local want = tonumber(k or Balance.KITO_POOL_SIZE) or 0
+	want = math.clamp(want, 0, total)
+	if want <= 0 then return {} end
+
+	-- フィッシャー–イェーツでインデックスをシャッフル → 先頭 want 件を採用
+	local rng = pickRng(state)
+	local idx = table.create(total)
+	for i=1,total do idx[i] = i end
+	for i = total, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		idx[i], idx[j] = idx[j], idx[i]
+	end
+
+	local out = table.create(want)
+	for i = 1, want do
+		local e = deck[idx[i]]
+		out[i] = e and e.uid or nil
+	end
+	return out
+end
+
+return M
+```
+
 ### src/shared/LocaleUtil.lua
 ```lua
 -- LocaleUtil.lua (client/shared)
@@ -9262,6 +9859,142 @@ end
 return Pick
 ```
 
+### src/shared/PoolEditor.lua
+```lua
+-- ReplicatedStorage/SharedModules/PoolEditor.lua
+-- 目的: 「プール編集セッション」の開始/変更/確定(コミット)を提供する。
+-- 依存: Balance.KITO_POOL_TTL_SEC / RunDeckUtil.* / DeckSampler.sampleUids
+
+local RS = game:GetService("ReplicatedStorage")
+
+local HttpService  = game:GetService("HttpService")
+local Balance      = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+local RunDeckUtil  = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
+local DeckSampler  = require(RS:WaitForChild("SharedModules"):WaitForChild("DeckSampler"))
+
+local M = {}
+
+local function now() return os.time() end
+local function ttlSec()
+	return tonumber(Balance.KITO_POOL_TTL_SEC or 45) or 45
+end
+
+-- セッション開始:
+--   戻り値 { id, version, createdAt, expiresAt, uids[], snap={ [uid]=entryCopy } }
+function M.start(state:any, k:number?)
+	if typeof(state) ~= "table" then return nil end
+	if typeof(state.deck) ~= "table" then return nil end
+
+	RunDeckUtil.ensureUids(state)
+
+	local version = RunDeckUtil.getDeckVersion(state)
+	local uids    = DeckSampler.sampleUids(state, k)
+	if #uids == 0 then
+		return { id = HttpService:GenerateGUID(false), version = version, createdAt = now(), expiresAt = now() + ttlSec(), uids = {}, snap = {} }
+	end
+
+	-- 現在デッキのスナップショット（uid 指定で複製）
+	local deck = state.deck
+	local map  = RunDeckUtil.buildUidIndexMap(state)
+	local snap = {}
+	for _, uid in ipairs(uids) do
+		local i = map[uid]
+		local e = i and deck[i]
+		if typeof(e) == "table" then
+			snap[uid] = table.clone(e) -- uid も含めた現状コピー
+		end
+	end
+
+	return {
+		id        = HttpService:GenerateGUID(false),
+		version   = version,
+		createdAt = now(),
+		expiresAt = now() + ttlSec(),
+		uids      = uids,
+		snap      = snap,
+	}
+end
+
+-- セッション内容に手を加える
+-- op.kind:
+--   - "convertKind"  : 指定 uid 群を「同月の targetKind」に置換（定義に基づく安全変換）
+--       fields: targetKind:string, uids?:{string}（未指定なら sess.uids 全部）
+--   - "remove"       : 指定 uid 群を削除マーク（コミット時に remove 適用）
+--       fields: uids:{string}
+function M.mutate(sess:any, op:any): (boolean, any?)
+	if typeof(sess) ~= "table" or typeof(sess.snap) ~= "table" then
+		return false, "invalid session"
+	end
+	if typeof(op) ~= "table" or op.kind == nil then
+		return false, "invalid op"
+	end
+
+	if op.kind == "convertKind" then
+		local target = tostring(op.targetKind or "")
+		if target == "" then return false, "targetKind required" end
+		local list = (typeof(op.uids) == "table" and op.uids) or sess.uids
+		local changed = 0
+		for _, uid in ipairs(list) do
+			local src = sess.snap[uid]
+			if typeof(src) == "table" then
+				local repl = RunDeckUtil.entryWithKindLike(src, target)
+				if repl then
+					repl.uid = uid
+					sess.snap[uid] = repl
+					changed += 1
+				end
+			end
+		end
+		return true, changed
+	end
+
+	if op.kind == "remove" then
+		if typeof(op.uids) ~= "table" or #op.uids == 0 then
+			return false, "uids required"
+		end
+		sess._remove = sess._remove or {}
+		for _, uid in ipairs(op.uids) do
+			sess._remove[uid] = true
+			sess.snap[uid] = nil
+		end
+		return true, #op.uids
+	end
+
+	return false, "unsupported op"
+end
+
+-- コミット（楽観ロック: deckVersion が一致した場合のみ反映）
+function M.commit(state:any, sess:any): (boolean, string)
+	if typeof(state) ~= "table" or typeof(state.deck) ~= "table" then
+		return false, "invalid state"
+	end
+	if typeof(sess) ~= "table" then
+		return false, "invalid session"
+	end
+	if sess.expiresAt and now() > sess.expiresAt then
+		return false, "session expired"
+	end
+	if RunDeckUtil.getDeckVersion(state) ~= sess.version then
+		return false, "deck changed; please retry"
+	end
+
+	-- 差分作成
+	local patch = { replace = {}, remove = {} }
+	for _, uid in ipairs(sess.uids or {}) do
+		if sess.snap[uid] then
+			patch.replace[uid] = sess.snap[uid]
+		elseif sess._remove and sess._remove[uid] then
+			patch.remove[uid] = true
+		end
+	end
+
+	local ok = RunDeckUtil.applyDeckPatchByUid(state, patch)
+	return ok == true, ok and "ok" or "failed"
+end
+
+return M
+```
+
 ### src/shared/RerollService.lua
 ```lua
 -- ReplicatedStorage/SharedModules/RerollService.lua
@@ -9450,11 +10183,17 @@ return Round
 -- 変更:
 --  - getUnlockedTalismanSlots(state): state.run から安全に読取り、無ければ 0 を返す
 --  - ensureTalisman(state, opts): 護符テーブルの存在と最低限の形を保証（不足キーのみ補完）
+--  - ★ 追加（KITOプール基盤）:
+--      ensureUids(state) / getDeckVersion(state) / bumpDeckVersion(state)
+--      buildUidIndexMap(state) / applyDeckPatchByUid(state, patch)
+--      entryWithKindLike(srcEntry, targetKind)
 
--- v0.9.0 ラン構成ユーティリティ（唯一の正本：run.configSnapshot）
+-- v0.9.0+ ラン構成ユーティリティ（唯一の正本：run.configSnapshot）
 -- ここだけを読み書きする。季節ごとの山札は毎季これをクローンして生成。
 
-local RS         = game:GetService("ReplicatedStorage")
+local RS          = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+
 local SharedMods = RS:WaitForChild("SharedModules")
 local CardEngine = require(SharedMods:WaitForChild("CardEngine"))
 
@@ -9635,55 +10374,191 @@ function M.ensureTalisman(state, opts)
 	return b
 end
 
-return M
+--==================================================
+-- ★ KITOプール基盤：Deck Versioning / UID / 差分適用
+--==================================================
+
+-- Deck内の各エントリに uid を保証（存在時は上書きしない）
+function M.ensureUids(state:any)
+	if typeof(state) ~= "table" then return end
+	local deck = (state and state.deck) or {}
+	for i, e in ipairs(deck) do
+		if typeof(e) == "table" and e.uid == nil then
+			local gid = string.gsub(HttpService:GenerateGUID(false), "-", "")
+			e.uid = string.sub(gid, 1, 8) .. "_" .. tostring(i)
+		end
+	end
+end
+
+-- デッキ版数を取得（無ければ1から開始）。state.run.deckVersion を優先。
+function M.getDeckVersion(state:any): number
+	if typeof(state) ~= "table" then return 1 end
+	state.run = state.run or {}
+	local v = tonumber(state.run.deckVersion or state.deckVersion or 0) or 0
+	if v <= 0 then v = 1 end
+	state.run.deckVersion = v
+	return v
+end
+
+-- デッキ版数を+1して返す
+function M.bumpDeckVersion(state:any): number
+	local v = M.getDeckVersion(state) + 1
+	state.run = state.run or {}
+	state.run.deckVersion = v
+	return v
+end
+
+-- uid→index のマップを構築
+function M.buildUidIndexMap(state:any): {[string]:number}
+	local map = {}
+	local deck = (state and state.deck) or {}
+	for i, e in ipairs(deck) do
+		if typeof(e) == "table" and e.uid then
+			map[e.uid] = i
+		end
+	end
+	return map
+end
+
+-- uid 指定差分を適用
+-- patch = {
+--   replace = { [uid]=entryTable, ... }?,  -- entry.uid は無視され uid を再付与
+--   remove  = { [uid]=true, ... }?         -- 対象 uid のカードをデッキから削除
+-- }
+function M.applyDeckPatchByUid(state:any, patch:{replace:any?, remove:any?})
+	if typeof(state) ~= "table" then return false end
+	local deck = state.deck
+	if typeof(deck) ~= "table" then return false end
+
+	local map = M.buildUidIndexMap(state)
+
+	-- 置換系
+	if patch and typeof(patch.replace) == "table" then
+		for uid, entry in pairs(patch.replace) do
+			local idx = map[uid]
+			if idx then
+				local copy = table.clone(entry)
+				copy.uid = uid
+				deck[idx] = copy
+			end
+		end
+	end
+
+	-- 削除系（降順で消す）
+	if patch and typeof(patch.remove) == "table" then
+		local rm = {}
+		for uid, flag in pairs(patch.remove) do
+			if flag and map[uid] then table.insert(rm, map[uid]) end
+		end
+		table.sort(rm, function(a,b) return a>b end)
+		for _, idx in ipairs(rm) do
+			table.remove(deck, idx)
+		end
+	end
+
+	M.bumpDeckVersion(state)
+	return true
+end
+
+-- 同月で kind が近い（=指定kind）の定義エントリに安全変換
+-- src: 現在のデッキエントリ {month, idx, kind, ...}
+-- 戻り値: 変換後の「定義に基づく」エントリ（uidは含まない）
+function M.entryWithKindLike(src:any, targetKind:string)
+	if typeof(src) ~= "table" then return nil end
+	local m = tonumber(src.month or 0) or 0
+	if m <= 0 then return nil end
+	local defs = CardEngine.cardsByMonth[m]
+	if typeof(defs) ~= "table" then return nil end
+	for i, def in ipairs(defs) do
+		if def and tostring(def.kind) == tostring(targetKind) then
+			return {
+				month = m,
+				idx   = i,
+				kind  = def.kind,
+				name  = def.name,
+				tags  = def.tags and table.clone(def.tags) or nil,
+				code  = CardEngine.toCode(m, i),
+... (truncated)
 ```
 
 ### src/shared/score/constants.lua
 ```lua
 -- ReplicatedStorage/SharedModules/score/constants.lua
--- v0.9.3-S2 定数 & 対応表（現行Scoring.luaと同値）
+-- v0.9.3-S3 定数 & 対応表（P3_matsuri_kito 用）
+-- 注意：P3 は「倍率を掛ける」のではなく、係数を加点として使います。
+--       MATSURI_COEFF = { mon_per_lv, pts_per_lv } として解釈されます。
 
 local K = {}
 
 -- 役ベース文（mon）
 K.ROLE_MON = {
-	five_bright = 10, four_bright = 8, rain_four_bright = 7, three_bright = 5,
-	inoshikacho = 5, red_ribbon = 5, blue_ribbon = 5,
-	seeds = 1, ribbons = 1, chaffs = 1,
-	hanami = 5, tsukimi = 5,
+	five_bright       = 10,
+	four_bright       = 8,
+	rain_four_bright  = 7,
+	three_bright      = 5,
+	inoshikacho       = 5,
+	red_ribbon        = 5,
+	blue_ribbon       = 5,
+	seeds             = 1,
+	ribbons           = 1,
+	chaffs            = 1,
+	hanami            = 5,
+	tsukimi           = 5,
 }
 
 -- 1枚あたりの点（pts）
-K.CARD_PTS = { bright=5, seed=2, ribbon=2, chaff=1 }
+K.CARD_PTS = {
+	bright = 5,
+	seed   = 2,
+	ribbon = 2,
+	chaff  = 1,
+}
 
--- 祭事（festivalId → { mult_per_lv, pts_per_lv }）
+-- 祭事（festivalId → { mon_per_lv, pts_per_lv }）
+-- ※ 現状の P3 実装では「倍率×」ではなく「加点+」として適用されます。
 K.MATSURI_COEFF = {
-	sai_kasu      = { 1.0,  1 },
-	sai_tanzaku   = { 1.0,  3 },
-	sai_tane      = { 1.0,  3 },
-	sai_akatan    = { 1.5,  5 },
-	sai_aotan     = { 1.5,  5 },
-	sai_inoshika  = { 2.0, 15 },
-	sai_hanami    = { 2.0, 15 },
-	sai_tsukimi   = { 2.0, 15 },
-	sai_sanko     = { 2.0, 20 },
-	sai_goko      = { 3.0, 30 },
+	sai_kasu      = { 1.0,  1 },  -- カス祭：mon+1/Lv, pts+1/Lv
+	sai_tanzaku   = { 1.0,  3 },  -- 短冊祭：mon+1/Lv, pts+3/Lv
+	sai_tane      = { 1.0,  3 },  -- タネ祭：mon+1/Lv, pts+3/Lv
+	sai_akatan    = { 1.5,  5 },  -- 赤短祭：mon+1.5/Lv, pts+5/Lv
+	sai_aotan     = { 1.5,  5 },  -- 青短祭：mon+1.5/Lv, pts+5/Lv
+	sai_inoshika  = { 2.0, 15 },  -- 猪鹿蝶祭：mon+2/Lv,   pts+15/Lv
+	sai_hanami    = { 2.0, 15 },  -- 花見祭：  mon+2/Lv,   pts+15/Lv
+	sai_tsukimi   = { 2.0, 15 },  -- 月見祭：  mon+2/Lv,   pts+15/Lv
+	sai_sanko     = { 2.0, 20 },  -- 三光祭/雨四光：mon+2/Lv, pts+20/Lv
+	sai_shiko     = { 2.0, 20 },  -- 四光祭： mon+2/Lv, pts+20/Lv
+	sai_goko      = { 3.0, 30 },  -- 五光祭： mon+3/Lv, pts+30/Lv
 }
 
--- 役キー → yaku_*
+-- 役キー（roles のキー）→ yaku_*（内部ヤクID）
 K.ROLE_TO_YAKU = {
-	chaffs="yaku_kasu", ribbons="yaku_tanzaku", seeds="yaku_tane",
-	red_ribbon="yaku_akatan", blue_ribbon="yaku_aotan",
-	inoshikacho="yaku_inoshikacho", hanami="yaku_hanami", tsukimi="yaku_tsukimi",
-	three_bright="yaku_sanko", five_bright="yaku_goko",
+	chaffs           = "yaku_kasu",
+	ribbons          = "yaku_tanzaku",
+	seeds            = "yaku_tane",
+	red_ribbon       = "yaku_akatan",
+	blue_ribbon      = "yaku_aotan",
+	inoshikacho      = "yaku_inoshikacho",
+	hanami           = "yaku_hanami",
+	tsukimi          = "yaku_tsukimi",
+	three_bright     = "yaku_sanko",  -- 三光 → 三光祭
+	rain_four_bright = "yaku_sanko",  -- 雨四光も三光系に合流
+	four_bright      = "yaku_shiko",  -- 四光 → 四光祭
+	five_bright      = "yaku_goko",   -- 五光 → 五光祭
 }
 
--- yaku_* → 祭事ID
+-- yaku_* → 祭事ID 配列（1役に複数祭事を紐付けたい場合は配列で）
 K.YAKU_TO_SAI = {
-	yaku_kasu={"sai_kasu"}, yaku_tanzaku={"sai_tanzaku"}, yaku_tane={"sai_tane"},
-	yaku_akatan={"sai_akatan","sai_tanzaku"}, yaku_aotan={"sai_aotan","sai_tanzaku"},
-	yaku_inoshikacho={"sai_inoshika"}, yaku_hanami={"sai_hanami"}, yaku_tsukimi={"sai_tsukimi"},
-	yaku_sanko={"sai_sanko"}, yaku_goko={"sai_goko"},
+	yaku_kasu        = { "sai_kasu" },
+	yaku_tanzaku     = { "sai_tanzaku" },
+	yaku_tane        = { "sai_tane" },
+	yaku_akatan      = { "sai_akatan", "sai_tanzaku" }, -- 赤短は短冊役にも寄与
+	yaku_aotan       = { "sai_aotan",  "sai_tanzaku" }, -- 青短も短冊に寄与
+	yaku_inoshikacho = { "sai_inoshika" },
+	yaku_hanami      = { "sai_hanami" },
+	yaku_tsukimi     = { "sai_tsukimi" },
+	yaku_sanko       = { "sai_sanko" },  -- 三光/雨四光
+	yaku_shiko       = { "sai_shiko" },  -- 四光
+	yaku_goko        = { "sai_goko" },   -- 五光
 }
 
 return K
@@ -10890,17 +11765,73 @@ ShopDefs.POOLS = {
 
 	-- 祭事
 	sai = {
+		-- 既存：カス祭
 		{
 			id = "sai_kasu", name = "カス祭り", category = "sai", price = 3, effect = "sai_kasu",
 			descJP = "カス役に祭事レベル+1（採点時に倍率+1/Lv、点+1/Lv）。",
 			descEN = "Festival: Kasu +1 level (scoring +1x and +1pt per Lv).",
 		},
+		-- 既存：短冊祭
 		{
 			id = "sai_tanzaku", name = "短冊祭り", category = "sai", price = 4, effect = "sai_tanzaku",
 			descJP = "短冊役に祭事レベル+1（採点時に倍率+1/Lv、点+3/Lv）。",
 			descEN = "Festival: Tanzaku +1 level (scoring +1x and +3pt per Lv).",
 		},
-		-- TODO: akatan/aotan/inoshika 等追加
+
+		-- ★ 追加：タネ祭
+		{
+			id = "sai_seed", name = "タネ祭り", category = "sai", price = 4, effect = "sai_seed",
+			descJP = "タネ役に祭事レベル+1（採点時に倍率+1/Lv、点+3/Lv）。",
+			descEN = "Festival: Seeds +1 level (scoring +1x and +3pt per Lv).",
+		},
+		-- ★ 追加：赤短祭
+		{
+			id = "sai_akatan", name = "赤短祭り", category = "sai", price = 6, effect = "sai_akatan",
+			descJP = "赤短役に祭事レベル+1（採点時に倍率+1.5/Lv、点+5/Lv）。",
+			descEN = "Festival: Red Ribbons +1 level (+1.5x and +5pt per Lv).",
+		},
+		-- ★ 追加：青短祭
+		{
+			id = "sai_aotan", name = "青短祭り", category = "sai", price = 6, effect = "sai_aotan",
+			descJP = "青短役に祭事レベル+1（採点時に倍率+1.5/Lv、点+5/Lv）。",
+			descEN = "Festival: Blue Ribbons +1 level (+1.5x and +5pt per Lv).",
+		},
+		-- ★ 追加：猪鹿蝶祭
+		{
+			id = "sai_inoshika", name = "猪鹿蝶祭り", category = "sai", price = 7, effect = "sai_inoshika",
+			descJP = "猪鹿蝶役に祭事レベル+1（採点時に倍率+2/Lv、点+15/Lv）。",
+			descEN = "Festival: Boar–Deer–Butterfly +1 level (+2x and +15pt per Lv).",
+		},
+		-- ★ 追加：花見祭
+		{
+			id = "sai_hanami", name = "花見祭り", category = "sai", price = 7, effect = "sai_hanami",
+			descJP = "「花見で一杯」に祭事レベル+1（採点時に倍率+2/Lv、点+15/Lv）。",
+			descEN = "Festival: Hanami Sake +1 level (+2x and +15pt per Lv).",
+		},
+		-- ★ 追加：月見祭
+		{
+			id = "sai_tsukimi", name = "月見祭り", category = "sai", price = 7, effect = "sai_tsukimi",
+			descJP = "「月見で一杯」に祭事レベル+1（採点時に倍率+2/Lv、点+15/Lv）。",
+			descEN = "Festival: Tsukimi Sake +1 level (+2x and +15pt per Lv).",
+		},
+		-- ★ 追加：三光祭（雨四光も同じ係数で扱う前提）
+		{
+			id = "sai_sankou", name = "三光祭り", category = "sai", price = 8, effect = "sai_sankou",
+			descJP = "三光／雨四光に祭事レベル+1（採点時に倍率+2/Lv、点+20/Lv）。",
+			descEN = "Festival: Three Brights / Rain Four +1 level (+2x and +20pt per Lv).",
+		},
+		-- ★ 追加：四光祭
+		{
+			id = "sai_shikou", name = "四光祭り", category = "sai", price = 9, effect = "sai_shikou",
+			descJP = "四光に祭事レベル+1（採点時に倍率+2/Lv、点+20/Lv）。",
+			descEN = "Festival: Four Brights +1 level (+2x and +20pt per Lv).",
+		},
+		-- ★ 追加：五光祭
+		{
+			id = "sai_gokou", name = "五光祭り", category = "sai", price = 10, effect = "sai_gokou",
+			descJP = "五光に祭事レベル+1（採点時に倍率+3/Lv、点+30/Lv）。",
+			descEN = "Festival: Five Brights +1 level (+3x and +30pt per Lv).",
+		},
 	},
 
 	-- スペクタル（将来系）
@@ -11088,10 +12019,17 @@ local ShopOpen   = Remotes:WaitForChild("ShopOpen")
 local BuyItem    = Remotes:WaitForChild("BuyItem")
 local ShopReroll = Remotes:WaitForChild("ShopReroll")
 
+-- ★ UI分岐用の Balance と、候補通知 Remote（RemotesInit で生成済みを待つ）
+local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+local EvKitoStart = Remotes:WaitForChild("KitoPickStart")
+
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
 local RunDeckUtil   = require(SharedModules:WaitForChild("RunDeckUtil"))
 local CardEngine    = require(SharedModules:WaitForChild("CardEngine"))
+
+-- ★ 候補生成/送信の一元管理（セッション保持含む）
+local KitoPickCore  = require(SSS:WaitForChild("KitoPickCore"))
 
 -- ★ 護符の正本はサーバ一元管理（不足キー補完のみ）
 local TaliService   = require(SSS:WaitForChild("TalismanService"))
@@ -11356,13 +12294,6 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			if it.id == itemId then foundIndex = i; found = it; break end
 		end
 		if not found then
-			LOG.warn("[BUY][ERR] not found: %s", tostring(itemId))
-			return openFor(plr, s, { notice="不明な商品です" })
-		end
-		local price = tonumber(found.price) or 0
-		if (s.mon or 0) < price then
-			LOG.warn("[BUY][ERR] mon short: need=%d have=%d", price, tonumber(s.mon or 0))
-			return openFor(plr, s, { notice=("文が足りません（必要:%d）"):format(price) })
 ... (truncated)
 ```
 
