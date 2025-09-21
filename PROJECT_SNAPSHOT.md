@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-21 10:54:09
+- Generated: 2025-09-21 18:59:37
 - Max lines/file: 300
 
 ## Folder Tree
@@ -102,6 +102,7 @@ hanahuda
 │   │       │   └── UiUtil.lua
 │   │       ├── screens
 │   │       │   ├── HomeScreen.lua
+│   │       │   ├── KitoPickView.lua
 │   │       │   ├── PatchNotesModal.lua
 │   │       │   ├── RunScreen.lua
 │   │       │   ├── RunScreenRemotes.lua
@@ -127,7 +128,7 @@ hanahuda
 │   │   │   └── Spectral.lua
 │   │   ├── GameInit.server.lua
 │   │   ├── KitoPickCore.lua
-│   │   ├── KitoPickServer.lua
+│   │   ├── KitoPickServer.server.lua
 │   │   ├── NavServer.lua
 │   │   ├── RemotesInit.server.lua
 │   │   ├── SaveService.lua
@@ -794,7 +795,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-21 10:54:09
+- Generated: 2025-09-21 18:59:37
 - Max lines/file: 300
 
 ## Folder Tree
@@ -895,6 +896,7 @@ hanahuda
 │   │       │   └── UiUtil.lua
 │   │       ├── screens
 │   │       │   ├── HomeScreen.lua
+│   │       │   ├── KitoPickView.lua
 │   │       │   ├── PatchNotesModal.lua
 │   │       │   ├── RunScreen.lua
 │   │       │   ├── RunScreenRemotes.lua
@@ -920,7 +922,7 @@ hanahuda
 │   │   │   └── Spectral.lua
 │   │   ├── GameInit.server.lua
 │   │   ├── KitoPickCore.lua
-│   │   ├── KitoPickServer.lua
+│   │   ├── KitoPickServer.server.lua
 │   │   ├── NavServer.lua
 │   │   ├── RemotesInit.server.lua
 │   │   ├── SaveService.lua
@@ -1090,7 +1092,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 --
 -- ログ:
 --  - 初期化時: [ShopI18n] adapter active
---  - マッピング使用時: [ShopI18n] map old_key -> SHOP_UI_*
 ... (truncated)
 ```
 
@@ -1390,10 +1391,6 @@ script.Destroying:Connect(disableGuard)
 ```lua
 -- StarterPlayerScripts/UI/ClientMain.client.lua
 -- v0.9.6-P1-3 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
--- 仕様メモ:
---   * <ShopOpen> は **ClientMainのみ** で受信し、Router.show("shop", payload) に一本化。
---   * 言語コードは外部公開を "ja"/"en" に統一（"jp" を受信した場合は "ja" へ正規化して警告）
---   * print/warn を共通 Logger に置換（公開時は閾値で抑止可能）
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -1403,9 +1400,8 @@ local Remotes = RS:WaitForChild("Remotes")
 -- Logger
 --========================
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
-local LOG    = Logger.scope("ClientMain")  -- ★ for → scope に変更
+local LOG    = Logger.scope("ClientMain")
 
--- 公開ビルドで抑止したい場合は INFO/WARN へ（Studioは Logger.DEBUG にしてもOK）
 Logger.configure({
 	level = Logger.INFO,
 	timePrefix = true,
@@ -1434,7 +1430,6 @@ if not okLocale or type(Locale) ~= "table" then
 	end
 end
 
--- 共通ユーティリティ（jp→ja / 不明は nil）
 local LocaleUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
 
 --========================
@@ -1475,12 +1470,12 @@ local ReqSetLang     = Remotes:WaitForChild("ReqSetLang")
 local DevGrantRyo  = Remotes:FindFirstChild("DevGrantRyo")
 local DevGrantRole = Remotes:FindFirstChild("DevGrantRole")
 
--- ▼ レガシー（任意）：存在すれば Nav のバックアップ経路に使う
+-- レガシー（任意）
 local GoHome   = Remotes:FindFirstChild("GoHome")
 local GoNext   = Remotes:FindFirstChild("GoNext")
 local SaveQuit = Remotes:FindFirstChild("SaveQuit")
 
--- ▼ Nav の生成（正準は DecideNext、レガシーは互換のみ）
+-- Nav
 local Nav = NavClient.new(DecideNext, {
 	GoHome   = GoHome,
 	GoNext   = GoNext,
@@ -1506,14 +1501,18 @@ do
 	mod.setDeps = (type(mod.setDeps) == "function") and mod.setDeps or function(_) end
 	mod.show    = (type(mod.show)    == "function") and mod.show    or function(_) end
 	mod.call    = (type(mod.call)    == "function") and mod.call    or function() end
+	-- ★ register を使うので、存在しない場合は安全な no-op を入れておく
+	mod.register = (type(mod.register) == "function") and mod.register or function() end
 	Router = mod
 end
 
+-- ★ KitoPick を正式登録（他画面と同列）
 local Screens = {
-	home   = require(ScreensFolder:WaitForChild("HomeScreen")),
-	run    = require(ScreensFolder:WaitForChild("RunScreen")),
-	shop   = require(ScreensFolder:WaitForChild("ShopScreen")),
-	shrine = require(ScreensFolder:WaitForChild("ShrineScreen")),
+	home     = require(ScreensFolder:WaitForChild("HomeScreen")),
+	run      = require(ScreensFolder:WaitForChild("RunScreen")),
+	shop     = require(ScreensFolder:WaitForChild("ShopScreen")),
+	shrine   = require(ScreensFolder:WaitForChild("ShrineScreen")),
+	kitoPick = require(ScreensFolder:WaitForChild("KitoPickView")), -- ← 追加
 }
 Router.init(Screens)
 
@@ -1526,10 +1525,10 @@ Router.setDeps({
 	HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 	StageResult=StageResult,
 
-	-- ▼ 追加：UI層へ Nav を配布（ResultModal → Nav.next("home"|"next"|"save")）
+	-- UI層へ Nav を配布
 	Nav = Nav,
 
-	-- ★ P0-7: トーストタイトルをロケールで切替（"jp" は受けたら "ja" として扱う）
+	-- トースト
 	toast = function(msg, dur)
 		pcall(function()
 			local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
@@ -1544,7 +1543,6 @@ Router.setDeps({
 		end)
 	end,
 
-	-- 参考：既存 remotes マップ（互換のためそのまま維持）
 	remotes = {
 		Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
 		ShopDone=ShopDone, BuyItem=BuyItem, ShopReroll=ShopReroll,
@@ -1552,13 +1550,11 @@ Router.setDeps({
 		HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 		StageResult=StageResult, DecideNext=DecideNext, ReqSetLang=ReqSetLang,
 		DevGrantRyo=DevGrantRyo, DevGrantRole=DevGrantRole,
-		-- （必要なら）Nav もここへ見せたい場合は次行を有効化
-		-- Nav = Nav,
 	},
 })
 
 --========================================
--- S→C 配線（P0-5: ShopOpenはここだけ）
+-- S→C 配線（ShopOpen はここだけ）
 --========================================
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
@@ -1570,9 +1566,7 @@ HomeOpen.OnClientEvent:Connect(function(payload)
 end)
 
 ShopOpen.OnClientEvent:Connect(function(payload)
-	-- P0-5: ClientMain が唯一の <ShopOpen> 受口
 	local p = payload or {}
-	-- 言語が来ていない場合は共有言語、"jp" が来たら "ja" に正規化
 	if p.lang == nil then
 		p.lang = (Locale.getGlobal and Locale.getGlobal()) or "en"
 	end
@@ -1934,25 +1928,25 @@ end
 ### src/client/ui/components/controllers/KitoPickWires.client.lua
 ```lua
 -- src/client/ui/components/controllers/KitoPickWires.client.lua
--- 目的: KitoPick の最小配線（UIは仮。まずは自動決定で往復確認）
+-- 目的: KitoPick の配線（本UI前提。必要なら自動決定も残置）
 -- メモ:
 --  - Balance.KITO_UI_ENABLED が true のときのみ動作
---  - Balance.KITO_UI_AUTO_DECIDE が true（既定）なら自動で1枚選択して送信
---  - 将来本UIが入ったら KITO_UI_AUTO_DECIDE=false にすれば自動選択は止まる
+--  - Balance.KITO_UI_AUTO_DECIDE=false で本UIへ委譲（12枚一覧・フィルタ・確定ボタン）
+--  - UI側は ReplicatedStorage/ClientSignals の BindableEvent を購読して実装する
 
 local RS = game:GetService("ReplicatedStorage")
 
 -- 依存
-local Config        = RS:WaitForChild("Config")
-local Balance       = require(Config:WaitForChild("Balance"))
+local Config   = RS:WaitForChild("Config")
+local Balance  = require(Config:WaitForChild("Balance"))
 
-local Remotes       = RS:WaitForChild("Remotes")
-local EvStart       = Remotes:WaitForChild("KitoPickStart")
-local EvDecide      = Remotes:WaitForChild("KitoPickDecide")
-local EvResult      = Remotes:WaitForChild("KitoPickResult")
+local Remotes  = RS:WaitForChild("Remotes")
+local EvStart  = Remotes:WaitForChild("KitoPickStart")
+local EvDecide = Remotes:WaitForChild("KitoPickDecide")
+local EvResult = Remotes:WaitForChild("KitoPickResult")
 
-local Logger        = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
-local LOG           = Logger.scope("KitoPickClient")
+local Logger   = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG      = Logger.scope("KitoPickClient")
 
 -- ─────────────────────────────────────────────────────────────
 -- 重複接続ガード（Play Solo 再起動や二重require対策）
@@ -1966,8 +1960,29 @@ script:SetAttribute("wired", true)
 -- ─────────────────────────────────────────────────────────────
 -- 設定
 -- ─────────────────────────────────────────────────────────────
-local AUTO_DECIDE = (Balance.KITO_UI_AUTO_DECIDE ~= false)  -- 既定: true
+local AUTO_DECIDE = (Balance.KITO_UI_AUTO_DECIDE ~= false)  -- 本UIでは false を想定
 local ENABLED     = (Balance.KITO_UI_ENABLED == true)
+
+-- ─────────────────────────────────────────────────────────────
+-- UI ブリッジ（クライアント内だけで使う BindableEvent を公開）
+--  - UI は以下を購読すればよい:
+--    RS.ClientSignals.KitoPickIncoming.Event:Connect(function(payload) ... end)
+--    RS.ClientSignals.KitoPickResult.Event:Connect(function(res) ... end)
+--  - UI から確定時は EvDecide:FireServer({...}) を直接呼んでOK
+-- ─────────────────────────────────────────────────────────────
+local function ensure(parent, name, className)
+	local inst = parent:FindFirstChild(name)
+	if not inst then
+		inst = Instance.new(className)
+		inst.Name = name
+		inst.Parent = parent
+	end
+	return inst
+end
+
+local ClientSignals = ensure(RS, "ClientSignals", "Folder")
+local SigIncoming   = ensure(ClientSignals, "KitoPickIncoming", "BindableEvent")
+local SigResult     = ensure(ClientSignals, "KitoPickResult", "BindableEvent")
 
 -- ─────────────────────────────────────────────────────────────
 -- ユーティリティ
@@ -1977,7 +1992,7 @@ local function briefList(list)
 	return tostring(n)
 end
 
--- 「最初の非 targetKind」を優先、全て targetKind なら先頭
+-- 「最初の非 targetKind」を優先、全て targetKind なら先頭（自動決定用フォールバック）
 local function chooseUid(payload)
 	if type(payload) ~= "table" or type(payload.list) ~= "table" or #payload.list == 0 then
 		return nil
@@ -2006,21 +2021,20 @@ EvStart.OnClientEvent:Connect(function(payload)
 		tostring(payload and payload.targetKind),
 		tostring(payload and payload.sessionId)
 	)
-
 	if not ok or #payload.list == 0 then return end
 
-	-- 本番UIが入るまでは自動決定で確定まで通す
+	-- 本UIへ委譲: UI 層に payload を流す（12枚一覧・フィルタ・確定ボタン）
 	if not AUTO_DECIDE then
-		-- ここでUIへ payload を流す（後付け）
+		SigIncoming:Fire(payload)
 		return
 	end
 
+	-- ★フォールバック: 自動決定モード（旧動作）
 	local pickUid = chooseUid(payload)
 	if not pickUid then
 		LOG.warn("[KitoPickDecide] no candidate uid")
 		return
 	end
-
 	EvDecide:FireServer({
 		sessionId  = payload.sessionId,
 		uid        = pickUid,
@@ -2030,13 +2044,13 @@ EvStart.OnClientEvent:Connect(function(payload)
 end)
 
 -- ─────────────────────────────────────────────────────────────
--- 受信: 結果
+-- 受信: 結果（UIへ通知）
 -- ─────────────────────────────────────────────────────────────
 EvResult.OnClientEvent:Connect(function(res)
 	if type(res) ~= "table" then return end
 	LOG.info("[KitoPickResult] ok=%s msg=%s target=%s",
 		tostring(res.ok), tostring(res.message), tostring(res.targetKind))
-	-- TODO: 後付けのトースト/モーダルへ通知
+	SigResult:Fire(res)
 end)
 ```
 
@@ -4917,11 +4931,12 @@ return U
 ```lua
 -- StarterPlayerScripts/UI/ScreenRouter.lua
 -- シンプルな画面ルーター：同じ画面への show は再実行しない（ちらつき対策）
--- v0.9.4 (P1-3 logger):
+-- v0.9.5 (P1-4):
 --  - current==name の場合、非表示ループを完全スキップ（ちらつきゼロ）
 --  - Enabled/Visible を型ガードして安全化（ScreenGui/GuiObject 両対応）
 --  - setData → updateOrShow だけ行う
 --  - Logger 導入（print/warn を LOG.* に置換）
+--  - register(name, module) を追加（動的登録に対応）
 --  - ログ例: LOG.debug("Router.show updated same screen for %s", name)
 
 local Router = {}
@@ -4975,6 +4990,28 @@ function Router.setDeps(d)
 		end
 	end
 	LOG.debug("deps set (playerGui=%s)", tostring(_deps and _deps.playerGui))
+end
+
+--==================================================
+-- 動的登録
+--==================================================
+function Router.register(name: string, module)
+	if type(name) ~= "string" or name == "" then
+		LOG.warn("register: invalid name: %s", tostring(name))
+		return false
+	end
+	if module == nil then
+		LOG.warn("register: module is nil for '%s'", name)
+		return false
+	end
+	_map = _map or {}
+	local existed = _map[name] ~= nil
+	_map[name] = module
+	LOG.debug("registered screen '%s'%s", name, existed and " (overwrote)" or "")
+	-- 既に生成済みのインスタンスがある場合は、そのまま維持（安全第一）
+	-- 差し替えが必要なケースは、呼び出し側で Router.ensure を使って再生成するか、
+	-- 旧インスタンスの明示破棄を行ってください。
+	return true
 end
 
 --==================================================
@@ -5466,6 +5503,311 @@ function Home.new(deps)
 		b.BackgroundTransparency = 0.1
 		b.BorderSizePixel        = 0
 		b.AutoButtonColor        = true
+... (truncated)
+```
+
+### src/client/ui/screens/KitoPickView.lua
+```lua
+-- src/client/ui/screens/KitoPickView.lua
+-- 目的: KitoPick の12枚一覧UI・効果説明＋カード画像＆情報表示・確定／スキップ
+-- 仕様: KitoPickWires の ClientSignals を購読し、シグナル受信時に Router 経由で表示
+
+local Players = game:GetService("Players")
+local RS      = game:GetService("ReplicatedStorage")
+local LP      = Players.LocalPlayer
+
+-- Remotes
+local Remotes  = RS:WaitForChild("Remotes")
+local EvDecide = Remotes:WaitForChild("KitoPickDecide")
+
+-- Signals from KitoPickWires（存在しなければ Wires 側で ensure 済み）
+local ClientSignals = RS:WaitForChild("ClientSignals")
+local SigIncoming   = ClientSignals:WaitForChild("KitoPickIncoming")
+local SigResult     = ClientSignals:WaitForChild("KitoPickResult")
+
+-- Logger
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("KitoPickView")
+
+-- Router（ui配下）。無ければ落ちないように pcall
+local UI_ROOT = script.Parent and script.Parent.Parent  -- StarterPlayerScripts/ui
+local ScreenRouter = nil
+pcall(function()
+	if UI_ROOT then
+		ScreenRouter = require(UI_ROOT:WaitForChild("ScreenRouter"))
+	end
+end)
+
+-- ─────────────────────────────────────────────────────────────
+-- 内部状態
+-- ─────────────────────────────────────────────────────────────
+local View = {} -- ScreenRouter に登録する公開I/F（このテーブルが「画面インスタンス」扱い）
+
+local ui         -- ScreenGui
+local refs = {}  -- 参照置き場（ScreenGui にフィールドは生やさない）
+
+local current = {
+	sessionId   = nil,
+	targetKind  = "bright",
+	list        = {},
+	selectedUid = nil,
+	busy        = false,   -- 決定/スキップの多重送信防止
+}
+
+-- 表示用ラベルマップ
+local KIND_JP = {
+	bright = "光札",
+	ribbon = "短冊",
+	seed   = "タネ",
+	chaff  = "カス",
+}
+local MONTH_JP = { "1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月" }
+
+local function parseMonth(entry)
+	-- entry.meta?.month 優先 → code/uid 先頭2桁
+	local m = tonumber(entry.month or (entry.meta and entry.meta.month))
+	if m and m>=1 and m<=12 then return m end
+	local s = tostring(entry.code or entry.uid or "")
+	local two = string.match(s, "^(%d%d)")
+	if not two then return nil end
+	m = tonumber(two)
+	if m and m>=1 and m<=12 then return m end
+	return nil
+end
+
+local function kindToJp(k)
+	return KIND_JP[tostring(k or "")] or tostring(k or "?")
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- UI ビルド
+-- ─────────────────────────────────────────────────────────────
+local function make(text, className, props, parent)
+	local inst = Instance.new(className)
+	inst.Name = text
+	for k,v in pairs(props or {}) do inst[k] = v end
+	inst.Parent = parent
+	return inst
+end
+
+local function ensureGui()
+	if ui and ui.Parent then return ui end
+	ui = make("KitoPickGui", "ScreenGui", {
+		ResetOnSpawn    = false,
+		ZIndexBehavior  = Enum.ZIndexBehavior.Global,
+		IgnoreGuiInset  = true,
+	}, LP:WaitForChild("PlayerGui"))
+
+	local shade = make("Shade","Frame",{
+		BackgroundColor3       = Color3.new(0,0,0),
+		BackgroundTransparency = 0.35,
+		Size                   = UDim2.fromScale(1,1)
+	}, ui)
+
+	local panel = make("Panel","Frame",{
+		AnchorPoint         = Vector2.new(0.5,0.5),
+		Position            = UDim2.fromScale(0.5,0.52),
+		Size                = UDim2.fromOffset(880, 560),
+		BackgroundColor3    = Color3.fromRGB(24,24,28),
+		BorderSizePixel     = 0,
+	}, shade)
+	make("UICorner","UICorner",{CornerRadius=UDim.new(0,18)}, panel)
+	make("Padding","UIPadding",{
+		PaddingTop    = UDim.new(0,16),
+		PaddingBottom = UDim.new(0,16),
+		PaddingLeft   = UDim.new(0,16),
+		PaddingRight  = UDim.new(0,16),
+	}, panel)
+
+	-- タイトル
+	local title = make("Title","TextLabel",{
+		Text                   = "KITO: Pick a card",
+		Font                   = Enum.Font.GothamBold,
+		TextSize               = 22,
+		TextColor3             = Color3.fromRGB(230,230,240),
+		BackgroundTransparency = 1,
+		Size                   = UDim2.new(1, 0, 0, 28),
+	}, panel)
+
+	-- 効果説明（可変長）
+	local effect = make("Effect","TextLabel",{
+		Text                   = "",
+		Font                   = Enum.Font.Gotham,
+		TextWrapped            = true,
+		TextSize               = 18,
+		TextColor3             = Color3.fromRGB(200,200,210),
+		BackgroundTransparency = 1,
+		Size                   = UDim2.new(1, 0, 0, 1), -- 高さは後で調整
+		Position               = UDim2.new(0, 0, 0, 28+6),
+		TextXAlignment         = Enum.TextXAlignment.Left,
+	}, panel)
+
+	local gridHolder = make("GridHolder","Frame",{
+		BackgroundTransparency = 1,
+		Position               = UDim2.new(0, 0, 0, 28 + 6 + 40 + 8), -- デフォ仮値（効果説明の実高さで後で更新）
+		Size                   = UDim2.new(1, 0, 1, -(28+6+40+8) - 84),
+	}, panel)
+
+	local scroll = make("Scroll","ScrollingFrame",{
+		BackgroundTransparency = 1,
+		CanvasSize             = UDim2.new(),
+		ScrollBarThickness     = 6,
+		BorderSizePixel        = 0,
+		Size                   = UDim2.new(1,0,1,0),
+	}, gridHolder)
+
+	-- レイアウト専用コンテナ（固定）
+	local gridFrame = make("Grid","Frame",{
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1,0,1,0),
+	}, scroll)
+
+	-- 画像＋情報カード用に少し大きめ
+	local layout = make("UIGrid","UIGridLayout",{
+		CellPadding          = UDim2.fromOffset(12,12),
+		CellSize             = UDim2.fromOffset(180, 160),
+		HorizontalAlignment  = Enum.HorizontalAlignment.Left,
+		SortOrder            = Enum.SortOrder.LayoutOrder,
+	}, gridFrame)
+
+	local footer = make("Footer","Frame",{
+		BackgroundTransparency = 1,
+		AnchorPoint            = Vector2.new(0.5,1),
+		Position               = UDim2.new(0.5,0,1,-8),
+		Size                   = UDim2.new(1, -16, 0, 52),
+	}, panel)
+
+	local pickInfo = make("PickInfo","TextLabel",{
+		Text                   = "Select 1 card",
+		Font                   = Enum.Font.Gotham,
+		TextSize               = 18,
+		TextColor3             = Color3.fromRGB(200,200,210),
+		BackgroundTransparency = 1,
+		Size                   = UDim2.new(1, -360, 1, 0),
+		TextXAlignment         = Enum.TextXAlignment.Left,
+	}, footer)
+
+	-- Skip（何も選ばない）
+	local skipBtn = make("Skip","TextButton",{
+		Text                   = "Skip",
+		Font                   = Enum.Font.GothamBold,
+		TextSize               = 20,
+		TextColor3             = Color3.fromRGB(230,230,240),
+		AutoButtonColor        = true,
+		BackgroundColor3       = Color3.fromRGB(70,70,78),
+		BackgroundTransparency = 0.05,
+		Size                   = UDim2.fromOffset(140, 44),
+		AnchorPoint            = Vector2.new(1,0.5),
+		Position               = UDim2.new(1, -176, 0.5, 0),
+	}, footer)
+	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, skipBtn)
+
+	-- Confirm
+	local confirm = make("Confirm","TextButton",{
+		Text                   = "Confirm",
+		Font                   = Enum.Font.GothamBold,
+		TextSize               = 20,
+		TextColor3             = Color3.fromRGB(16,16,20),
+		AutoButtonColor        = true,
+		BackgroundColor3       = Color3.fromRGB(120,200,120),
+		BackgroundTransparency = 0.0,
+		Size                   = UDim2.fromOffset(160, 44),
+		AnchorPoint            = Vector2.new(1,0.5),
+		Position               = UDim2.new(1, -8, 0.5, 0),
+	}, footer)
+	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, confirm)
+
+	-- 参照
+	refs.title      = title
+	refs.effect     = effect
+	refs.gridHolder = gridHolder
+	refs.scroll     = scroll
+	refs.gridFrame  = gridFrame
+	refs.gridLayout = layout
+	refs.confirm    = confirm
+	refs.skipBtn    = skipBtn
+	refs.pickInfo   = pickInfo
+
+	return ui
+end
+
+-- 効果説明の高さに合わせてグリッド領域を再レイアウト
+local function relayoutByEffectHeight()
+	if not (refs.effect and refs.gridHolder) then return end
+	local topY      = 28 + 6
+	local baseBelow = 84 -- フッタ確保高さ
+	local effect    = refs.effect
+
+	-- 実際の必要高さを取得（TextWrapped=true なので TextBounds.Y を利用）
+	local needH = math.max(22, math.ceil(effect.TextBounds.Y))
+	effect.Size = UDim2.new(1, 0, 0, needH)
+
+	local gridTop  = topY + needH + 8
+	refs.gridHolder.Position = UDim2.new(0, 0, 0, gridTop)
+	refs.gridHolder.Size     = UDim2.new(1, 0, 1, -gridTop - baseBelow)
+end
+
+-- 画像ソースを決定（rbxassetid:// またはそのまま文字列）
+local function resolveImage(entry)
+	if entry.image and type(entry.image) == "string" and #entry.image>0 then
+		return entry.image
+	end
+	if entry.imageId then
+		return "rbxassetid://" .. tostring(entry.imageId)
+	end
+	return nil
+end
+
+-- カードの選択見た目を更新（UIStroke を使う）
+local function setCardSelected(btn: Instance, sel: boolean)
+	if not btn or not btn:IsA("TextButton") then return end
+	btn.BackgroundColor3 = sel and Color3.fromRGB(70,110,210) or Color3.fromRGB(40,42,54)
+	local stroke = btn:FindFirstChild("SelStroke")
+	if stroke and stroke:IsA("UIStroke") then
+		stroke.Enabled = sel
+	end
+end
+
+-- カードボタン作成（画像＋情報）
+local function makeCard(entry)
+	local card = Instance.new("TextButton")
+	card.Name                   = entry.uid
+	card.AutoButtonColor        = true
+	card.BackgroundColor3       = Color3.fromRGB(40,42,54)
+	card.BackgroundTransparency = 0.05
+	card.BorderSizePixel        = 0
+	card.Size                   = UDim2.fromOffset(180, 160)
+	card.Text                   = ""
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0,12)
+
+	-- 選択枠（非表示で用意）
+	local stroke = Instance.new("UIStroke")
+	stroke.Name = "SelStroke"
+	stroke.Thickness = 2
+	stroke.Color = Color3.fromRGB(90,130,230)
+	stroke.Enabled = false
+	stroke.Parent = card
+
+	-- 画像
+	local img = Instance.new("ImageLabel")
+	img.Name                   = "Thumb"
+	img.Size                   = UDim2.fromOffset(180, 112)
+	img.Position               = UDim2.new(0,0,0,0)
+	img.BackgroundTransparency = 1
+	img.BorderSizePixel        = 0
+	img.ScaleType              = Enum.ScaleType.Fit
+	img.Parent                 = card
+	local src = resolveImage(entry)
+	if src then
+		img.Image = src
+	else
+		img.BackgroundTransparency = 0
+		img.BackgroundColor3 = Color3.fromRGB(55,57,69)
+	end
+
+	-- 名称
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Name                   = "Name"
 ... (truncated)
 ```
 
@@ -6751,10 +7093,10 @@ Balance.KITO_POOL_TTL_SEC   = 45  -- セッション有効秒数（開始→決�
 --   true : UIでプレイヤーが選択（Shop購入後に候補を提示）
 Balance.KITO_UI_ENABLED     = true
 
--- ▼ UIが未実装の間だけ使う自動決定フラグ（KitoPickWires で参照）
+-- ▼ 本UIを使うため、自動決定は無効化
 --   true : 候補受信後にクライアントが自動で1枚決定→Decide送信
 --   false: 自動決定をしない（本UIでの手動選択を想定）
-Balance.KITO_UI_AUTO_DECIDE = true
+Balance.KITO_UI_AUTO_DECIDE = false
 
 -- ▼ 自動選択モード時の選択枚数（酉：1枚変換などは通常1）
 Balance.KITO_AUTO_PICK_COUNT = 1
@@ -7910,56 +8252,73 @@ end
 return Core
 ```
 
-### src/server/KitoPickServer.lua
+### src/server/KitoPickServer.server.lua
 ```lua
 -- ServerScriptService/KitoPickServer.lua
 -- 目的: KITOの「12枚提示→選択→確定」をサーバで管理（UIは後付け）
-local LOG = Logger.scope("KitoPickServer")
-LOG.info("ready (Decide handler wired)")
 
-local RS       = game:GetService("ReplicatedStorage")
-local SSS      = game:GetService("ServerScriptService")
-local Players  = game:GetService("Players")
+-- ── Services ─────────────────────────────────────────────────
+local RS      = game:GetService("ReplicatedStorage")
+local SSS     = game:GetService("ServerScriptService")
+local Players = game:GetService("Players")
 
-local Balance      = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local RunDeckUtil  = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
-local PoolEditor   = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
-local CardEngine   = require(RS:WaitForChild("SharedModules"):WaitForChild("CardEngine"))
-local Logger       = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
-local LOG          = Logger.scope("KitoPickServer")
+-- ── Logger ───────────────────────────────────────────────────
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG    = Logger.scope("KitoPickServer")
+LOG.info("ready (handlers wiring)")
 
-local Remotes   = RS:WaitForChild("Remotes")
-local EvStart   = Remotes:WaitForChild("KitoPickStart")    :: RemoteEvent
-local EvDecide  = Remotes:WaitForChild("KitoPickDecide")   :: RemoteEvent
-local EvResult  = Remotes:WaitForChild("KitoPickResult")   :: RemoteEvent
+-- ── Deps ─────────────────────────────────────────────────────
+local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
+local PoolEditor  = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
+local CardEngine  = require(RS:WaitForChild("SharedModules"):WaitForChild("CardEngine"))
 
--- Core（セッションの正本）
-local Core = require(SSS:WaitForChild("KitoPickCore"))
+-- ── Remotes ──────────────────────────────────────────────────
+local Remotes  = RS:WaitForChild("Remotes")
+local EvStart  = Remotes:WaitForChild("KitoPickStart")   :: RemoteEvent -- S→C (提示) / C→S (任意開始要求)
+local EvDecide = Remotes:WaitForChild("KitoPickDecide")  :: RemoteEvent -- C→S 決定
+local EvResult = Remotes:WaitForChild("KitoPickResult")  :: RemoteEvent -- S→C 結果通知
 
--- Live state（あなたの StateHub API 名に合わせてOK）
-local StateHub = require(SSS:WaitForChild("StateHub"))
-local function getLiveState(player) return StateHub.get(player) end
+-- ── Core（セッション正本）/ State ───────────────────────────
+local Core     = require(SSS:WaitForChild("KitoPickCore"))
+local StateHub = require(RS:WaitForChild("SharedModules"):WaitForChild("StateHub"))
+local function getLiveState(player: Player)
+	return StateHub.get(player)
+end
 
--- ------- 任意: C→S Start を受けた場合も Core に移譲して開始 -------
-EvStart.OnServerEvent:Connect(function(player, effectId, targetKind)
+-- ===== 任意: C→S Start を受けた場合も Core に移譲して開始 =====
+EvStart.OnServerEvent:Connect(function(player: Player, effectId: any, targetKind: any)
 	if Balance.KITO_UI_ENABLED ~= true then return end
 	local state = getLiveState(player)
 	LOG.info("[Start][REQ] u=%s eff=%s tgt=%s deck=%s",
 		player and player.Name or "?", tostring(effectId), tostring(targetKind),
-		(type(state)=="table" and type(state.deck)=="table") and #state.deck or "nil")
+		(type(state) == "table" and type(state.deck) == "table") and #state.deck or "nil"
+	)
 	Core.startFor(player, state, tostring(effectId or "kito_tori"), tostring(targetKind or "bright"))
 end)
+LOG.debug("[Wire] Start handler wired")
 
--- ------- C→S: 決定（sessionId, uid, targetKind） -------
-EvDecide.OnServerEvent:Connect(function(player, payload)
+-- ================= C→S: 決定（sessionId, uid?, targetKind, noChange?） =================
+EvDecide.OnServerEvent:Connect(function(player: Player, payload: any)
 	if Balance.KITO_UI_ENABLED ~= true then return end
 	if type(payload) ~= "table" then return end
 
 	local wantId   = tostring(payload.sessionId or "")
-	local pickUid  = tostring(payload.uid or "")
 	local target   = tostring(payload.targetKind or "bright")
-	if wantId == "" or pickUid == "" then
-		LOG.warn("[Decide][BADPAYLOAD] u=%s sid=%s uid=%s", player and player.Name or "?", wantId, pickUid)
+	local noChange = payload.noChange == true
+
+	-- uid はスキップ時は未指定でOK。空文字は nil 扱いに正規化。
+	local pickUid  = payload.uid
+	if type(pickUid) == "string" and pickUid == "" then
+		pickUid = nil
+	end
+	if pickUid ~= nil then
+		pickUid = tostring(pickUid)
+	end
+
+	-- sessionId は必須
+	if wantId == "" then
+		LOG.warn("[Decide][BADPAYLOAD] u=%s sid(empty)", player and player.Name or "?")
 		return
 	end
 
@@ -7975,44 +8334,80 @@ EvDecide.OnServerEvent:Connect(function(player, payload)
 	end
 
 	-- 以降は消費（取り出して削除）
-	local sess = Core.consume(player.UserId)
+	local sess  = Core.consume(player.UserId)
 	local state = getLiveState(player)
 	if type(state) ~= "table" or type(state.deck) ~= "table" then
 		LOG.warn("[Decide][NOSTATE] u=%s", player and player.Name or "?")
 		return
 	end
 
-	-- 変換
-	local okMut, mutInfo = PoolEditor.mutate(sess, { kind = "convertKind", targetKind = target, uids = { pickUid } })
-	if not okMut then
-		LOG.warn("[Decide][MUTATE-NG] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
-	end
-	local okCommit, reason = PoolEditor.commit(state, sess)
-
-	local label = (sess.snap and sess.snap[pickUid] and (sess.snap[pickUid].name or sess.snap[pickUid].code)) or pickUid
+	local okCommit, reason
 	local msg
-	if okCommit then
-		msg = ("酉：%s を %s に変換しました（確定）"):format(label, target)
-		LOG.info("[Decide][OK] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+
+	-- ★ 追加: スキップ（変更なし確定）分岐
+	if noChange then
+		-- mutate しない＝差分なしのまま commit（セッションの終了処理を一元化）
+		okCommit, reason = PoolEditor.commit(state, sess)
+		if okCommit then
+			msg = "酉：変更せずに確定しました"
+			LOG.info("[Decide][SKIP][OK] u=%s sid=%s tgt=%s", player and player.Name or "?", wantId, target)
+		else
+			msg = ("酉：変更なし確定に失敗しました（%s）"):format(tostring(reason))
+			LOG.warn("[Decide][SKIP][COMMIT-NG] u=%s sid=%s reason=%s", player and player.Name or "?", wantId, tostring(reason))
+		end
+
 	else
-		msg = ("酉：変換に失敗しました（%s）"):format(tostring(reason))
-		LOG.warn("[Decide][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
-			player and player.Name or "?", wantId, pickUid, target, tostring(reason))
+		-- 通常の “カードを選んだ” 分岐
+		if not pickUid then
+			LOG.warn("[Decide][BADPAYLOAD] u=%s sid=%s uid=nil", player and player.Name or "?", wantId)
+			EvResult:FireClient(player, { ok=false, message="対象が選ばれていません", targetKind=target })
+			return
+		end
+
+		-- 変換（対象1枚）
+		local okMut = false
+		okMut = select(1, PoolEditor.mutate(sess, {
+			kind       = "convertKind",
+			targetKind = target,
+			uids       = { pickUid },
+		}))
+
+		if not okMut then
+			LOG.warn("[Decide][MUTATE-NG] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+		end
+
+		okCommit, reason = PoolEditor.commit(state, sess)
+
+		local label = (sess.snap and sess.snap[pickUid] and (sess.snap[pickUid].name or sess.snap[pickUid].code)) or pickUid
+		if okCommit then
+			msg = ("酉：%s を %s に変換しました（確定）"):format(label, target)
+			LOG.info("[Decide][OK] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+		else
+			msg = ("酉：変換に失敗しました（%s）"):format(tostring(reason))
+			LOG.warn("[Decide][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
+				player and player.Name or "?", wantId, pickUid, target, tostring(reason))
+		end
 	end
 
 	-- クライアントへ結果
-	EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
+	EvResult:FireClient(player, {
+		ok         = okCommit == true,
+		message    = msg,
+		targetKind = target,
+	})
 
 	-- 屋台再描画（notice に結果掲載）
-	local ShopService = require(SSS:WaitForChild("ShopService"))
+	local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
 	ShopService.open(player, state, { notice = msg })
 end)
+LOG.debug("[Wire] Decide handler wired")
 
--- ------- プレイヤー離脱で掃除（Core 側は startFor/consume 管理なので明示不要だが念のため） -------
-Players.PlayerRemoving:Connect(function(p)
+-- ================= Cleanup =================
+Players.PlayerRemoving:Connect(function(p: Player)
 	Core.consume(p.UserId) -- 存在すれば破棄
 	LOG.debug("[Cleanup] user left; consumed any pending session for uid=%s", tostring(p.UserId))
 end)
+LOG.debug("[Wire] PlayerRemoving cleanup wired")
 ```
 
 ### src/server/NavServer.lua

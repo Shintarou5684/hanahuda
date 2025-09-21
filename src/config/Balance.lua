@@ -13,10 +13,10 @@ Balance.KITO_POOL_TTL_SEC   = 45  -- セッション有効秒数（開始→決�
 --   true : UIでプレイヤーが選択（Shop購入後に候補を提示）
 Balance.KITO_UI_ENABLED     = true
 
--- ▼ UIが未実装の間だけ使う自動決定フラグ（KitoPickWires で参照）
+-- ▼ 本UIを使うため、自動決定は無効化
 --   true : 候補受信後にクライアントが自動で1枚決定→Decide送信
 --   false: 自動決定をしない（本UIでの手動選択を想定）
-Balance.KITO_UI_AUTO_DECIDE = true
+Balance.KITO_UI_AUTO_DECIDE = false
 
 -- ▼ 自動選択モード時の選択枚数（酉：1枚変換などは通常1）
 Balance.KITO_AUTO_PICK_COUNT = 1

@@ -1,9 +1,5 @@
 -- StarterPlayerScripts/UI/ClientMain.client.lua
 -- v0.9.6-P1-3 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
--- 仕様メモ:
---   * <ShopOpen> は **ClientMainのみ** で受信し、Router.show("shop", payload) に一本化。
---   * 言語コードは外部公開を "ja"/"en" に統一（"jp" を受信した場合は "ja" へ正規化して警告）
---   * print/warn を共通 Logger に置換（公開時は閾値で抑止可能）
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -13,9 +9,8 @@ local Remotes = RS:WaitForChild("Remotes")
 -- Logger
 --========================
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
-local LOG    = Logger.scope("ClientMain")  -- ★ for → scope に変更
+local LOG    = Logger.scope("ClientMain")
 
--- 公開ビルドで抑止したい場合は INFO/WARN へ（Studioは Logger.DEBUG にしてもOK）
 Logger.configure({
 	level = Logger.INFO,
 	timePrefix = true,
@@ -44,7 +39,6 @@ if not okLocale or type(Locale) ~= "table" then
 	end
 end
 
--- 共通ユーティリティ（jp→ja / 不明は nil）
 local LocaleUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
 
 --========================
@@ -85,12 +79,12 @@ local ReqSetLang     = Remotes:WaitForChild("ReqSetLang")
 local DevGrantRyo  = Remotes:FindFirstChild("DevGrantRyo")
 local DevGrantRole = Remotes:FindFirstChild("DevGrantRole")
 
--- ▼ レガシー（任意）：存在すれば Nav のバックアップ経路に使う
+-- レガシー（任意）
 local GoHome   = Remotes:FindFirstChild("GoHome")
 local GoNext   = Remotes:FindFirstChild("GoNext")
 local SaveQuit = Remotes:FindFirstChild("SaveQuit")
 
--- ▼ Nav の生成（正準は DecideNext、レガシーは互換のみ）
+-- Nav
 local Nav = NavClient.new(DecideNext, {
 	GoHome   = GoHome,
 	GoNext   = GoNext,
@@ -116,14 +110,18 @@ do
 	mod.setDeps = (type(mod.setDeps) == "function") and mod.setDeps or function(_) end
 	mod.show    = (type(mod.show)    == "function") and mod.show    or function(_) end
 	mod.call    = (type(mod.call)    == "function") and mod.call    or function() end
+	-- ★ register を使うので、存在しない場合は安全な no-op を入れておく
+	mod.register = (type(mod.register) == "function") and mod.register or function() end
 	Router = mod
 end
 
+-- ★ KitoPick を正式登録（他画面と同列）
 local Screens = {
-	home   = require(ScreensFolder:WaitForChild("HomeScreen")),
-	run    = require(ScreensFolder:WaitForChild("RunScreen")),
-	shop   = require(ScreensFolder:WaitForChild("ShopScreen")),
-	shrine = require(ScreensFolder:WaitForChild("ShrineScreen")),
+	home     = require(ScreensFolder:WaitForChild("HomeScreen")),
+	run      = require(ScreensFolder:WaitForChild("RunScreen")),
+	shop     = require(ScreensFolder:WaitForChild("ShopScreen")),
+	shrine   = require(ScreensFolder:WaitForChild("ShrineScreen")),
+	kitoPick = require(ScreensFolder:WaitForChild("KitoPickView")), -- ← 追加
 }
 Router.init(Screens)
 
@@ -136,10 +134,10 @@ Router.setDeps({
 	HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 	StageResult=StageResult,
 
-	-- ▼ 追加：UI層へ Nav を配布（ResultModal → Nav.next("home"|"next"|"save")）
+	-- UI層へ Nav を配布
 	Nav = Nav,
 
-	-- ★ P0-7: トーストタイトルをロケールで切替（"jp" は受けたら "ja" として扱う）
+	-- トースト
 	toast = function(msg, dur)
 		pcall(function()
 			local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
@@ -154,7 +152,6 @@ Router.setDeps({
 		end)
 	end,
 
-	-- 参考：既存 remotes マップ（互換のためそのまま維持）
 	remotes = {
 		Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
 		ShopDone=ShopDone, BuyItem=BuyItem, ShopReroll=ShopReroll,
@@ -162,13 +159,11 @@ Router.setDeps({
 		HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 		StageResult=StageResult, DecideNext=DecideNext, ReqSetLang=ReqSetLang,
 		DevGrantRyo=DevGrantRyo, DevGrantRole=DevGrantRole,
-		-- （必要なら）Nav もここへ見せたい場合は次行を有効化
-		-- Nav = Nav,
 	},
 })
 
 --========================================
--- S→C 配線（P0-5: ShopOpenはここだけ）
+-- S→C 配線（ShopOpen はここだけ）
 --========================================
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
@@ -180,9 +175,7 @@ HomeOpen.OnClientEvent:Connect(function(payload)
 end)
 
 ShopOpen.OnClientEvent:Connect(function(payload)
-	-- P0-5: ClientMain が唯一の <ShopOpen> 受口
 	local p = payload or {}
-	-- 言語が来ていない場合は共有言語、"jp" が来たら "ja" に正規化
 	if p.lang == nil then
 		p.lang = (Locale.getGlobal and Locale.getGlobal()) or "en"
 	end

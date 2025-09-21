@@ -1,10 +1,11 @@
 -- StarterPlayerScripts/UI/ScreenRouter.lua
 -- シンプルな画面ルーター：同じ画面への show は再実行しない（ちらつき対策）
--- v0.9.4 (P1-3 logger):
+-- v0.9.5 (P1-4):
 --  - current==name の場合、非表示ループを完全スキップ（ちらつきゼロ）
 --  - Enabled/Visible を型ガードして安全化（ScreenGui/GuiObject 両対応）
 --  - setData → updateOrShow だけ行う
 --  - Logger 導入（print/warn を LOG.* に置換）
+--  - register(name, module) を追加（動的登録に対応）
 --  - ログ例: LOG.debug("Router.show updated same screen for %s", name)
 
 local Router = {}
@@ -58,6 +59,28 @@ function Router.setDeps(d)
 		end
 	end
 	LOG.debug("deps set (playerGui=%s)", tostring(_deps and _deps.playerGui))
+end
+
+--==================================================
+-- 動的登録
+--==================================================
+function Router.register(name: string, module)
+	if type(name) ~= "string" or name == "" then
+		LOG.warn("register: invalid name: %s", tostring(name))
+		return false
+	end
+	if module == nil then
+		LOG.warn("register: module is nil for '%s'", name)
+		return false
+	end
+	_map = _map or {}
+	local existed = _map[name] ~= nil
+	_map[name] = module
+	LOG.debug("registered screen '%s'%s", name, existed and " (overwrote)" or "")
+	-- 既に生成済みのインスタンスがある場合は、そのまま維持（安全第一）
+	-- 差し替えが必要なケースは、呼び出し側で Router.ensure を使って再生成するか、
+	-- 旧インスタンスの明示破棄を行ってください。
+	return true
 end
 
 --==================================================

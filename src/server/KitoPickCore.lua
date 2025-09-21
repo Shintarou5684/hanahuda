@@ -11,16 +11,23 @@ local LOG        = Logger.scope("KitoPickCore")
 local Remotes   = RS:WaitForChild("Remotes")
 local EvStart   = Remotes:WaitForChild("KitoPickStart") -- RemoteEvent
 
+-- 画像ルックアップ（存在しない環境でも落ちないようにフォールバック）
+local CardImageMap do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
+	end)
+	if ok and type(mod) == "table" then
+		CardImageMap = mod
+	else
+		CardImageMap = { get = function(_) return nil end }
+		LOG.debug("CardImageMap not found; images will be omitted")
+	end
+end
+
 local Core = {}
 
 -- ユーザー別セッション保持
 local sessions: {[number]: any} = {}
-
--- 送信用サマリ
-local function summarize(e)
-	if type(e) ~= "table" then return nil end
-	return { uid=e.uid, code=e.code, name=e.name, kind=e.kind, month=e.month }
-end
 
 -- 便宜: 先頭N件のUIDを "uid1,uid2,..." で返す
 local function headUidList(uids: {string}?, n: number)
@@ -31,6 +38,55 @@ local function headUidList(uids: {string}?, n: number)
 		end
 	end
 	return table.concat(out, ",")
+end
+
+-- 月の推定（code/uid の先頭2桁から 1..12 を推定、無ければ nil）
+local function guessMonth(e: any): number?
+	local s = tostring((e and (e.code or e.uid)) or "")
+	local two = string.match(s, "^(%d%d)")
+	if not two then return nil end
+	local n = tonumber(two)
+	if n and n >= 1 and n <= 12 then return n end
+	return nil
+end
+
+-- 送信用サマリ（画像＋eligible付与）
+local function summarize(e: any, tgtKind: string, policy: string)
+	if type(e) ~= "table" then return nil end
+	local code = tostring(e.code or "")
+
+	-- 画像の解決（CardImageMap.get は "rbxassetid://..." 文字列 or 数値ID を想定）
+	local img = nil
+	local ok, got = pcall(function()
+		if type(CardImageMap.get) == "function" then
+			return CardImageMap.get(code)
+		end
+	end)
+	if ok then img = got end
+
+	-- eligible（同種かつ"block"なら不可）
+	local same = tostring(e.kind) == tostring(tgtKind or "")
+	local eligible = true
+	if policy == "block" then
+		eligible = not same
+	end
+
+	local sum = {
+		uid      = e.uid,
+		code     = code,
+		name     = e.name,
+		kind     = e.kind,
+		month    = e.month or guessMonth(e),
+		eligible = eligible,
+	}
+
+	if type(img) == "string" then
+		sum.image = img                  -- 例: "rbxassetid://123456" or https://...
+	elseif type(img) == "number" or tonumber(img) then
+		sum.imageId = tonumber(img)      -- 数値IDなら imageId で渡す（クライアントで rbxassetid:// を付与）
+	end
+
+	return sum
 end
 
 -- 公開: 現在のセッション（あれば）を見る
@@ -93,15 +149,17 @@ function Core.startFor(player: Player, state: any, effectId: string, targetKind:
 	-- セーブ（上書き）
 	put(player.UserId, sess)
 
-	-- 要約を作成
+	-- 要約を作成（画像＋eligible付き）
 	local list = {}
 	local sameKind, otherKind = 0, 0
 	local tgtKind = targetKind or "bright"
+	local policy  = Balance.KITO_SAME_KIND_POLICY or "block"
+
 	for _, uid in ipairs(sess.uids) do
 		local e = sess.snap[uid]
 		if e then
 			if e.kind == tgtKind then sameKind += 1 else otherKind += 1 end
-			local sum = summarize(e)
+			local sum = summarize(e, tgtKind, policy)
 			if sum then table.insert(list, sum) end
 		end
 	end
@@ -113,7 +171,7 @@ function Core.startFor(player: Player, state: any, effectId: string, targetKind:
 		expiresAt  = sess.expiresAt,
 		effectId   = effectId,
 		targetKind = tgtKind,
-		list       = list,
+		list       = list, -- ← 各要素に image / imageId / eligible を含む
 	}
 	EvStart:FireClient(player, payload)
 
