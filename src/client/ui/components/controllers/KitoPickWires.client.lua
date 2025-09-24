@@ -31,7 +31,7 @@ script:SetAttribute("wired", true)
 -- ─────────────────────────────────────────────────────────────
 -- 設定
 -- ─────────────────────────────────────────────────────────────
-local AUTO_DECIDE = (Balance.KITO_UI_AUTO_DECIDE ~= false)  -- 本UIでは false を想定
+local AUTO_DECIDE = (Balance.KITO_UI_AUTO_DECIDE == true)   -- 明示 true のときのみ自動決定
 local ENABLED     = (Balance.KITO_UI_ENABLED == true)
 
 -- ─────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-21 18:59:37
+- Generated: 2025-09-22 11:12:12
 - Max lines/file: 300
 
 ## Folder Tree
@@ -795,7 +795,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-21 18:59:37
+- Generated: 2025-09-22 11:12:12
 - Max lines/file: 300
 
 ## Folder Tree
@@ -1960,7 +1960,7 @@ script:SetAttribute("wired", true)
 -- ─────────────────────────────────────────────────────────────
 -- 設定
 -- ─────────────────────────────────────────────────────────────
-local AUTO_DECIDE = (Balance.KITO_UI_AUTO_DECIDE ~= false)  -- 本UIでは false を想定
+local AUTO_DECIDE = (Balance.KITO_UI_AUTO_DECIDE == true)   -- 明示 true のときのみ自動決定
 local ENABLED     = (Balance.KITO_UI_ENABLED == true)
 
 -- ─────────────────────────────────────────────────────────────
@@ -5511,6 +5511,7 @@ function Home.new(deps)
 -- src/client/ui/screens/KitoPickView.lua
 -- 目的: KitoPick の12枚一覧UI・効果説明＋カード画像＆情報表示・確定／スキップ
 -- 仕様: KitoPickWires の ClientSignals を購読し、シグナル受信時に Router 経由で表示
+-- 方針: 「選択可否の真実はサーバ」。各候補の entry.eligible を厳守して UI でブロックする。
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -5564,7 +5565,7 @@ local KIND_JP = {
 local MONTH_JP = { "1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月" }
 
 local function parseMonth(entry)
-	-- entry.meta?.month 優先 → code/uid 先頭2桁
+	-- Core から渡される month を最優先 → code/uid 先頭2桁を推定
 	local m = tonumber(entry.month or (entry.meta and entry.meta.month))
 	if m and m>=1 and m<=12 then return m end
 	local s = tostring(entry.code or entry.uid or "")
@@ -5620,7 +5621,7 @@ local function ensureGui()
 	}, panel)
 
 	-- タイトル
-	local title = make("Title","TextLabel",{
+	make("Title","TextLabel",{
 		Text                   = "KITO: Pick a card",
 		Font                   = Enum.Font.GothamBold,
 		TextSize               = 22,
@@ -5644,7 +5645,7 @@ local function ensureGui()
 
 	local gridHolder = make("GridHolder","Frame",{
 		BackgroundTransparency = 1,
-		Position               = UDim2.new(0, 0, 0, 28 + 6 + 40 + 8), -- デフォ仮値（効果説明の実高さで後で更新）
+		Position               = UDim2.new(0, 0, 0, 28 + 6 + 40 + 8), -- 仮（effect 実高さで後更新）
 		Size                   = UDim2.new(1, 0, 1, -(28+6+40+8) - 84),
 	}, panel)
 
@@ -5662,7 +5663,7 @@ local function ensureGui()
 		Size = UDim2.new(1,0,1,0),
 	}, scroll)
 
-	-- 画像＋情報カード用に少し大きめ
+	-- 画像＋情報カード用
 	local layout = make("UIGrid","UIGridLayout",{
 		CellPadding          = UDim2.fromOffset(12,12),
 		CellSize             = UDim2.fromOffset(180, 160),
@@ -5718,7 +5719,6 @@ local function ensureGui()
 	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, confirm)
 
 	-- 参照
-	refs.title      = title
 	refs.effect     = effect
 	refs.gridHolder = gridHolder
 	refs.scroll     = scroll
@@ -5738,7 +5738,7 @@ local function relayoutByEffectHeight()
 	local baseBelow = 84 -- フッタ確保高さ
 	local effect    = refs.effect
 
-	-- 実際の必要高さを取得（TextWrapped=true なので TextBounds.Y を利用）
+	-- 実高さ（TextWrapped=true → TextBounds.Y 利用）
 	local needH = math.max(22, math.ceil(effect.TextBounds.Y))
 	effect.Size = UDim2.new(1, 0, 0, needH)
 
@@ -5758,7 +5758,7 @@ local function resolveImage(entry)
 	return nil
 end
 
--- カードの選択見た目を更新（UIStroke を使う）
+-- カードの選択見た目（UIStroke で選択枠）
 local function setCardSelected(btn: Instance, sel: boolean)
 	if not btn or not btn:IsA("TextButton") then return end
 	btn.BackgroundColor3 = sel and Color3.fromRGB(70,110,210) or Color3.fromRGB(40,42,54)
@@ -5766,6 +5766,28 @@ local function setCardSelected(btn: Instance, sel: boolean)
 	if stroke and stroke:IsA("UIStroke") then
 		stroke.Enabled = sel
 	end
+end
+
+-- 「対象外」オーバーレイ（eligible=false 用）
+local function makeIneligibleOverlay(parent)
+	local mask = Instance.new("Frame")
+	mask.Name = "IneligibleMask"
+	mask.BackgroundColor3 = Color3.new(0,0,0)
+	mask.BackgroundTransparency = 0.45
+	mask.BorderSizePixel = 0
+	mask.Size = UDim2.fromScale(1,1)
+	mask.ZIndex = 5
+	mask.Parent = parent
+
+	local tag = Instance.new("TextLabel")
+	tag.BackgroundTransparency = 1
+	tag.Size = UDim2.fromScale(1,1)
+	tag.Text = "対象外"
+	tag.Font = Enum.Font.GothamBold
+	tag.TextSize = 18
+	tag.TextColor3 = Color3.fromRGB(230,230,240)
+	tag.ZIndex = 6
+	tag.Parent = mask
 end
 
 -- カードボタン作成（画像＋情報）
@@ -5786,28 +5808,6 @@ local function makeCard(entry)
 	stroke.Thickness = 2
 	stroke.Color = Color3.fromRGB(90,130,230)
 	stroke.Enabled = false
-	stroke.Parent = card
-
-	-- 画像
-	local img = Instance.new("ImageLabel")
-	img.Name                   = "Thumb"
-	img.Size                   = UDim2.fromOffset(180, 112)
-	img.Position               = UDim2.new(0,0,0,0)
-	img.BackgroundTransparency = 1
-	img.BorderSizePixel        = 0
-	img.ScaleType              = Enum.ScaleType.Fit
-	img.Parent                 = card
-	local src = resolveImage(entry)
-	if src then
-		img.Image = src
-	else
-		img.BackgroundTransparency = 0
-		img.BackgroundColor3 = Color3.fromRGB(55,57,69)
-	end
-
-	-- 名称
-	local nameLabel = Instance.new("TextLabel")
-	nameLabel.Name                   = "Name"
 ... (truncated)
 ```
 
@@ -8129,16 +8129,23 @@ local LOG        = Logger.scope("KitoPickCore")
 local Remotes   = RS:WaitForChild("Remotes")
 local EvStart   = Remotes:WaitForChild("KitoPickStart") -- RemoteEvent
 
+-- 画像ルックアップ（存在しない環境でも落ちないようにフォールバック）
+local CardImageMap do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
+	end)
+	if ok and type(mod) == "table" then
+		CardImageMap = mod
+	else
+		CardImageMap = { get = function(_) return nil end }
+		LOG.debug("CardImageMap not found; images will be omitted")
+	end
+end
+
 local Core = {}
 
 -- ユーザー別セッション保持
 local sessions: {[number]: any} = {}
-
--- 送信用サマリ
-local function summarize(e)
-	if type(e) ~= "table" then return nil end
-	return { uid=e.uid, code=e.code, name=e.name, kind=e.kind, month=e.month }
-end
 
 -- 便宜: 先頭N件のUIDを "uid1,uid2,..." で返す
 local function headUidList(uids: {string}?, n: number)
@@ -8149,6 +8156,55 @@ local function headUidList(uids: {string}?, n: number)
 		end
 	end
 	return table.concat(out, ",")
+end
+
+-- 月の推定（code/uid の先頭2桁から 1..12 を推定、無ければ nil）
+local function guessMonth(e: any): number?
+	local s = tostring((e and (e.code or e.uid)) or "")
+	local two = string.match(s, "^(%d%d)")
+	if not two then return nil end
+	local n = tonumber(two)
+	if n and n >= 1 and n <= 12 then return n end
+	return nil
+end
+
+-- 送信用サマリ（画像＋eligible付与）
+local function summarize(e: any, tgtKind: string, policy: string)
+	if type(e) ~= "table" then return nil end
+	local code = tostring(e.code or "")
+
+	-- 画像の解決（CardImageMap.get は "rbxassetid://..." 文字列 or 数値ID を想定）
+	local img = nil
+	local ok, got = pcall(function()
+		if type(CardImageMap.get) == "function" then
+			return CardImageMap.get(code)
+		end
+	end)
+	if ok then img = got end
+
+	-- eligible（同種かつ"block"なら不可）
+	local same = tostring(e.kind) == tostring(tgtKind or "")
+	local eligible = true
+	if policy == "block" then
+		eligible = not same
+	end
+
+	local sum = {
+		uid      = e.uid,
+		code     = code,
+		name     = e.name,
+		kind     = e.kind,
+		month    = e.month or guessMonth(e),
+		eligible = eligible,
+	}
+
+	if type(img) == "string" then
+		sum.image = img                  -- 例: "rbxassetid://123456" or https://...
+	elseif type(img) == "number" or tonumber(img) then
+		sum.imageId = tonumber(img)      -- 数値IDなら imageId で渡す（クライアントで rbxassetid:// を付与）
+	end
+
+	return sum
 end
 
 -- 公開: 現在のセッション（あれば）を見る
@@ -8211,15 +8267,17 @@ function Core.startFor(player: Player, state: any, effectId: string, targetKind:
 	-- セーブ（上書き）
 	put(player.UserId, sess)
 
-	-- 要約を作成
+	-- 要約を作成（画像＋eligible付き）
 	local list = {}
 	local sameKind, otherKind = 0, 0
 	local tgtKind = targetKind or "bright"
+	local policy  = Balance.KITO_SAME_KIND_POLICY or "block"
+
 	for _, uid in ipairs(sess.uids) do
 		local e = sess.snap[uid]
 		if e then
 			if e.kind == tgtKind then sameKind += 1 else otherKind += 1 end
-			local sum = summarize(e)
+			local sum = summarize(e, tgtKind, policy)
 			if sum then table.insert(list, sum) end
 		end
 	end
@@ -8231,7 +8289,7 @@ function Core.startFor(player: Player, state: any, effectId: string, targetKind:
 		expiresAt  = sess.expiresAt,
 		effectId   = effectId,
 		targetKind = tgtKind,
-		list       = list,
+		list       = list, -- ← 各要素に image / imageId / eligible を含む
 	}
 	EvStart:FireClient(player, payload)
 
@@ -8306,6 +8364,7 @@ EvDecide.OnServerEvent:Connect(function(player: Player, payload: any)
 	local wantId   = tostring(payload.sessionId or "")
 	local target   = tostring(payload.targetKind or "bright")
 	local noChange = payload.noChange == true
+	local policy   = tostring(Balance.KITO_SAME_KIND_POLICY or "block") -- "block" | "auto-skip" | "complete"
 
 	-- uid はスキップ時は未指定でOK。空文字は nil 扱いに正規化。
 	local pickUid  = payload.uid
@@ -8322,7 +8381,7 @@ EvDecide.OnServerEvent:Connect(function(player: Player, payload: any)
 		return
 	end
 
-	-- Core のセッションを参照（存在＆ID一致チェック）
+	-- Core のセッションを参照（存在＆ID一致チェック）※ここでは consume しない
 	local peek = Core.peek(player.UserId)
 	if not peek then
 		LOG.warn("[Decide][NOSESS] u=%s sid=%s (peek=nil)", player and player.Name or "?", wantId)
@@ -8333,21 +8392,17 @@ EvDecide.OnServerEvent:Connect(function(player: Player, payload: any)
 		return
 	end
 
-	-- 以降は消費（取り出して削除）
-	local sess  = Core.consume(player.UserId)
 	local state = getLiveState(player)
 	if type(state) ~= "table" or type(state.deck) ~= "table" then
 		LOG.warn("[Decide][NOSTATE] u=%s", player and player.Name or "?")
 		return
 	end
 
-	local okCommit, reason
-	local msg
-
-	-- ★ 追加: スキップ（変更なし確定）分岐
+	-- ★ 分岐1: スキップ（変更なし確定）
 	if noChange then
-		-- mutate しない＝差分なしのまま commit（セッションの終了処理を一元化）
-		okCommit, reason = PoolEditor.commit(state, sess)
+		local sess = Core.consume(player.UserId) -- セッションを閉じる
+		local okCommit, reason = PoolEditor.commit(state, sess)
+		local msg
 		if okCommit then
 			msg = "酉：変更せずに確定しました"
 			LOG.info("[Decide][SKIP][OK] u=%s sid=%s tgt=%s", player and player.Name or "?", wantId, target)
@@ -8355,38 +8410,89 @@ EvDecide.OnServerEvent:Connect(function(player: Player, payload: any)
 			msg = ("酉：変更なし確定に失敗しました（%s）"):format(tostring(reason))
 			LOG.warn("[Decide][SKIP][COMMIT-NG] u=%s sid=%s reason=%s", player and player.Name or "?", wantId, tostring(reason))
 		end
+		EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
+		local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
+		ShopService.open(player, state, { notice = msg })
+		return
+	end
 
-	else
-		-- 通常の “カードを選んだ” 分岐
-		if not pickUid then
-			LOG.warn("[Decide][BADPAYLOAD] u=%s sid=%s uid=nil", player and player.Name or "?", wantId)
-			EvResult:FireClient(player, { ok=false, message="対象が選ばれていません", targetKind=target })
+	-- ★ 分岐2: 通常決定（カード指定が必要）
+	if not pickUid then
+		LOG.warn("[Decide][BADPAYLOAD] u=%s sid=%s uid=nil", player and player.Name or "?", wantId)
+		EvResult:FireClient(player, { ok=false, message="対象が選ばれていません", targetKind=target })
+		return
+	end
+
+	-- 候補の正当性を peek で確認（eligible チェックは“同種かどうか”でサーバ側もガード）
+	local entry = peek.snap and peek.snap[pickUid]
+	if not entry then
+		LOG.warn("[Decide][NOTINPOOL] u=%s sid=%s uid=%s (not in snapshot)", player and player.Name or "?", wantId, pickUid)
+		EvResult:FireClient(player, { ok=false, message="候補に存在しないカードです", targetKind=target })
+		return
+	end
+
+	local isSameKind = tostring(entry.kind) == target
+
+	-- ポリシー適用
+	if isSameKind then
+		if policy == "block" then
+			-- 対象外：セッションは維持（consume しない）
+			LOG.debug("[Decide][BLOCK] u=%s sid=%s uid=%s kind=%s tgt=%s",
+				player and player.Name or "?", wantId, pickUid, tostring(entry.kind), target)
+			EvResult:FireClient(player, {
+				ok=false,
+				message="対象外のカードです（同種は選べません）",
+				targetKind=target,
+			})
+			return
+		elseif policy == "auto-skip" or policy == "complete" then
+			-- ノーオペ確定（セッション終了）
+			local sess = Core.consume(player.UserId)
+			local okCommit, reason = PoolEditor.commit(state, sess)
+			local label = (entry.name or entry.code or pickUid)
+			local msg
+			if okCommit then
+				if policy == "auto-skip" then
+					msg = "酉：同種を選択したため、変更せずに確定しました"
+				else
+					msg = ("酉：%s を対象に実行しました（同種：変化なし）"):format(label)
+				end
+				LOG.info("[Decide][SAME][%s][OK] u=%s sid=%s uid=%s tgt=%s",
+					policy, player and player.Name or "?", wantId, pickUid, target)
+			else
+				msg = ("酉：処理に失敗しました（%s）"):format(tostring(reason))
+				LOG.warn("[Decide][SAME][%s][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
+					policy, player and player.Name or "?", wantId, pickUid, target, tostring(reason))
+			end
+			EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
+			local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
+			ShopService.open(player, state, { notice = msg })
 			return
 		end
+	end
 
-		-- 変換（対象1枚）
-		local okMut = false
-		okMut = select(1, PoolEditor.mutate(sess, {
-			kind       = "convertKind",
-			targetKind = target,
-			uids       = { pickUid },
-		}))
+	-- ★ 分岐3: 異種変換（通常フロー）
+	local sess  = Core.consume(player.UserId) -- ここで消費
+	-- mutate（対象1枚）
+	local okMut = select(1, PoolEditor.mutate(sess, {
+		kind       = "convertKind",
+		targetKind = target,
+		uids       = { pickUid },
+	}))
+	if not okMut then
+		LOG.warn("[Decide][MUTATE-NG] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+	end
 
-		if not okMut then
-			LOG.warn("[Decide][MUTATE-NG] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
-		end
-
-		okCommit, reason = PoolEditor.commit(state, sess)
-
-		local label = (sess.snap and sess.snap[pickUid] and (sess.snap[pickUid].name or sess.snap[pickUid].code)) or pickUid
-		if okCommit then
-			msg = ("酉：%s を %s に変換しました（確定）"):format(label, target)
-			LOG.info("[Decide][OK] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
-		else
-			msg = ("酉：変換に失敗しました（%s）"):format(tostring(reason))
-			LOG.warn("[Decide][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
-				player and player.Name or "?", wantId, pickUid, target, tostring(reason))
-		end
+	local okCommit, reason = PoolEditor.commit(state, sess)
+	local label = (sess.snap and sess.snap[pickUid] and (sess.snap[pickUid].name or sess.snap[pickUid].code)) or pickUid
+	local msg
+	if okCommit then
+		msg = ("酉：%s を %s に変換しました（確定）"):format(label, target)
+		LOG.info("[Decide][OK] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+	else
+		msg = ("酉：変換に失敗しました（%s）"):format(tostring(reason))
+		LOG.warn("[Decide][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
+			player and player.Name or "?", wantId, pickUid, target, tostring(reason))
 	end
 
 	-- クライアントへ結果
