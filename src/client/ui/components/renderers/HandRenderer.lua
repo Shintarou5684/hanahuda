@@ -1,123 +1,18 @@
 -- StarterPlayerScripts/UI/components/renderers/HandRenderer.lua
 -- 手札を描画。selectedIndex のハイライトは内部で管理（縁取りは使わず影だけで強調）
+-- v0.9.7-P1-5: DeckViewAdapter 一括VM化 / フッタ＆画像決定は CardNode に委譲
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = ReplicatedStorage:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
-local Locale = require(Config:WaitForChild("Locale"))
+
+local Shared      = ReplicatedStorage:WaitForChild("SharedModules")
+local DeckViewAdapter = require(Shared:WaitForChild("Deck"):WaitForChild("DeckViewAdapter"))
 
 local components = script.Parent.Parent
 local CardNode   = require(components:WaitForChild("CardNode"))
 
 local M = {}
-
---========================
--- 言語/フッタユーティリティ
---========================
-local function _lang()
-	-- "jp" を "ja" に正規化。取得不可時は "en"
-	local v = nil
-	if typeof(Locale.getGlobal) == "function" then
-		local ok, g = pcall(Locale.getGlobal); if ok then v = g end
-	end
-	if v == nil and typeof(Locale.pick) == "function" then
-		local ok, p = pcall(Locale.pick); if ok then v = p end
-	end
-	v = tostring(v or "en"):lower()
-	if v == "jp" then return "ja" end
-	if v == "ja" or v == "en" then return v end
-	return "en"
-end
-
-local function _catEn(v)
-	v = tostring(v or ""):lower()
-	if v=="光" or v=="ひかり" or v=="hikari" or v=="bright" then return "Bright" end
-	if v=="タネ" or v=="種" or v=="tane" or v=="seed"   then return "Seed"   end
-	if v=="短冊" or v=="ribbon"                         then return "Ribbon" end
-	if v=="カス" or v=="kasu" or v=="chaff"            then return "Chaff"  end
-	return v
-end
-
-local function _catJp(v)
-	v = tostring(v or ""):lower()
-	if v=="bright" or v=="光"                 then return "光"   end
-	if v=="seed"   or v=="タネ" or v=="種"   then return "タネ" end
-	if v=="ribbon" or v=="短冊"               then return "短冊" end
-	if v=="chaff"  or v=="kasu" or v=="カス" then return "カス"  end
-	return v
-end
-
--- JP: "11月/タネ" / EN: "11/Seed"（英語は「月」を省く）
-local function makeFooterText(monthNum, cat, lang)
-	local m = tonumber(monthNum)
-	local mStr = m and tostring(m) or ""
-	if lang == "en" then
-		local catEn = _catEn(cat)
-		if mStr ~= "" and catEn ~= "" then
-			return string.format("%s/%s", mStr, catEn)
-		elseif mStr ~= "" then
-			return mStr
-		else
-			return catEn
-		end
-	else
-		local catJp = _catJp(cat)
-		if mStr ~= "" and catJp ~= "" then
-			return string.format("%s月/%s", mStr, catJp)
-		elseif mStr ~= "" then
-			return (mStr .. "月")
-		else
-			return catJp
-		end
-	end
-end
-
--- カード下部にフッタ（カード幅いっぱい）
-local function addFooter(node: Instance, text: string, kindForColor: string?)
-	-- 既存削除
-	local old = node:FindFirstChild("Footer")
-	if old then old:Destroy() end
-
-	local C = (Theme and Theme.COLORS) or {}
-	local badgeH = (Theme and Theme.SIZES and Theme.SIZES.BadgeH) or 26
-
-	local footer = Instance.new("Frame")
-	footer.Name = "Footer"
-	footer.Parent = node
-	footer.AnchorPoint = Vector2.new(0,1)
-	-- 下に 2px の余白を残して、幅は常にカードと同じ
-	footer.Position = UDim2.new(0, 0, 1, -2)
-	footer.Size = UDim2.new(1, 0, 0, badgeH)
-	footer.BackgroundColor3 = C.BadgeBg or Color3.fromRGB(25,28,36)
-	footer.BackgroundTransparency = 0.15
-	footer.BorderSizePixel = 0
-	footer.ZIndex = 10
-	footer.ClipsDescendants = true
-
-	local uic = Instance.new("UICorner"); uic.CornerRadius = UDim.new(0, (Theme and Theme.PANEL_RADIUS) or 10); uic.Parent = footer
-	local stroke = Instance.new("UIStroke"); stroke.Color = C.BadgeStroke or Color3.fromRGB(60,65,80); stroke.Thickness = 1; stroke.Parent = footer
-
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft   = UDim.new(0, 6)
-	pad.PaddingRight  = UDim.new(0, 6)
-	pad.PaddingTop    = UDim.new(0, 2)
-	pad.PaddingBottom = UDim.new(0, 2)
-	pad.Parent = footer
-
-	local label = Instance.new("TextLabel")
-	label.Name = "Text"
-	label.Parent = footer
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.new(1, 0, 1, 0)
-	label.Text = tostring(text or "")
-	label.Font = Enum.Font.GothamMedium
-	label.TextScaled = true
-	-- 役種に応じたバッジ文字色（Theme.colorForKind）。該当なしは白。
-	local badgeTextColor = (type(Theme.colorForKind)=="function" and Theme.colorForKind(kindForColor or "")) or Color3.fromRGB(235,235,235)
-	label.TextColor3 = badgeTextColor
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.ZIndex = 11
-end
 
 --========================
 -- 選択ハイライト（縁取りは使わない）
@@ -186,8 +81,11 @@ function M.render(container: Instance, hand: {any}?, opts: {width:number?, heigh
 	pad.PaddingRight = UDim.new(gapScale, 0)
 	pad.Parent = container
 
+	-- ---- ここから：DeckViewAdapter で一括VM化 ----
+	local vms = DeckViewAdapter.toVMs(hand or {})
+	local count = #vms
+
 	-- 手札枚数に応じて横幅スケールを自動算出
-	local count = #(hand or {})
 	local function calcWScale(n: number): number
 		if n <= 0 then return 0.12 end
 		local raw = (1 - gapScale * (n + 1)) / n
@@ -197,30 +95,29 @@ function M.render(container: Instance, hand: {any}?, opts: {width:number?, heigh
 	end
 	local W_SCALE = useScale and calcWScale(count) or nil
 	local H_SCALE = 0.90
-	local langNow = _lang()
 
 	-- カードを生成して並べる
-	for i, card in ipairs(hand or {}) do
-		local code = card.code or string.format("%02d%02d", card.month, card.idx)
-
+	for i, vm in ipairs(vms) do
 		local node
 		if useScale then
-			node = CardNode.create(container, code, nil, nil, {
-				month = card.month, kind = card.kind, name = card.name
+			node = CardNode.create(container, vm.code, nil, nil, {
+				month = vm.month, kind = vm.kind, name = vm.name,
 			})
 			node.Size = UDim2.fromScale(W_SCALE, H_SCALE)
 		else
-			node = CardNode.create(container, code, w, h, {
-				month = card.month, kind = card.kind, name = card.name
+			node = CardNode.create(container, vm.code, w, h, {
+				month = vm.month, kind = vm.kind, name = vm.name,
 			})
 		end
 
+		-- index 属性（選択ハイライト用）
 		node:SetAttribute("index", i)
 
-		-- ▼ 言語対応のフッタ（EN: "11/Seed" / JP: "11月/タネ"）— 幅は常にカードいっぱい
-		local footerText = makeFooterText(card.month, card.kind or card.name, langNow)
-		addFooter(node, footerText, card.kind)
+		-- ▼ フッタ（ローカライズ＆配色は CardNode 側で実施）
+		-- info を省略すれば、CardNode 側が Attributes/VM 由来で自動表示
+		CardNode.addBadge(node)
 
+		-- クリック時の選択
 		if typeof(opts.onSelect) == "function" then
 			node.MouseButton1Click:Connect(function()
 				opts.onSelect(i)

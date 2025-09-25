@@ -1,6 +1,6 @@
 -- ServerScriptService/GameInit.server.lua
 -- エントリポイント：Remotes生成／各Service初期化／永続（SaveService）連携
--- v0.9.2 → v0.9.2-langfix2 (+P1-3 logger):
+-- v0.9.2 → v0.9.2-langfix2 (+P1-3 logger) → v0.9.3-effects-bootstrap
 --  - STARTGAME に統合（セーブがあればCONTINUE / なければNEW）
 --  - SaveService.activeRun（季節開始/屋台入場）スナップからの復帰に対応
 --  - HomeOpen.hasSave を正しく反映
@@ -10,6 +10,10 @@
 --  - ★ P1-1: DecideNext の実装を NavServer に一本化（本ファイルは初期化のみ）
 --  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 --  - ★ P2-10: ラン終了後は強制NEW（_forceNewOnNextStart フラグを尊重）
+--  - ★ v0.9.3: Deck/EffectsRegistry の一括登録を起動時に実行
+--              ＋ 酉UI用 Remotes（KitoPickStart/KitoPickDecide）を正式に生やす
+--  - ★ v0.9.3-fix: ShopDone 時に DeckRegistry の最新スナップショットを次シーズンへ明示伝播
+--                  （変更されたデッキを直後のシーズンで必ず使用）
 
 --==================================================
 -- Services
@@ -81,6 +85,10 @@ local Remotes = {
 
 	-- 同期（C→S：再同期要求。実処理は UiResync.server.lua）
 	ReqSyncUI     = ensureRemote("ReqSyncUI"),
+
+	-- ★ 酉UI（新経路）: サーバ→クライアント候補提示 / クライアント→サーバ決定
+	KitoPickStart  = ensureRemote("KitoPickStart"),   -- S→C: 12候補提示
+	KitoPickDecide = ensureRemote("KitoPickDecide"),  -- C→S: 決定/スキップ
 }
 
 -- Top/Home 系
@@ -113,6 +121,39 @@ local ShopService  = require(RS.SharedModules.ShopService)
 
 -- ★ P1-1: NavServer を導入（DecideNext の唯一線）
 local NavServer    = require(SSS:WaitForChild("NavServer"))
+
+-- （任意）酉ピックのハンドラ群（あれば起動時に Remotes を注入して配線）
+local KitoPickServer do
+	local ok, mod = pcall(function() return require(SSS:WaitForChild("KitoPickServer")) end)
+	if ok and type(mod) == "table" then
+		KitoPickServer = mod
+	else
+		KitoPickServer = nil
+	end
+end
+
+-- ★ DeckRegistry（最新デッキ状態のソース）
+local DeckRegistry do
+	local ok, mod = pcall(function()
+		-- プロジェクト構成に合わせて DeckRegistry の場所を解決
+		return require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+	end)
+	DeckRegistry = ok and mod or nil
+end
+
+--==================================================
+-- Deck Effects（新経路の唯一のデッキ変化窓口）: 起動時に一括登録
+--==================================================
+local function bootstrapEffects()
+	local ok, err = pcall(function()
+		require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("EffectsRegisterAll"))
+	end)
+	if ok then
+		LOG.info("[Effects] EffectsRegistry initialized (Deck/EffectsRegisterAll)")
+	else
+		LOG.warn("[Effects] initialization failed: %s", tostring(err))
+	end
+end
 
 --==================================================
 -- DEV Remotes（Studio向け：+両 / +役 付与）
@@ -172,6 +213,10 @@ end
 --==================================================
 -- 初期化／バインド
 --==================================================
+-- ★ Deck Effects 登録（最初に実施）
+bootstrapEffects()
+
+-- StateHub / 各サービス紐付け
 StateHub.init(Remotes)
 
 if PickService and typeof(PickService.bind) == "function" then
@@ -199,6 +244,12 @@ if ShopService and typeof(ShopService.init) == "function" then
 	)
 else
 	LOG.warn("ShopService.init が見つかりません")
+end
+
+-- ★ 酉ピック（新経路）の配線があれば注入して起動
+if KitoPickServer and typeof(KitoPickServer.bind) == "function" then
+	KitoPickServer.bind(Remotes)
+	LOG.info("[KitoPickServer] ready (handlers wiring)")
 end
 
 -- ★ P1-1: NavServer を初期化（DecideNext の唯一線）。依存はここで注入。
@@ -314,7 +365,14 @@ local function continueFromSnapshot(plr, snap:any)
 	StateHub.set(plr, s)
 
 	local season = tonumber(snap.season or 1) or 1
-	Round.newRound(plr, season)
+
+	-- ★ 復帰時：保存されている deckSnapshot があれば Round へ明示的に渡す
+	local opts = nil
+	if snap.deckSnapshot then
+		opts = { deckSnapshot = snap.deckSnapshot }
+	end
+
+	Round.newRound(plr, season, opts)
 
 	fireReadySoon(plr)
 
@@ -377,15 +435,44 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	local s = StateHub.get(plr); if not s then return end
 	if s.phase ~= "shop" then return end
 
+	-- ★★★★★ ここが本修正の核心 ★★★★★
+	-- ショップでの効果（例：酉の光札化）は DeckRegistry にコミット済み。
+	-- 次シーズン開始前に「今のDeckRegistry」をスナップショット化して newRound に渡す。
+	local nextSeason = (s.season or 1) + 1
+	local deckSnapForNext = nil
+
+	if DeckRegistry and typeof(Round.getRunId) == "function" and typeof(DeckRegistry.dumpSnapshot) == "function" then
+		local runId = Round.getRunId(plr) -- Round 側で管理している現在の runId を取得
+		if runId then
+			local ok, snap = pcall(function() return DeckRegistry.dumpSnapshot(runId) end)
+			if ok and snap then
+				deckSnapForNext = snap
+				LOG.info("[ShopDone] captured latest deck snapshot for next season | run=%s", tostring(runId))
+				-- 任意：復帰用に ActiveRun にも保存しておくと安全
+				if typeof(SaveService.updateActiveRunDeck) == "function" then
+					pcall(function() SaveService.updateActiveRunDeck(plr, snap) end)
+				end
+			else
+				LOG.warn("[ShopDone] dumpSnapshot failed | err=%s", tostring(snap))
+			end
+		else
+			LOG.warn("[ShopDone] Round.getRunId returned nil (skip snapshot)")
+		end
+	else
+		LOG.warn("[ShopDone] DeckRegistry or Round.getRunId not available (skip snapshot)")
+	end
+	-- ★★★★★ ここまで ★★★★★
+
 	s.lastScore = nil
 	s.phase = "play"
 
-	local nextSeason = (s.season or 1) + 1
 	if nextSeason > 4 then
 		-- 冬→春はランリセット（継続プレイのためスナップ維持でOK）
 		Round.resetRun(plr)
 	else
-		Round.newRound(plr, nextSeason)
+		-- ★ 修正：次シーズン開始時に明示的に deckSnapshot を渡す
+		local opts = deckSnapForNext and { deckSnapshot = deckSnapForNext } or nil
+		Round.newRound(plr, nextSeason, opts)
 		StateHub.set(plr, s)
 	end
 

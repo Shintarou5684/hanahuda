@@ -1,18 +1,20 @@
 -- StarterPlayerScripts/UI/components/CardNode.lua
 -- カード画像ボタン（画像・角丸・枠・軽い拡大アニメ）
 -- 右側インフォ / 下部バッジはローカライズ（JA/EN）対応
--- 依存: ReplicatedStorage/SharedModules/CardImageMap.lua
+-- 依存: ReplicatedStorage/SharedModules/Deck/DeckViewAdapter.lua
 -- 任意依存: ReplicatedStorage/Config/Theme.lua, ReplicatedStorage/Config/Locale.lua
--- v0.9.7-P1-4b:
---   ① 札は“真四角”に統一（UICorner/外枠UIStrokeを生成しない）
---   ② バッジは従来どおりカード幅いっぱい（Size=UDim2.new(1,0,0,h)）
---   ③ 言語正規化を LocaleUtil に統合（"jp"→"ja" 警告は維持）
+-- v0.9.7-P1-5 (DeckViewAdapter委譲版):
+--   ① 画像決定を DeckViewAdapter に一元化（imageOverride ?? CardImageMap.get(code)）
+--   ② info 未指定時は、DeckViewAdapter 由来の {kind,month,name} を自動使用
+--   ③ create 時に VM情報をボタンの Attributes に保存（addBadge で再利用）
+--   ④ “真四角”ルールは維持（UICorner/外枠UIStrokeを生成しない）
 
 local TweenService = game:GetService("TweenService")
 local RS = game:GetService("ReplicatedStorage")
 
-local CardImageMap = require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
-local LocaleUtil   = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
+local Shared = RS:WaitForChild("SharedModules")
+local DeckViewAdapter = require(Shared:WaitForChild("Deck"):WaitForChild("DeckViewAdapter"))
+local LocaleUtil   = require(Shared:WaitForChild("LocaleUtil"))
 
 -- Optional: Theme / Locale
 local Theme: any = nil
@@ -76,14 +78,7 @@ end
 --========================
 -- Locale helpers（LocaleUtil 統合）
 --========================
-local function normLangJa(v: string?): string?
-	local raw = tostring(v or ""):lower()
-	local n = LocaleUtil.norm(raw) -- "ja"/"en" or nil
-	if raw == "jp" and n == "ja" then
-		warn("[CardNode] received legacy 'jp'; normalizing to 'ja'")
-	end
-	return n
-end
+
 
 -- "ja"/"en" のみ返す（Locale.getGlobal → Locale.pick → "en"）
 local function curLang(): string
@@ -152,6 +147,55 @@ local function sideInfoText(monthNum: number?, kind: string?, name: string?, lan
 end
 
 --========================
+-- VM補助
+--========================
+local function vmFromCode(code: string)
+	-- DeckViewAdapter に委譲（code だけで最小カードを作って渡す）
+	local ok, vm = pcall(function()
+		return DeckViewAdapter.toVM({ code = tostring(code or "") })
+	end)
+	if ok and typeof(vm) == "table" then
+		return vm
+	end
+	-- フォールバック（最低限）
+	return { code = tostring(code or ""), imageId = "", kind = "", month = nil, name = "" }
+end
+
+local function applyVMAttributes(button: Instance, vm: any)
+	if not (button and typeof(vm) == "table") then return end
+	if typeof(button.SetAttribute) == "function" then
+		button:SetAttribute("code", tostring(vm.code or ""))
+		button:SetAttribute("imageId", tostring(vm.imageId or ""))
+		button:SetAttribute("kind", tostring(vm.kind or ""))
+		-- month は number or nil を許容
+		if vm.month ~= nil then
+			button:SetAttribute("month", tonumber(vm.month) or vm.month)
+		end
+		button:SetAttribute("name", tostring(vm.name or ""))
+	end
+end
+
+local function infoFrom(button: Instance, fallbackInfo: Info?): Info?
+	-- 明示 info があればそのまま返す
+	if fallbackInfo then return fallbackInfo end
+	-- Attributes から復元（create 時に保存済み）
+	if not (button and typeof(button.GetAttribute) == "function") then return nil end
+	local kind = button:GetAttribute("kind")
+	local name = button:GetAttribute("name")
+	local monthAttr = button:GetAttribute("month")
+	local month = nil
+	if typeof(monthAttr) == "number" then month = monthAttr end
+	if (kind and #tostring(kind) > 0) or month or (name and #tostring(name) > 0) then
+		return {
+			kind = kind and tostring(kind) or nil,
+			month = month,
+			name = name and tostring(name) or nil,
+		}
+	end
+	return nil
+end
+
+--========================
 -- 本体API
 --========================
 -- 後方互換 API:
@@ -163,9 +207,9 @@ end
 --       info: Info, showInfoRight: boolean, -- cornerRadius は無効（真四角固定）
 --     }
 function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: any?)
-	-- 画像ID
-	local okImg, imgId = pcall(function() return CardImageMap.get(code) end)
-	local imageId = (okImg and imgId) or ""
+	-- VM取得（画像/種別/月/名称の決定を DeckViewAdapter に委譲）
+	local vm = vmFromCode(code)
+	local imageId = tostring(vm.imageId or "")
 
 	-- 引数解釈
 	local opts: any = nil
@@ -186,7 +230,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	local H_SCALE = 0.90
 
 	local btn = Instance.new("ImageButton")
-	btn.Name = "Card_" .. tostring(code or "????")
+	btn.Name = "Card_" .. tostring(vm.code or code or "????")
 	btn.Parent = parent
 	btn.BackgroundTransparency = 1
 	btn.BorderSizePixel = 0
@@ -194,6 +238,9 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	btn.Image = imageId
 	btn.ScaleType = Enum.ScaleType.Fit
 	btn.Active = true
+
+	-- VMを属性として保持（addBadge等で info 未指定でも再現可能）
+	applyVMAttributes(btn, vm)
 
 	-- ZIndex
 	do
@@ -225,7 +272,6 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	end
 
 	-- ★ 真四角：UICorner/外枠UIStrokeは生成しない（＝角丸なし＆縁取りなし）
-	-- （ここは意図的に何もしない）
 
 	-- 影（Theme.IMAGES.dropShadow があれば使用）
 	do
@@ -278,7 +324,11 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 
 	-- 右側インフォの補助ラベル（必要なときのみ）
 	local showInfoRight = (opts and opts.showInfoRight) or legacyShowRight
-	local info: Info?    = (opts and opts.info) or legacyInfo
+	-- info 未指定なら VM から流用
+	local info: Info? = (opts and opts.info) or legacyInfo
+	if info == nil then
+		info = { kind = vm.kind, month = vm.month, name = vm.name }
+	end
 	if showInfoRight and info then
 		local lab = Instance.new("TextLabel")
 		lab.Name = "SideInfo"
@@ -288,7 +338,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 		lab.Size = UDim2.new(0, 72, 0, 22) -- サイドはpx固定で視認性を保つ
 		lab.Position = UDim2.new(1, 6, 0, 0)
 		lab.TextXAlignment = Enum.TextXAlignment.Left
-		lab.TextYAlignment = Enum.TextYAlignment.Center
+		lab.TextYAlignment = Enum.TextXAlignment.Center
 		lab.Font = Enum.Font.GothamMedium
 		lab.Text = sideInfoText(info.month, info.kind, info.name, curLang())
 		-- 補助ラベルの色は“役色”に寄せてアクセントを付ける
@@ -306,6 +356,11 @@ function M.addBadge(cardButton: Instance, info: Info?)
 	-- 既存を掃除
 	local old = cardButton:FindFirstChild("Badge")
 	if old then old:Destroy() end
+
+	-- info 未指定なら Attributes → VM由来情報を採用
+	if not info then
+		info = infoFrom(cardButton, nil)
+	end
 	if not info then return end
 
 	local lang = curLang()

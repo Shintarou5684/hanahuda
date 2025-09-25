@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-22 11:12:12
+- Generated: 2025-09-26 01:09:07
 - Max lines/file: 300
 
 ## Folder Tree
@@ -135,6 +135,20 @@ hanahuda
 │   │   ├── TalismanService.lua
 │   │   └── UiResync.server.lua
 │   └── shared
+│       ├── Deck
+│       │   ├── Effects
+│       │   │   ├── kito
+│       │   │   │   └── Tori_Brighten.lua
+│       │   │   ├── omamori
+│       │   │   └── spectral
+│       │   ├── CardEngine.lua
+│       │   ├── DeckOps.lua
+│       │   ├── DeckRegistry.lua
+│       │   ├── DeckSchema.lua
+│       │   ├── DeckStore.lua
+│       │   ├── DeckViewAdapter.lua
+│       │   ├── EffectsRegisterAll.lua
+│       │   └── EffectsRegistry.lua
 │       ├── hooks
 │       ├── score
 │       │   ├── hooks
@@ -795,7 +809,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-22 11:12:12
+- Generated: 2025-09-26 01:09:07
 - Max lines/file: 300
 
 ## Folder Tree
@@ -929,6 +943,20 @@ hanahuda
 │   │   ├── TalismanService.lua
 │   │   └── UiResync.server.lua
 │   └── shared
+│       ├── Deck
+│       │   ├── Effects
+│       │   │   ├── kito
+│       │   │   │   └── Tori_Brighten.lua
+│       │   │   ├── omamori
+│       │   │   └── spectral
+│       │   ├── CardEngine.lua
+│       │   ├── DeckOps.lua
+│       │   ├── DeckRegistry.lua
+│       │   ├── DeckSchema.lua
+│       │   ├── DeckStore.lua
+│       │   ├── DeckViewAdapter.lua
+│       │   ├── EffectsRegisterAll.lua
+│       │   └── EffectsRegistry.lua
 │       ├── hooks
 │       ├── score
 │       │   ├── hooks
@@ -1078,20 +1106,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 
 ### 追記ルール（メモ）
 - 先頭が最新。新しい更新は上に追記。
-- 社外公開が必要になったら、公開用 `PatchNotes.lua` へ転記＆サニタイズ。
-```
-
-### _unused/src/client/ShopI18n.lua
-```lua
--- src/client/ui/components/i18n/ShopI18n.lua
--- v0.9.ADAPTER ShopI18n → Locale 委譲アダプタ
--- 目的:
---  - 既存呼び出し(ShopI18n.t(lang, key, ...))はそのまま
---  - 内部で Locale.t(lang, "SHOP_UI_*") に委譲（マッピング付き）
---  - Locale 未定義キーはレガシー内蔵辞書へフォールバック
---
--- ログ:
---  - 初期化時: [ShopI18n] adapter active
 ... (truncated)
 ```
 
@@ -1625,18 +1639,20 @@ LOG.info("ready")
 -- StarterPlayerScripts/UI/components/CardNode.lua
 -- カード画像ボタン（画像・角丸・枠・軽い拡大アニメ）
 -- 右側インフォ / 下部バッジはローカライズ（JA/EN）対応
--- 依存: ReplicatedStorage/SharedModules/CardImageMap.lua
+-- 依存: ReplicatedStorage/SharedModules/Deck/DeckViewAdapter.lua
 -- 任意依存: ReplicatedStorage/Config/Theme.lua, ReplicatedStorage/Config/Locale.lua
--- v0.9.7-P1-4b:
---   ① 札は“真四角”に統一（UICorner/外枠UIStrokeを生成しない）
---   ② バッジは従来どおりカード幅いっぱい（Size=UDim2.new(1,0,0,h)）
---   ③ 言語正規化を LocaleUtil に統合（"jp"→"ja" 警告は維持）
+-- v0.9.7-P1-5 (DeckViewAdapter委譲版):
+--   ① 画像決定を DeckViewAdapter に一元化（imageOverride ?? CardImageMap.get(code)）
+--   ② info 未指定時は、DeckViewAdapter 由来の {kind,month,name} を自動使用
+--   ③ create 時に VM情報をボタンの Attributes に保存（addBadge で再利用）
+--   ④ “真四角”ルールは維持（UICorner/外枠UIStrokeを生成しない）
 
 local TweenService = game:GetService("TweenService")
 local RS = game:GetService("ReplicatedStorage")
 
-local CardImageMap = require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
-local LocaleUtil   = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
+local Shared = RS:WaitForChild("SharedModules")
+local DeckViewAdapter = require(Shared:WaitForChild("Deck"):WaitForChild("DeckViewAdapter"))
+local LocaleUtil   = require(Shared:WaitForChild("LocaleUtil"))
 
 -- Optional: Theme / Locale
 local Theme: any = nil
@@ -1700,14 +1716,7 @@ end
 --========================
 -- Locale helpers（LocaleUtil 統合）
 --========================
-local function normLangJa(v: string?): string?
-	local raw = tostring(v or ""):lower()
-	local n = LocaleUtil.norm(raw) -- "ja"/"en" or nil
-	if raw == "jp" and n == "ja" then
-		warn("[CardNode] received legacy 'jp'; normalizing to 'ja'")
-	end
-	return n
-end
+
 
 -- "ja"/"en" のみ返す（Locale.getGlobal → Locale.pick → "en"）
 local function curLang(): string
@@ -1776,6 +1785,55 @@ local function sideInfoText(monthNum: number?, kind: string?, name: string?, lan
 end
 
 --========================
+-- VM補助
+--========================
+local function vmFromCode(code: string)
+	-- DeckViewAdapter に委譲（code だけで最小カードを作って渡す）
+	local ok, vm = pcall(function()
+		return DeckViewAdapter.toVM({ code = tostring(code or "") })
+	end)
+	if ok and typeof(vm) == "table" then
+		return vm
+	end
+	-- フォールバック（最低限）
+	return { code = tostring(code or ""), imageId = "", kind = "", month = nil, name = "" }
+end
+
+local function applyVMAttributes(button: Instance, vm: any)
+	if not (button and typeof(vm) == "table") then return end
+	if typeof(button.SetAttribute) == "function" then
+		button:SetAttribute("code", tostring(vm.code or ""))
+		button:SetAttribute("imageId", tostring(vm.imageId or ""))
+		button:SetAttribute("kind", tostring(vm.kind or ""))
+		-- month は number or nil を許容
+		if vm.month ~= nil then
+			button:SetAttribute("month", tonumber(vm.month) or vm.month)
+		end
+		button:SetAttribute("name", tostring(vm.name or ""))
+	end
+end
+
+local function infoFrom(button: Instance, fallbackInfo: Info?): Info?
+	-- 明示 info があればそのまま返す
+	if fallbackInfo then return fallbackInfo end
+	-- Attributes から復元（create 時に保存済み）
+	if not (button and typeof(button.GetAttribute) == "function") then return nil end
+	local kind = button:GetAttribute("kind")
+	local name = button:GetAttribute("name")
+	local monthAttr = button:GetAttribute("month")
+	local month = nil
+	if typeof(monthAttr) == "number" then month = monthAttr end
+	if (kind and #tostring(kind) > 0) or month or (name and #tostring(name) > 0) then
+		return {
+			kind = kind and tostring(kind) or nil,
+			month = month,
+			name = name and tostring(name) or nil,
+		}
+	end
+	return nil
+end
+
+--========================
 -- 本体API
 --========================
 -- 後方互換 API:
@@ -1787,9 +1845,9 @@ end
 --       info: Info, showInfoRight: boolean, -- cornerRadius は無効（真四角固定）
 --     }
 function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: any?)
-	-- 画像ID
-	local okImg, imgId = pcall(function() return CardImageMap.get(code) end)
-	local imageId = (okImg and imgId) or ""
+	-- VM取得（画像/種別/月/名称の決定を DeckViewAdapter に委譲）
+	local vm = vmFromCode(code)
+	local imageId = tostring(vm.imageId or "")
 
 	-- 引数解釈
 	local opts: any = nil
@@ -1810,7 +1868,7 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	local H_SCALE = 0.90
 
 	local btn = Instance.new("ImageButton")
-	btn.Name = "Card_" .. tostring(code or "????")
+	btn.Name = "Card_" .. tostring(vm.code or code or "????")
 	btn.Parent = parent
 	btn.BackgroundTransparency = 1
 	btn.BorderSizePixel = 0
@@ -1818,6 +1876,9 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	btn.Image = imageId
 	btn.ScaleType = Enum.ScaleType.Fit
 	btn.Active = true
+
+	-- VMを属性として保持（addBadge等で info 未指定でも再現可能）
+	applyVMAttributes(btn, vm)
 
 	-- ZIndex
 	do
@@ -1849,7 +1910,6 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	end
 
 	-- ★ 真四角：UICorner/外枠UIStrokeは生成しない（＝角丸なし＆縁取りなし）
-	-- （ここは意図的に何もしない）
 
 	-- 影（Theme.IMAGES.dropShadow があれば使用）
 	do
@@ -1876,52 +1936,6 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 	-- クリック感（軽い拡大アニメ）
 	do
 		local function tweenTo(sz) TweenService:Create(btn, TweenInfo.new(0.06), { Size = sz }):Play() end
-		local baseSize: UDim2 = btn.Size
-
-		btn.MouseEnter:Connect(function()
-			baseSize = btn.Size
-		end)
-
-		local function scaleMul(sz: UDim2, mul: number): UDim2
-			if sz.X.Scale > 0 or sz.Y.Scale > 0 then
-				return UDim2.new(sz.X.Scale * mul, sz.X.Offset, sz.Y.Scale * mul, sz.Y.Offset)
-			else
-				return UDim2.fromOffset(math.max(1, sz.X.Offset * mul), math.max(1, sz.Y.Offset * mul))
-			end
-		end
-
-		btn.MouseButton1Down:Connect(function()
-			baseSize = btn.Size
-			tweenTo(scaleMul(baseSize, 1.04))
-		end)
-
-		local function restore() tweenTo(baseSize) end
-		btn.MouseButton1Up:Connect(restore)
-		btn.MouseLeave:Connect(restore)
-	end
-
-	-- 右側インフォの補助ラベル（必要なときのみ）
-	local showInfoRight = (opts and opts.showInfoRight) or legacyShowRight
-	local info: Info?    = (opts and opts.info) or legacyInfo
-	if showInfoRight and info then
-		local lab = Instance.new("TextLabel")
-		lab.Name = "SideInfo"
-		lab.Parent = btn
-		lab.BackgroundTransparency = 1
-		lab.TextScaled = true
-		lab.Size = UDim2.new(0, 72, 0, 22) -- サイドはpx固定で視認性を保つ
-		lab.Position = UDim2.new(1, 6, 0, 0)
-		lab.TextXAlignment = Enum.TextXAlignment.Left
-		lab.TextYAlignment = Enum.TextYAlignment.Center
-		lab.Font = Enum.Font.GothamMedium
-		lab.Text = sideInfoText(info.month, info.kind, info.name, curLang())
-		-- 補助ラベルの色は“役色”に寄せてアクセントを付ける
-		lab.TextColor3 = colorForKind(info.kind)
-		lab.ZIndex = btn.ZIndex + 1
-	end
-
-	return btn
-end
 ... (truncated)
 ```
 
@@ -2337,144 +2351,30 @@ return M
 ```lua
 -- StarterPlayerScripts/UI/components/renderers/FieldRenderer.lua
 -- 場札の描画レンダラ：上下2段に分けて配置
--- v0.9.7-P1-4: Theme 完全デフォルト化 + 札フッタを常にカード幅いっぱい
---              言語コード正規化（"jp"→"ja"）/ JP時の英語カテゴリ混入を修正
+-- v0.9.7-P1-6: DeckViewAdapter による一括VM化 + フッタ表示は CardNode に全面委譲
+--               （画像決定/ローカライズ/配色は CardNode 側に集約）
 
 local components = script.Parent.Parent
 local lib        = components.Parent:WaitForChild("lib")
 
-local UiUtil   = require(lib:WaitForChild("UiUtil"))
-local CardNode = require(components:WaitForChild("CardNode"))
+local UiUtil     = require(lib:WaitForChild("UiUtil"))
+local CardNode   = require(components:WaitForChild("CardNode"))
 
 -- ★ 依存
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Config  = ReplicatedStorage:WaitForChild("Config")
-local Locale  = require(Config:WaitForChild("Locale"))
+local RS         = game:GetService("ReplicatedStorage")
+local Shared     = RS:WaitForChild("SharedModules")
+local DeckViewAdapter = require(Shared:WaitForChild("Deck"):WaitForChild("DeckViewAdapter"))
+
+local Config  = RS:WaitForChild("Config")
 local Theme   = require(Config:WaitForChild("Theme"))
-
--- 言語（"ja"/"en"）。"jp" は "ja" へ正規化、取得不可は "en"
-local function _lang()
-	local v
-	if typeof(Locale.getGlobal) == "function" then
-		local ok, g = pcall(Locale.getGlobal); if ok then v = g end
-	end
-	if v == nil and typeof(Locale.pick) == "function" then
-		local ok, p = pcall(Locale.pick); if ok then v = p end
-	end
-	v = tostring(v or "en"):lower()
-	if v == "jp" then return "ja" end
-	if v == "ja" or v == "en" then return v end
-	return "en"
-end
-
---=== フッタ用ユーティリティ ============================================
-
--- カテゴリの英語ラベル（短め）
-local function _catEn(src)
-	src = tostring(src or ""):lower()
-	if src=="光" or src=="ひかり" or src=="hikari" or src=="bright" then return "Bright" end
-	if src=="タネ" or src=="種"   or src=="tane"   or src=="seed"   then return "Seed"   end
-	if src=="短冊"               or src=="ribbon"                       then return "Ribbon" end
-	if src=="カス" or src=="kasu" or src=="chaff"                      then return "Chaff"  end
-	return src
-end
-
--- カテゴリの日本語ラベル（英語/表記ゆれを吸収）
-local function _catJa(src)
-	src = tostring(src or ""):lower()
-	if src=="bright" or src=="光" or src=="ひかり" or src=="hikari" then return "光"   end
-	if src=="seed"   or src=="タネ" or src=="種"   or src=="tane"   then return "タネ" end
-	if src=="ribbon" or src=="短冊"                                 then return "短冊" end
-	if src=="chaff"  or src=="kasu" or src=="カス"                  then return "カス"  end
-	return src
-end
-
--- フッタ表示テキスト（JP: "11月/タネ" ／ EN: "11/Seed"）
-local function makeFooterText(monthNum, kindOrName, lang)
-	local m = tonumber(monthNum)
-	local mStr = m and tostring(m) or ""
-	if lang == "en" then
-		local cat = _catEn(kindOrName)
-		if mStr ~= "" and cat ~= "" then
-			return string.format("%s/%s", mStr, cat)
-		elseif mStr ~= "" then
-			return mStr
-		else
-			return cat
-		end
-	else
-		local cat = _catJa(kindOrName)
-		if mStr ~= "" and cat ~= "" then
-			return string.format("%s月/%s", mStr, cat)
-		elseif mStr ~= "" then
-			return (mStr .. "月")
-		else
-			return cat
-		end
-	end
-end
-
--- カード下部にフッタバッジを追加（カード幅いっぱい）
-local function addFooter(node: Instance, text: string, kindForColor: string?)
-	-- 既存 Footer を除去
-	local old = node:FindFirstChild("Footer")
-	if old then old:Destroy() end
-
-	local SZ   = Theme.SIZES or {}
-	local COL  = Theme.COLORS or {}
-	local badgeH = SZ.BadgeH or 26
-
-	local footer = Instance.new("Frame")
-	footer.Name = "Footer"
-	footer.Parent = node
-	footer.AnchorPoint = Vector2.new(0,1)
-	footer.Position = UDim2.new(0, 0, 1, -2)              -- 下に 2px マージン
-	footer.Size     = UDim2.new(1, 0, 0, badgeH)          -- ★カード幅いっぱい
-	footer.BackgroundColor3 = COL.BadgeBg or Color3.fromRGB(25,28,36)
-	footer.BackgroundTransparency = 0.15
-	footer.BorderSizePixel = 0
-	footer.ZIndex = 10
-	footer.ClipsDescendants = true
-
-	local uic = Instance.new("UICorner")
-	uic.CornerRadius = UDim.new(0, Theme.PANEL_RADIUS or 10)
-	uic.Parent = footer
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = COL.BadgeStroke or Color3.fromRGB(60,65,80)
-	stroke.Thickness = 1
-	stroke.Parent = footer
-
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft   = UDim.new(0, 6)
-	pad.PaddingRight  = UDim.new(0, 6)
-	pad.PaddingTop    = UDim.new(0, 2)
-	pad.PaddingBottom = UDim.new(0, 2)
-	pad.Parent = footer
-
-	local label = Instance.new("TextLabel")
-	label.Name = "Text"
-	label.Parent = footer
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.new(1, 0, 1, 0)
-	label.Text = tostring(text or "")
-	label.Font = Enum.Font.GothamMedium
-	label.TextScaled = true
-	-- 役種に応じた文字色（Theme.colorForKind）。該当なしは白っぽく。
-	local txtColor = (type(Theme.colorForKind)=="function" and Theme.colorForKind(kindForColor or "")) or Color3.fromRGB(235,235,235)
-	label.TextColor3 = txtColor
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.ZIndex = 11
-end
---=======================================================================
 
 local M = {}
 
 -- opts:
---   width:number?         -- 未指定ならスケールレイアウト（推奨）
---   height:number?        -- 未指定ならスケールレイアウト（推奨）
---   rowPaddingScale:number?  -- カード間隔（比率）。未指定は Theme.RATIOS.COL_GAP
---   onPick:(bindex:number)->()      -- 場札クリック時に呼ぶ
+--   width:number?               -- 未指定ならスケールレイアウト（推奨）
+--   height:number?              -- 未指定ならスケールレイアウト（推奨）
+--   rowPaddingScale:number?     -- カード間隔（比率）。未指定は Theme.RATIOS.COL_GAP
+--   onPick:(bindex:number)->()  -- 場札クリック時に呼ぶ
 function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {width:number?, height:number?, rowPaddingScale:number?, onPick:any}? )
 	opts = opts or {}
 	local useScale = (opts.width == nil and opts.height == nil)
@@ -2508,10 +2408,13 @@ function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {w
 	ensureRowLayout(topRow)
 	ensureRowLayout(bottomRow)
 
-	local list = field or {}
-	local n = #list
-	local split = math.ceil(n/2) -- 前半=上段、後半=下段
-	local topCount = math.min(split, n)
+	-- ---- DeckViewAdapter で一括VM化（画像ID/種別/月/名称の決定を委譲） ----
+	local vms = DeckViewAdapter.toVMs(field or {})
+	local n   = #vms
+
+	-- 上下2段にスプリット
+	local split       = math.ceil(n/2) -- 前半=上段、後半=下段
+	local topCount    = math.min(split, n)
 	local bottomCount = math.max(0, n - split)
 
 	-- 行ごとのカード幅（scale）
@@ -2525,33 +2428,32 @@ function M.render(topRow: Instance, bottomRow: Instance, field: {any}?, opts: {w
 
 	local W_TOP    = calcWScale(topCount)
 	local W_BOTTOM = calcWScale(bottomCount)
-	local langNow  = _lang()
 
-	for i, card in ipairs(list) do
-		local code = card.code or string.format("%02d%02d", card.month, card.idx)
+	for i, vm in ipairs(vms) do
 		local parentRow = (i <= split) and topRow or bottomRow
-		local rowWScale = (i <= split) and W_TOP or W_BOTTOM
+		local rowWScale = (i <= split) and W_TOP  or W_BOTTOM
 
 		local node
 		if useScale then
 			-- スケールレイアウト：横幅は行の枚数に応じて最適化
-			node = CardNode.create(parentRow, code, nil, nil, {
-				month = card.month, kind = card.kind, name = card.name
+			node = CardNode.create(parentRow, vm.code, nil, nil, {
+				month = vm.month, kind = vm.kind, name = vm.name,
 			})
 			node.Size = UDim2.fromScale(rowWScale, 0.90)
 		else
 			-- 互換：px 指定
-			node = CardNode.create(parentRow, code, W, H, {
-				month = card.month, kind = card.kind, name = card.name
+			node = CardNode.create(parentRow, vm.code, W, H, {
+				month = vm.month, kind = vm.kind, name = vm.name,
 			})
 		end
 
+		-- 配列順を保持
 		node:SetAttribute("bindex", i)
 		node.LayoutOrder = i
 
-		-- ▼ 言語対応のフッタ（EN: "11/Seed" / JP: "11月/タネ"）
-		local footerText = makeFooterText(card.month, card.kind or card.name, langNow)
-		addFooter(node, footerText, card.kind)
+		-- ▼ フッタ（ローカライズ/文字色は CardNode に委譲）
+		-- info を省略すれば、CardNode 側が VM/Attributes 由来で自動表示
+		CardNode.addBadge(node)
 
 		-- クリック
 		if onPick then
@@ -2569,124 +2471,19 @@ return M
 ```lua
 -- StarterPlayerScripts/UI/components/renderers/HandRenderer.lua
 -- 手札を描画。selectedIndex のハイライトは内部で管理（縁取りは使わず影だけで強調）
+-- v0.9.7-P1-5: DeckViewAdapter 一括VM化 / フッタ＆画像決定は CardNode に委譲
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = ReplicatedStorage:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
-local Locale = require(Config:WaitForChild("Locale"))
+
+local Shared      = ReplicatedStorage:WaitForChild("SharedModules")
+local DeckViewAdapter = require(Shared:WaitForChild("Deck"):WaitForChild("DeckViewAdapter"))
 
 local components = script.Parent.Parent
 local CardNode   = require(components:WaitForChild("CardNode"))
 
 local M = {}
-
---========================
--- 言語/フッタユーティリティ
---========================
-local function _lang()
-	-- "jp" を "ja" に正規化。取得不可時は "en"
-	local v = nil
-	if typeof(Locale.getGlobal) == "function" then
-		local ok, g = pcall(Locale.getGlobal); if ok then v = g end
-	end
-	if v == nil and typeof(Locale.pick) == "function" then
-		local ok, p = pcall(Locale.pick); if ok then v = p end
-	end
-	v = tostring(v or "en"):lower()
-	if v == "jp" then return "ja" end
-	if v == "ja" or v == "en" then return v end
-	return "en"
-end
-
-local function _catEn(v)
-	v = tostring(v or ""):lower()
-	if v=="光" or v=="ひかり" or v=="hikari" or v=="bright" then return "Bright" end
-	if v=="タネ" or v=="種" or v=="tane" or v=="seed"   then return "Seed"   end
-	if v=="短冊" or v=="ribbon"                         then return "Ribbon" end
-	if v=="カス" or v=="kasu" or v=="chaff"            then return "Chaff"  end
-	return v
-end
-
-local function _catJp(v)
-	v = tostring(v or ""):lower()
-	if v=="bright" or v=="光"                 then return "光"   end
-	if v=="seed"   or v=="タネ" or v=="種"   then return "タネ" end
-	if v=="ribbon" or v=="短冊"               then return "短冊" end
-	if v=="chaff"  or v=="kasu" or v=="カス" then return "カス"  end
-	return v
-end
-
--- JP: "11月/タネ" / EN: "11/Seed"（英語は「月」を省く）
-local function makeFooterText(monthNum, cat, lang)
-	local m = tonumber(monthNum)
-	local mStr = m and tostring(m) or ""
-	if lang == "en" then
-		local catEn = _catEn(cat)
-		if mStr ~= "" and catEn ~= "" then
-			return string.format("%s/%s", mStr, catEn)
-		elseif mStr ~= "" then
-			return mStr
-		else
-			return catEn
-		end
-	else
-		local catJp = _catJp(cat)
-		if mStr ~= "" and catJp ~= "" then
-			return string.format("%s月/%s", mStr, catJp)
-		elseif mStr ~= "" then
-			return (mStr .. "月")
-		else
-			return catJp
-		end
-	end
-end
-
--- カード下部にフッタ（カード幅いっぱい）
-local function addFooter(node: Instance, text: string, kindForColor: string?)
-	-- 既存削除
-	local old = node:FindFirstChild("Footer")
-	if old then old:Destroy() end
-
-	local C = (Theme and Theme.COLORS) or {}
-	local badgeH = (Theme and Theme.SIZES and Theme.SIZES.BadgeH) or 26
-
-	local footer = Instance.new("Frame")
-	footer.Name = "Footer"
-	footer.Parent = node
-	footer.AnchorPoint = Vector2.new(0,1)
-	-- 下に 2px の余白を残して、幅は常にカードと同じ
-	footer.Position = UDim2.new(0, 0, 1, -2)
-	footer.Size = UDim2.new(1, 0, 0, badgeH)
-	footer.BackgroundColor3 = C.BadgeBg or Color3.fromRGB(25,28,36)
-	footer.BackgroundTransparency = 0.15
-	footer.BorderSizePixel = 0
-	footer.ZIndex = 10
-	footer.ClipsDescendants = true
-
-	local uic = Instance.new("UICorner"); uic.CornerRadius = UDim.new(0, (Theme and Theme.PANEL_RADIUS) or 10); uic.Parent = footer
-	local stroke = Instance.new("UIStroke"); stroke.Color = C.BadgeStroke or Color3.fromRGB(60,65,80); stroke.Thickness = 1; stroke.Parent = footer
-
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft   = UDim.new(0, 6)
-	pad.PaddingRight  = UDim.new(0, 6)
-	pad.PaddingTop    = UDim.new(0, 2)
-	pad.PaddingBottom = UDim.new(0, 2)
-	pad.Parent = footer
-
-	local label = Instance.new("TextLabel")
-	label.Name = "Text"
-	label.Parent = footer
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.new(1, 0, 1, 0)
-	label.Text = tostring(text or "")
-	label.Font = Enum.Font.GothamMedium
-	label.TextScaled = true
-	-- 役種に応じたバッジ文字色（Theme.colorForKind）。該当なしは白。
-	local badgeTextColor = (type(Theme.colorForKind)=="function" and Theme.colorForKind(kindForColor or "")) or Color3.fromRGB(235,235,235)
-	label.TextColor3 = badgeTextColor
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.ZIndex = 11
-end
 
 --========================
 -- 選択ハイライト（縁取りは使わない）
@@ -2755,8 +2552,11 @@ function M.render(container: Instance, hand: {any}?, opts: {width:number?, heigh
 	pad.PaddingRight = UDim.new(gapScale, 0)
 	pad.Parent = container
 
+	-- ---- ここから：DeckViewAdapter で一括VM化 ----
+	local vms = DeckViewAdapter.toVMs(hand or {})
+	local count = #vms
+
 	-- 手札枚数に応じて横幅スケールを自動算出
-	local count = #(hand or {})
 	local function calcWScale(n: number): number
 		if n <= 0 then return 0.12 end
 		local raw = (1 - gapScale * (n + 1)) / n
@@ -2766,30 +2566,29 @@ function M.render(container: Instance, hand: {any}?, opts: {width:number?, heigh
 	end
 	local W_SCALE = useScale and calcWScale(count) or nil
 	local H_SCALE = 0.90
-	local langNow = _lang()
 
 	-- カードを生成して並べる
-	for i, card in ipairs(hand or {}) do
-		local code = card.code or string.format("%02d%02d", card.month, card.idx)
-
+	for i, vm in ipairs(vms) do
 		local node
 		if useScale then
-			node = CardNode.create(container, code, nil, nil, {
-				month = card.month, kind = card.kind, name = card.name
+			node = CardNode.create(container, vm.code, nil, nil, {
+				month = vm.month, kind = vm.kind, name = vm.name,
 			})
 			node.Size = UDim2.fromScale(W_SCALE, H_SCALE)
 		else
-			node = CardNode.create(container, code, w, h, {
-				month = card.month, kind = card.kind, name = card.name
+			node = CardNode.create(container, vm.code, w, h, {
+				month = vm.month, kind = vm.kind, name = vm.name,
 			})
 		end
 
+		-- index 属性（選択ハイライト用）
 		node:SetAttribute("index", i)
 
-		-- ▼ 言語対応のフッタ（EN: "11/Seed" / JP: "11月/タネ"）— 幅は常にカードいっぱい
-		local footerText = makeFooterText(card.month, card.kind or card.name, langNow)
-		addFooter(node, footerText, card.kind)
+		-- ▼ フッタ（ローカライズ＆配色は CardNode 側で実施）
+		-- info を省略すれば、CardNode 側が Attributes/VM 由来で自動表示
+		CardNode.addBadge(node)
 
+		-- クリック時の選択
 		if typeof(opts.onSelect) == "function" then
 			node.MouseButton1Click:Connect(function()
 				opts.onSelect(i)
@@ -2809,11 +2608,12 @@ return M
 ### src/client/ui/components/renderers/ShopRenderer.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/ShopRenderer.lua
--- v0.9.SIMPLE-8 (Locale-first, no ShopI18n)
+-- v0.9.SIMPLE-9 (Locale-first, no ShopI18n, safety refactor)
 --  - 下段 TalismanArea に護符ボードをマウント（初回のみ）
---  - payload.talisman を表示（nilならデフォルト6枠表示）
+--  - payload.talisman を表示（nilならデフォルト6枠表示：ボード側に委譲）
 --  - items を描画前に self:isItemHidden(id) でフィルタ（既存）
 --  - 画面固定文言は Locale.t(lang,"SHOP_UI_*") を直接参照
+--  - リファクタ: 言語正規化の一本化 / ガード強化 / ログ整備
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
@@ -2851,41 +2651,62 @@ function M.render(self)
 	local nodes = self._nodes
 	if not nodes then return end
 
-	local p = self._payload or {}
-	local items = p.items or p.stock or {}
-	local lang = (self._lang or ShopFormat.normLang(p.lang))
-	local mon = tonumber(p.mon or p.totalMon or 0) or 0
+	--=== Payload 正規化 ===
+	local p       = self._payload or {}
+	local items   = p.items or p.stock or {}
+	local lang    = ShopFormat.normLang(p.lang) or "en"   -- "ja"/"en" 固定
+	local mon     = tonumber(p.mon or p.totalMon or 0) or 0
 	local rerollCost = tonumber(p.rerollCost or 1) or 1
 
-	-- ★ 護符ボード（初回マウント）
+	--=== 護符ボード（初回マウント） ===
 	if nodes.taliArea and not self._taliBoard then
 		local TB = requireTalismanBoard()
 		if TB then
 			local title = Locale.t(lang, "SHOP_UI_TALISMAN_BOARD")
-			self._taliBoard = TB.new(nodes.taliArea, {
-				title = title,
-				widthScale = 0.9,
-				padScale   = 0.01,
-			})
-			local inst = self._taliBoard:getInstance()
-			inst.AnchorPoint = Vector2.new(0.5, 0)
-			inst.Position    = UDim2.fromScale(0.5, 0)
-			inst.ZIndex      = 2
-			LOG.info("mount TalismanBoard | lang=%s title=%s", tostring(lang), tostring(title))
+			-- new(parent, { title, widthScale, padScale })
+			local ok, board = pcall(function()
+				return TB.new(nodes.taliArea, {
+					title = title,
+					widthScale = 0.9,
+					padScale   = 0.01,
+				})
+			end)
+			if ok and board then
+				self._taliBoard = board
+				-- 位置調整
+				local inst = self._taliBoard.getInstance and self._taliBoard:getInstance()
+				if inst then
+					inst.AnchorPoint = Vector2.new(0.5, 0)
+					inst.Position    = UDim2.fromScale(0.5, 0)
+					inst.ZIndex      = 2
+				end
+				LOG.info("mount TalismanBoard | lang=%s title=%s", tostring(lang), tostring(title))
+			else
+				LOG.warn("TalismanBoard.new failed: %s", tostring(board))
+			end
 		else
 			LOG.warn("TalismanBoard module not found; skip mount")
 		end
 	end
-	-- データ反映（存在すれば）
-	if self._taliBoard then
-		local langFix = (lang == "ja") and "ja" or "en"
-		self._taliBoard:setLang(langFix)
-		-- p.talisman が来なければ内部で defaultData() が出る想定
-		self._taliBoard:setData(p.talisman)
-		-- タイトルは言語切替時に変えたい場合は setTitle があればそちらへ
+
+	--=== 護符ボード：データ反映（存在すれば） ===
+	do
+		local tb = self._taliBoard
+		if tb then
+			-- setLang は存在しない実装も許容
+			if typeof(tb.setLang) == "function" then
+				local ok = pcall(function() tb:setLang(lang) end)
+				if not ok then LOG.warn("TalismanBoard:setLang failed") end
+			end
+			-- setData：p.talisman が nil でもボード側の defaultData() に委譲
+			if typeof(tb.setData) == "function" then
+				local ok = pcall(function() tb:setData(p.talisman) end)
+				if not ok then LOG.warn("TalismanBoard:setData failed") end
+			end
+		end
 	end
 
-	-- ★ 一時SoldOutフィルタ
+	--=== 一時 SoldOut フィルタ ===
 	local vis = {}
 	for _, it in ipairs(items) do
 		local id = it and it.id
@@ -2893,6 +2714,7 @@ function M.render(self)
 		if typeof(self.isItemHidden) == "function" then
 			local ok, h = pcall(function() return self:isItemHidden(id) end)
 			hidden = ok and (h == true)
+			if not ok then LOG.warn("isItemHidden failed for id=%s", tostring(id)) end
 		end
 		if not hidden then
 			table.insert(vis, it)
@@ -2902,7 +2724,7 @@ function M.render(self)
 	LOG.debug("render | lang=%s items=%d→%d mon=%d rerollCost=%d",
 		tostring(lang), #items, #vis, mon, rerollCost)
 
-	-- タイトル・ボタン
+	--=== タイトル・ボタン ===
 	if nodes.title then
 		nodes.title.Text = Locale.t(lang, "SHOP_UI_TITLE")
 	end
@@ -2915,6 +2737,7 @@ function M.render(self)
 		local can = (p.canReroll ~= false) and (mon >= rerollCost)
 		nodes.rerollBtn.Active = can
 		nodes.rerollBtn.AutoButtonColor = can
+		-- 視覚的状態（既定を維持。Theme 側で統一する場合はここを薄く）
 		nodes.rerollBtn.TextTransparency = 0
 		nodes.rerollBtn.BackgroundTransparency = 0
 	end
@@ -2925,7 +2748,7 @@ function M.render(self)
 		nodes.closeBtn.Text = Locale.t(lang, "SHOP_UI_CLOSE_BTN")
 	end
 
-	-- 右パネル
+	--=== 右パネル（デッキ／インフォ） ===
 	do
 		local deckPanel = nodes.deckPanel
 		local infoPanel = nodes.infoPanel
@@ -2933,8 +2756,8 @@ function M.render(self)
 		local deckText  = nodes.deckText
 
 		if deckPanel and infoPanel then
-			deckPanel.Visible = self._deckOpen
-			infoPanel.Visible = not self._deckOpen
+			deckPanel.Visible = self._deckOpen == true
+			infoPanel.Visible = not (self._deckOpen == true)
 		end
 
 		if deckPanel and deckTitle and deckText then
@@ -2944,7 +2767,7 @@ function M.render(self)
 		end
 	end
 
-	-- 左グリッド再構築
+	--=== 左グリッド再構築 ===
 	local scroll = nodes.scroll
 	if not scroll then return end
 	for _, ch in ipairs(scroll:GetChildren()) do
@@ -2961,50 +2784,56 @@ function M.render(self)
 			LOG.info("BUY click (auto place) | id=%s name=%s taliId=%s",
 				tostring(it.id or "?"), tostring(it.name or "?"), tostring(it.talismanId))
 			if typeof(self.autoPlace) == "function" then
-				self:autoPlace(it.talismanId, it)
+				local ok = pcall(function() self:autoPlace(it.talismanId, it) end)
+				if not ok then LOG.warn("autoPlace failed for talismanId=%s", tostring(it.talismanId)) end
 			else
 				LOG.warn("autoPlace is not available on host; skip BUY for talisman")
 			end
 			return
 		end
 
-		if not (self.deps and self.deps.remotes and self.deps.remotes.BuyItem) then
+		local remotes = self.deps and self.deps.remotes
+		local BuyItem = remotes and remotes.BuyItem
+		if not BuyItem then
 			LOG.warn("remotes.BuyItem is missing; cannot buy id=%s", tostring(it and it.id))
 			return
 		end
 		self._buyBusy = true
 		LOG.info("BUY click | id=%s name=%s", tostring(it.id or "?"), tostring(it.name or "?"))
-		self.deps.remotes.BuyItem:FireServer(it.id)
+		pcall(function() BuyItem:FireServer(it.id) end)
+		-- ボタン連打抑止（最短クール）
 		task.delay(0.25, function() self._buyBusy = false end)
 	end
 
+	-- セル配置
 	for _, it in ipairs(vis) do
 		ShopCells.create(scroll, nodes, it, lang, mon, { onBuy = onBuy })
 	end
 
-	-- CanvasSize
+	-- CanvasSize（安全計算）
 	task.defer(function()
 		local gridObj = nodes.grid
-		if not gridObj then return end
+		if not (gridObj and gridObj:IsA("UIGridLayout")) then return end
 		local frameW = scroll.AbsoluteSize.X
-		local cellW = gridObj.CellSize.X.Offset + gridObj.CellPadding.X.Offset
-		local perRow = math.max(1, math.floor(frameW / math.max(1, cellW)))
-		local rows = math.ceil(#vis / perRow)
-		local cellH = gridObj.CellSize.Y.Offset + gridObj.CellPadding.Y.Offset
+		local cellW  = (gridObj.CellSize.X.Offset or 0) + (gridObj.CellPadding.X.Offset or 0)
+		if cellW <= 0 then return end
+		local perRow = math.max(1, math.floor(frameW / cellW))
+		local rows   = math.ceil(#vis / perRow)
+		local cellH  = (gridObj.CellSize.Y.Offset or 0) + (gridObj.CellPadding.Y.Offset or 0)
 		local needed = rows * cellH + 8
 		scroll.CanvasSize = UDim2.new(0, 0, 0, needed)
 	end)
 
-	-- サマリ
+	--=== サマリ ===
 	local s = {}
 	if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
 		table.insert(s,
 			Locale.t(lang, "SHOP_UI_SUMMARY_CLEARED_FMT")
 				:format(
-					tonumber(p.seasonSum or 0),
-					tonumber(p.target or 0),
-					tonumber(p.rewardMon or 0),
-					tonumber(p.totalMon or mon or 0)
+					tonumber(p.seasonSum or 0) or 0,
+					tonumber(p.target or 0) or 0,
+					tonumber(p.rewardMon or 0) or 0,
+					tonumber(p.totalMon or mon or 0) or 0
 				)
 		)
 	end
@@ -3583,18 +3412,18 @@ function M.create(parent: Instance): ResultAPI
 ### src/client/ui/components/ShopCells.lua
 ```lua
 -- StarterPlayerScripts/UI/components/ShopCells.lua
--- v0.9.I ShopCells：整形ロジックを ShopFormat/Locale に統一（S5）
---  - 価格/タイトル/説明/フェイス名のローカル実装を削除
---  - 文字列は ShopFormat と Locale に委譲
---  - 「不足」接尾辞/ラベル文言は Locale の SHOP_UI_* を使用
---  - 既存のUI/入力/購入フローは据え置き
+-- v0.9.I3 ShopCells：ShopFormat/Localeへ完全委譲 + 安全化（TextButton.Focused除去）
+--  - 価格/タイトル/説明/カテゴリ表記を ShopFormat/Locale に一元委譲
+--  - pcall/typeof でガード（落ちないUI）
+--  - Mouse/Keyboard/Gamepad 入力の統一（Hover/Selection/Activated）
+--  - 主要値を Attributes に保存（デバッグやUIテスト用）
 
-local RS = game:GetService("ReplicatedStorage")
+local RS           = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 -- Shared
 local SharedModules = RS:WaitForChild("SharedModules")
-local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
+local ShopFormat    = require(SharedModules:WaitForChild("ShopFormat"))
 
 -- Theme & Locale
 local Config = RS:WaitForChild("Config")
@@ -3606,10 +3435,59 @@ local M = {}
 --========================
 -- 小ユーティリティ
 --========================
+local function _safeId(it:any): string
+	local raw = tostring(it and it.id or "Item")
+	-- Roblox Name 制限を軽く満たすため、記号を置換
+	return (raw:gsub("[^%w_%-]", "_"))
+end
+
+local function _getFaceName(it:any): string
+	local ok, name = pcall(function() return ShopFormat.faceName(it) end)
+	return (ok and tostring(name or "")) or ""
+end
+
+local function _fmtPrice(v:any): string
+	local ok, s = pcall(function() return ShopFormat.fmtPrice(v) end)
+	return (ok and tostring(s or "")) or tostring(v or "")
+end
+
+local function _title(it:any, lang:string): string
+	local ok, s = pcall(function() return ShopFormat.itemTitle(it, lang) end)
+	return (ok and tostring(s or "")) or ""
+end
+
+local function _desc(it:any, lang:string): string
+	local ok, s = pcall(function() return ShopFormat.itemDesc(it, lang) end)
+	return (ok and tostring(s or "")) or ""
+end
+
+local function _catLabel(it:any, lang:string): string
+	local cat = tostring(it and it.category or "-")
+	return Locale.t(lang, "SHOP_UI_LABEL_CATEGORY"):format(cat)
+end
+
+local function _priceLabel(it:any, lang:string): string
+	return Locale.t(lang, "SHOP_UI_LABEL_PRICE"):format(_fmtPrice(it and it.price))
+end
+
+local function _computeAffordable(mon:any, price:any): boolean
+	local m = tonumber(mon or 0) or 0
+	local p = tonumber(price or 0) or 0
+	return m >= p
+end
+
+local function _themeColor(path:string, fallback: Color3): Color3
+	local col = fallback
+	if Theme and Theme.COLORS and typeof(Theme.COLORS[path]) == "Color3" then
+		col = Theme.COLORS[path]
+	end
+	return col
+end
+
 local function addCorner(gui: Instance, px: number?)
 	local ok = pcall(function()
 		local c = Instance.new("UICorner")
-		c.CornerRadius = UDim.new(0, px or Theme.PANEL_RADIUS or 10)
+		c.CornerRadius = UDim.new(0, px or (Theme and Theme.PANEL_RADIUS) or 10)
 		c.Parent = gui
 	end)
 	return ok
@@ -3619,7 +3497,7 @@ local function addStroke(gui: Instance, color: Color3?, thickness: number?, tran
 	local ok, stroke = pcall(function()
 		local s = Instance.new("UIStroke")
 		s.Thickness = thickness or 1
-		s.Color = color or Theme.COLORS.PanelStroke
+		s.Color = color or _themeColor("PanelStroke", Color3.fromRGB(70,70,80))
 		s.Transparency = transparency or 0
 		s.Parent = gui
 		return s
@@ -3627,31 +3505,48 @@ local function addStroke(gui: Instance, color: Color3?, thickness: number?, tran
 	return ok and stroke or nil
 end
 
+local function _setAttributes(inst: Instance, it:any, lang:string, mon:number, affordable:boolean)
+	if not (inst and typeof(inst.SetAttribute)=="function") then return end
+	inst:SetAttribute("id", tostring(it and it.id or ""))
+	inst:SetAttribute("category", tostring(it and it.category or ""))
+	inst:SetAttribute("price", tonumber(it and it.price or 0) or 0)
+	inst:SetAttribute("lang", lang)
+	inst:SetAttribute("affordable", affordable and true or false)
+	inst:SetAttribute("face", _getFaceName(it))
+end
+
 --========================
 -- メイン：カード生成
 --========================
+-- create(parent, nodes, it, lang, mon, handlers={ onBuy=function(it) end })
 function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, handlers)
-	-- カード本体（和紙パネル風）
+	-- 親・入力チェック
+	if not (parent and parent:IsA("GuiObject")) then return nil end
+	lang = tostring(lang or "en")
+	mon  = tonumber(mon or 0) or 0
+	handlers = handlers or {}
+
+	-- 本体ボタン（和紙パネル風）
 	local btn = Instance.new("TextButton")
-	btn.Name = it.id or "Item"
-	btn.Text = ShopFormat.faceName(it)
+	btn.Name = _safeId(it)
+	btn.Text = _getFaceName(it)
 	btn.TextSize = 28
 	btn.Font = Enum.Font.GothamBold
-	btn.TextColor3 = Theme.COLORS.TextDefault
-	btn.BackgroundColor3 = Theme.COLORS.PanelBg
-	btn.AutoButtonColor = true
+	btn.TextColor3 = _themeColor("TextDefault", Color3.fromRGB(240,240,240))
+	btn.BackgroundColor3 = _themeColor("PanelBg", Color3.fromRGB(35,38,46))
+	btn.AutoButtonColor  = true
 	btn.ZIndex = 10
 	btn.Parent = parent
-	addCorner(btn, Theme.PANEL_RADIUS)
-	local stroke = addStroke(btn, Theme.COLORS.PanelStroke, 1, 0)
+	addCorner(btn, Theme and Theme.PANEL_RADIUS or 10)
+	local stroke = addStroke(btn, _themeColor("PanelStroke", Color3.fromRGB(70,70,80)), 1, 0)
 
-	-- 価格バンド（TextLabel にし、入力は親へパス）
+	-- 価格バンド（TextLabel、入力は親へパス）
 	local priceBand = Instance.new("TextLabel")
 	priceBand.Name = "Price"
-	priceBand.BackgroundColor3 = Theme.COLORS.BadgeBg
+	priceBand.BackgroundColor3 = _themeColor("BadgeBg", Color3.fromRGB(25,28,36))
 	priceBand.Size = UDim2.new(1,0,0,20)
 	priceBand.Position = UDim2.new(0,0,1,-20)
-	priceBand.Text = ShopFormat.fmtPrice(it.price)
+	priceBand.Text = _fmtPrice(it and it.price)
 	priceBand.TextSize = 14
 	priceBand.Font = Enum.Font.Gotham
 	priceBand.TextColor3 = Color3.fromRGB(245,245,245)
@@ -3659,20 +3554,24 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	priceBand.Active = false       -- 入力を自身で取らない
 	priceBand.Selectable = false   -- 選択不可
 	priceBand.Parent = btn
-	addStroke(priceBand, Theme.COLORS.BadgeStroke, 1, 0.2)
+	addStroke(priceBand, _themeColor("BadgeStroke", Color3.fromRGB(60,65,80)), 1, 0.2)
 
 	-- 購入可否の視覚
-	local affordable = (tonumber(mon or 0) >= tonumber(it.price or 0))
+	local affordable = _computeAffordable(mon, it and it.price)
 	if not affordable then
-		priceBand.Text = ShopFormat.fmtPrice(it.price) .. Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX")
+		local insuff = Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX") -- 例: "（不足）"
+		priceBand.Text = _fmtPrice(it and it.price) .. insuff
 		priceBand.BackgroundTransparency = 0.15
-		btn.AutoButtonColor = true -- クリックは許可（サーバ側で弾く）
+		-- クリックは許可（サーバ側で弾く）…従来方針を維持
+		btn.AutoButtonColor = true
 	end
 
-	-- ホバー：枠と背景をわずかに強調
+	-- Attributes（UIテスト/デバッグ向け）
+	_setAttributes(btn, it, lang, mon, affordable)
+
+	-- Hover/Selection 演出（小さく）
 	local ti = TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 	local baseBg = btn.BackgroundColor3
-
 	local function hoverIn()
 		if stroke then stroke.Thickness = 2 end
 		TweenService:Create(btn, ti, { BackgroundColor3 = baseBg:Lerp(Color3.new(1,1,1), 0.06) }):Play()
@@ -3681,18 +3580,20 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 		if stroke then stroke.Thickness = 1 end
 		TweenService:Create(btn, ti, { BackgroundColor3 = baseBg }):Play()
 	end
-
 	btn.MouseEnter:Connect(hoverIn)
 	btn.MouseLeave:Connect(hoverOut)
+	-- TextButton には Focused/FocusLost は無いので SelectionGained/Lost を使用（存在チェック付き）
+	if btn.SelectionGained then btn.SelectionGained:Connect(hoverIn) end
+	if btn.SelectionLost   then btn.SelectionLost  :Connect(hoverOut) end
 
 	-- 説明表示（右の Info パネルへ）
 	local function showDesc()
-		local title = ShopFormat.itemTitle(it, lang)
-		local desc  = ShopFormat.itemDesc(it, lang)
+		local title = _title(it, lang)
+		local desc  = _desc(it, lang)
 		local lines = {
-			string.format("<b>%s</b>", title),
-			Locale.t(lang, "SHOP_UI_LABEL_CATEGORY"):format(tostring(it.category or "-")),
-			Locale.t(lang, "SHOP_UI_LABEL_PRICE"):format(ShopFormat.fmtPrice(it.price)),
+			string.format("<b>%s</b>", title ~= "" and title or _getFaceName(it)),
+			_catLabel(it, lang),
+			_priceLabel(it, lang),
 			"",
 			(desc ~= "" and desc or Locale.t(lang, "SHOP_UI_NO_DESC")),
 		}
@@ -3701,13 +3602,16 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 		end
 	end
 	btn.MouseEnter:Connect(showDesc)
+	if btn.SelectionGained then btn.SelectionGained:Connect(showDesc) end
 
-	-- 購入（Activated は本体のみ）
+	-- 購入（Activated は Mouse/Touch/Gamepad/Keyboard を包括）
 	local function doBuy()
-		if not handlers or type(handlers.onBuy) ~= "function" then return end
-		handlers.onBuy(it)
+		if not (handlers and typeof(handlers.onBuy)=="function") then return end
+		pcall(function() handlers.onBuy(it) end) -- 失敗してもUIは落とさない
 	end
 	btn.Activated:Connect(doBuy)
+
+	return btn
 end
 
 return M
@@ -5512,10 +5416,12 @@ function Home.new(deps)
 -- 目的: KitoPick の12枚一覧UI・効果説明＋カード画像＆情報表示・確定／スキップ
 -- 仕様: KitoPickWires の ClientSignals を購読し、シグナル受信時に Router 経由で表示
 -- 方針: 「選択可否の真実はサーバ」。各候補の entry.eligible を厳守して UI でブロックする。
+-- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
 
-local Players = game:GetService("Players")
-local RS      = game:GetService("ReplicatedStorage")
-local LP      = Players.LocalPlayer
+local Players    = game:GetService("Players")
+local RS         = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+local LP         = Players.LocalPlayer
 
 -- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
@@ -5592,11 +5498,18 @@ local function make(text, className, props, parent)
 end
 
 local function ensureGui()
-	if ui and ui.Parent then return ui end
+	local t0 = os.clock()
+	-- 既にあれば Parent ロスト時のみ復旧
+	if ui and ui.Parent then
+		LOG.debug("ensureGui: reuse existing gui (%.2fms)", (os.clock()-t0)*1000)
+		return ui
+	end
 	ui = make("KitoPickGui", "ScreenGui", {
 		ResetOnSpawn    = false,
 		ZIndexBehavior  = Enum.ZIndexBehavior.Global,
 		IgnoreGuiInset  = true,
+		DisplayOrder    = 50,
+		Enabled         = false,  -- ★初期は非表示
 	}, LP:WaitForChild("PlayerGui"))
 
 	local shade = make("Shade","Frame",{
@@ -5688,7 +5601,7 @@ local function ensureGui()
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, footer)
 
-	-- Skip（何も選ばない）
+	-- Skip
 	local skipBtn = make("Skip","TextButton",{
 		Text                   = "Skip",
 		Font                   = Enum.Font.GothamBold,
@@ -5728,11 +5641,13 @@ local function ensureGui()
 	refs.skipBtn    = skipBtn
 	refs.pickInfo   = pickInfo
 
+	LOG.info("ensureGui: built gui in %.2fms", (os.clock()-t0)*1000)
 	return ui
 end
 
 -- 効果説明の高さに合わせてグリッド領域を再レイアウト
 local function relayoutByEffectHeight()
+	local t0 = os.clock()
 	if not (refs.effect and refs.gridHolder) then return end
 	local topY      = 28 + 6
 	local baseBelow = 84 -- フッタ確保高さ
@@ -5745,6 +5660,7 @@ local function relayoutByEffectHeight()
 	local gridTop  = topY + needH + 8
 	refs.gridHolder.Position = UDim2.new(0, 0, 0, gridTop)
 	refs.gridHolder.Size     = UDim2.new(1, 0, 1, -gridTop - baseBelow)
+	LOG.debug("relayoutByEffectHeight: effectH=%d in %.2fms", needH, (os.clock()-t0)*1000)
 end
 
 -- 画像ソースを決定（rbxassetid:// またはそのまま文字列）
@@ -5796,18 +5712,6 @@ local function makeCard(entry)
 	card.Name                   = entry.uid
 	card.AutoButtonColor        = true
 	card.BackgroundColor3       = Color3.fromRGB(40,42,54)
-	card.BackgroundTransparency = 0.05
-	card.BorderSizePixel        = 0
-	card.Size                   = UDim2.fromOffset(180, 160)
-	card.Text                   = ""
-	Instance.new("UICorner", card).CornerRadius = UDim.new(0,12)
-
-	-- 選択枠（非表示で用意）
-	local stroke = Instance.new("UIStroke")
-	stroke.Name = "SelStroke"
-	stroke.Thickness = 2
-	stroke.Color = Color3.fromRGB(90,130,230)
-	stroke.Enabled = false
 ... (truncated)
 ```
 
@@ -7813,7 +7717,7 @@ return Theme
 ```lua
 -- ServerScriptService/GameInit.server.lua
 -- エントリポイント：Remotes生成／各Service初期化／永続（SaveService）連携
--- v0.9.2 → v0.9.2-langfix2 (+P1-3 logger):
+-- v0.9.2 → v0.9.2-langfix2 (+P1-3 logger) → v0.9.3-effects-bootstrap
 --  - STARTGAME に統合（セーブがあればCONTINUE / なければNEW）
 --  - SaveService.activeRun（季節開始/屋台入場）スナップからの復帰に対応
 --  - HomeOpen.hasSave を正しく反映
@@ -7823,6 +7727,8 @@ return Theme
 --  - ★ P1-1: DecideNext の実装を NavServer に一本化（本ファイルは初期化のみ）
 --  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 --  - ★ P2-10: ラン終了後は強制NEW（_forceNewOnNextStart フラグを尊重）
+--  - ★ v0.9.3: Deck/EffectsRegistry の一括登録を起動時に実行
+--              ＋ 酉UI用 Remotes（KitoPickStart/KitoPickDecide）を正式に生やす
 
 --==================================================
 -- Services
@@ -7894,6 +7800,10 @@ local Remotes = {
 
 	-- 同期（C→S：再同期要求。実処理は UiResync.server.lua）
 	ReqSyncUI     = ensureRemote("ReqSyncUI"),
+
+	-- ★ 酉UI（新経路）: サーバ→クライアント候補提示 / クライアント→サーバ決定
+	KitoPickStart  = ensureRemote("KitoPickStart"),   -- S→C: 12候補提示
+	KitoPickDecide = ensureRemote("KitoPickDecide"),  -- C→S: 決定/スキップ
 }
 
 -- Top/Home 系
@@ -7926,6 +7836,30 @@ local ShopService  = require(RS.SharedModules.ShopService)
 
 -- ★ P1-1: NavServer を導入（DecideNext の唯一線）
 local NavServer    = require(SSS:WaitForChild("NavServer"))
+
+-- （任意）酉ピックのハンドラ群（あれば起動時に Remotes を注入して配線）
+local KitoPickServer do
+	local ok, mod = pcall(function() return require(SSS:WaitForChild("KitoPickServer")) end)
+	if ok and type(mod) == "table" then
+		KitoPickServer = mod
+	else
+		KitoPickServer = nil
+	end
+end
+
+--==================================================
+-- Deck Effects（新経路の唯一のデッキ変化窓口）: 起動時に一括登録
+--==================================================
+local function bootstrapEffects()
+	local ok, err = pcall(function()
+		require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("EffectsRegisterAll"))
+	end)
+	if ok then
+		LOG.info("[Effects] EffectsRegistry initialized (Deck/EffectsRegisterAll)")
+	else
+		LOG.warn("[Effects] initialization failed: %s", tostring(err))
+	end
+end
 
 --==================================================
 -- DEV Remotes（Studio向け：+両 / +役 付与）
@@ -7985,6 +7919,10 @@ end
 --==================================================
 -- 初期化／バインド
 --==================================================
+-- ★ Deck Effects 登録（最初に実施）
+bootstrapEffects()
+
+-- StateHub / 各サービス紐付け
 StateHub.init(Remotes)
 
 if PickService and typeof(PickService.bind) == "function" then
@@ -8012,6 +7950,12 @@ if ShopService and typeof(ShopService.init) == "function" then
 	)
 else
 	LOG.warn("ShopService.init が見つかりません")
+end
+
+-- ★ 酉ピック（新経路）の配線があれば注入して起動
+if KitoPickServer and typeof(KitoPickServer.bind) == "function" then
+	KitoPickServer.bind(Remotes)
+	LOG.info("[KitoPickServer] ready (handlers wiring)")
 end
 
 -- ★ P1-1: NavServer を初期化（DecideNext の唯一線）。依存はここで注入。
@@ -8071,68 +8015,41 @@ Players.PlayerAdded:Connect(function(plr)
 	})
 end)
 
-Players.PlayerRemoving:Connect(function(plr)
-	LOG.info("PlayerRemoving | flush profile | user=%s", plr.Name)
-	SaveService.flush(plr)
-end)
-
-game:BindToClose(function()
-	LOG.info("BindToClose | flushAll begin")
-	pcall(function() SaveService.flushAll() end)
-	LOG.info("BindToClose | flushAll end")
-end)
-
---==================================================
--- 言語保存（C→S）
---==================================================
-ReqSetLang.OnServerEvent:Connect(function(plr, lang)
-	local n = normLang(lang)
-	if not n then
-		LOG.warn("ReqSetLang invalid | user=%s from=%s", plr.Name, tostring(lang))
-		return
-	end
-	SaveService.setLang(plr, n)
-
-	local s = StateHub.get(plr) or {}
-	s.lang = n
-	StateHub.set(plr, s)
-
-	LOG.info("setLang | saved & state updated | user=%s lang=%s", plr.Name, n)
-end)
-
---==================================================
--- ラン開始/続き（RoundReady → RunScreen.requestSync → UiResync）
---==================================================
-local function fireReadySoon(plr)
-	task.delay(0.05, function()
-		Remotes.RoundReady:FireClient(plr)
-	end)
-end
-
-local function startNewRun(plr)
-	-- NEW 開始前に続きスナップは必ず破棄
 ... (truncated)
 ```
 
 ### src/server/KitoPickCore.lua
 ```lua
 -- ServerScriptService/KitoPickCore.lua
--- 目的: KITO ピックのセッション生成/保持/失効と候補送信の中核
-local RS   = game:GetService("ReplicatedStorage")
-local SSS  = game:GetService("ServerScriptService")
+-- v0.9.5 KITO Pick Core (DeckRegistry + UID consistent, EN-only)
+-- Purpose:
+--   - Build and send a 12-card candidate pool for the picker UI
+--   - Keep/expire a simple session
+-- Policy:
+--   - UID-first (entries[*].uid is the single source of truth; legacy decks may use code as fallback)
+--   - Exclude months that do not have a "bright" card
+--   - KITO_SAME_KIND_POLICY: "block" (exclude already-bright) / "allow" (include)
 
+local RS = game:GetService("ReplicatedStorage")
+
+-- Config / Logger
 local Balance    = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local PoolEditor = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
 local Logger     = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG        = Logger.scope("KitoPickCore")
 
-local Remotes   = RS:WaitForChild("Remotes")
-local EvStart   = Remotes:WaitForChild("KitoPickStart") -- RemoteEvent
+-- Deck APIs
+local Shared     = RS:WaitForChild("SharedModules")
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
+local DeckReg    = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
 
--- 画像ルックアップ（存在しない環境でも落ちないようにフォールバック）
+-- Remotes
+local Remotes  = RS:WaitForChild("Remotes")
+local EvStart  = Remotes:WaitForChild("KitoPickStart") -- RemoteEvent
+
+-- Card image resolver (optional)
 local CardImageMap do
 	local ok, mod = pcall(function()
-		return require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
+		return require(Shared:WaitForChild("CardImageMap"))
 	end)
 	if ok and type(mod) == "table" then
 		CardImageMap = mod
@@ -8144,86 +8061,38 @@ end
 
 local Core = {}
 
--- ユーザー別セッション保持
+--─────────────────────────────────────────────────────────────
+-- Session store (simple)
+--─────────────────────────────────────────────────────────────
 local sessions: {[number]: any} = {}
 
--- 便宜: 先頭N件のUIDを "uid1,uid2,..." で返す
-local function headUidList(uids: {string}?, n: number)
+local function headList(list, n)
 	local out = {}
-	if type(uids) == "table" then
-		for i = 1, math.min(#uids, n) do
-			out[#out+1] = tostring(uids[i])
-		end
+	if type(list) == "table" then
+		for i = 1, math.min(#list, n) do out[#out+1] = tostring(list[i]) end
 	end
 	return table.concat(out, ",")
 end
 
--- 月の推定（code/uid の先頭2桁から 1..12 を推定、無ければ nil）
-local function guessMonth(e: any): number?
-	local s = tostring((e and (e.code or e.uid)) or "")
-	local two = string.match(s, "^(%d%d)")
-	if not two then return nil end
-	local n = tonumber(two)
-	if n and n >= 1 and n <= 12 then return n end
-	return nil
+local function now() return os.time() end
+local function ttlSec()
+	return tonumber(Balance.KITO_POOL_TTL_SEC or 45) or 45
 end
 
--- 送信用サマリ（画像＋eligible付与）
-local function summarize(e: any, tgtKind: string, policy: string)
-	if type(e) ~= "table" then return nil end
-	local code = tostring(e.code or "")
-
-	-- 画像の解決（CardImageMap.get は "rbxassetid://..." 文字列 or 数値ID を想定）
-	local img = nil
-	local ok, got = pcall(function()
-		if type(CardImageMap.get) == "function" then
-			return CardImageMap.get(code)
-		end
-	end)
-	if ok then img = got end
-
-	-- eligible（同種かつ"block"なら不可）
-	local same = tostring(e.kind) == tostring(tgtKind or "")
-	local eligible = true
-	if policy == "block" then
-		eligible = not same
-	end
-
-	local sum = {
-		uid      = e.uid,
-		code     = code,
-		name     = e.name,
-		kind     = e.kind,
-		month    = e.month or guessMonth(e),
-		eligible = eligible,
-	}
-
-	if type(img) == "string" then
-		sum.image = img                  -- 例: "rbxassetid://123456" or https://...
-	elseif type(img) == "number" or tonumber(img) then
-		sum.imageId = tonumber(img)      -- 数値IDなら imageId で渡す（クライアントで rbxassetid:// を付与）
-	end
-
-	return sum
+local function put(userId: number, sess: any)
+	sessions[userId] = sess
 end
 
--- 公開: 現在のセッション（あれば）を見る
 function Core.peek(userId: number)
 	local s = sessions[userId]
-	LOG.debug("[Peek] userId=%s has=%s sess=%s ver=%s",
-		tostring(userId),
-		tostring(s ~= nil),
-		s and tostring(s.id) or "-",
-		s and tostring(s.version) or "-")
+	LOG.debug("[Peek] userId=%s has=%s sid=%s", tostring(userId), tostring(s~=nil), s and tostring(s.id) or "-")
 	return s
 end
 
--- 公開: セッションを消費（取得して同時に削除）
 function Core.consume(userId: number)
 	local s = sessions[userId]
 	if s then
-		LOG.debug("[Consume] userId=%s take sess=%s ver=%s (expiresAt=%s)",
-			tostring(userId), tostring(s.id), tostring(s.version), tostring(s.expiresAt))
+		LOG.debug("[Consume] userId=%s take sid=%s", tostring(userId), tostring(s.id))
 	else
 		LOG.debug("[Consume] userId=%s no-session", tostring(userId))
 	end
@@ -8231,77 +8100,176 @@ function Core.consume(userId: number)
 	return s
 end
 
--- 内部: セッションを保存（上書き）
-local function put(userId: number, sess: any)
-	local existed = sessions[userId] ~= nil
-	sessions[userId] = sess
-	LOG.debug("[Put] userId=%s replace=%s sess=%s ver=%s uids#=%s",
-		tostring(userId), tostring(existed),
-		tostring(sess and sess.id), tostring(sess and sess.version),
-		tostring(sess and sess.uids and #sess.uids or 0))
+--─────────────────────────────────────────────────────────────
+-- Resolve runId from context
+--─────────────────────────────────────────────────────────────
+local function resolveRunId(runCtx:any)
+	if type(runCtx) ~= "table" then return nil end
+	-- direct
+	local direct = runCtx.runId or runCtx.deckRunId or runCtx.id or runCtx.deckRunID or runCtx.runID
+	if direct then return direct end
+	-- nested run
+	local run = runCtx.run
+	if type(run) == "table" then
+		return run.runId or run.deckRunId or run.id or run.deckRunID or run.runID
+	end
+	return nil
 end
 
--- 公開: 候補提示セッションを開始してクライアントへ送信
+--─────────────────────────────────────────────────────────────
+-- Helpers: month/image/eligibility
+--─────────────────────────────────────────────────────────────
+local function parseMonth(entry:any): number?
+	if type(entry) ~= "table" then return nil end
+	local m = tonumber(entry.month)
+	if m and m>=1 and m<=12 then return m end
+	local s = tostring(entry.code or entry.uid or "")
+	local two = string.match(s, "^(%d%d)")
+	return (two and tonumber(two)) or nil
+end
+
+-- Only check for "bright" existence in the month (EN-only)
+local function monthHasBright(month:number): boolean
+	local defs = CardEngine.cardsByMonth[month]
+	if typeof(defs) ~= "table" then return false end
+	for _, def in ipairs(defs) do
+		if tostring(def.kind or "") == "bright" then
+			return true
+		end
+	end
+	return false
+end
+
+local function resolveImage(code:string?)
+	local ok, got = pcall(function()
+		if type(CardImageMap.get) == "function" then return CardImageMap.get(code) end
+	end)
+	if ok and got ~= nil then return got end
+	return nil
+end
+
+local function toSummary(entry:any, targetKind:string, sameKindPolicy:string)
+	if type(entry) ~= "table" then return nil end
+	local m = parseMonth(entry)
+	if not m or not monthHasBright(m) then return nil end
+
+	local same = tostring(entry.kind or "") == tostring(targetKind or "")
+	if sameKindPolicy == "block" and same then
+		-- already the same kind ("bright") -> exclude from pool
+		return nil
+	end
+
+	local sum = {
+		uid      = entry.uid or entry.code,   -- UID is the truth; legacy may fallback to code
+		code     = entry.code,                -- for display/image lookup
+		name     = entry.name or entry.code,
+		kind     = entry.kind,
+		month    = m,
+		eligible = true,
+	}
+	local img = resolveImage(entry.code)
+	if type(img) == "string" then
+		sum.image = img
+	elseif type(img) == "number" or tonumber(img) then
+		sum.imageId = tonumber(img)
+	end
+	return sum
+end
+
+--─────────────────────────────────────────────────────────────
+-- Public: build & send 12-card pool (KITO: Rooster/bright)
+--─────────────────────────────────────────────────────────────
 -- effectId: "kito_tori" / targetKind: "bright"
-function Core.startFor(player: Player, state: any, effectId: string, targetKind: string)
+function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind: string)
 	if Balance.KITO_UI_ENABLED ~= true then
-		LOG.debug("[StartFor] UI disabled; ignored | u=%s", player and player.Name or "?")
+		LOG.debug("[StartFor] UI disabled; ignored | user=%s", player and player.Name or "?")
 		return false
 	end
 	if tostring(effectId) ~= "kito_tori" then
-		LOG.debug("[StartFor] unsupported effect=%s | u=%s", tostring(effectId), player and player.Name or "?")
-		return false
-	end
-	if type(state) ~= "table" or type(state.deck) ~= "table" or #state.deck == 0 then
-		LOG.debug("[StartFor] no live deck; u=%s", player and player.Name or "?")
+		LOG.debug("[StartFor] unsupported effect=%s | user=%s", tostring(effectId), player and player.Name or "?")
 		return false
 	end
 
-	local k = Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12
-	local sess = PoolEditor.start(state, k)
-	if not (sess and type(sess.uids) == "table" and #sess.uids > 0) then
-		LOG.info("[StartFor] no candidates; aborted | u=%s", player and player.Name or "?")
+	-- Resolve runId and ensure entries in DeckRegistry
+	local runId = resolveRunId(runCtx)
+	if not runId then
+		local hasRun = (type(runCtx)=="table" and type(runCtx.run)=="table")
+		LOG.info("[StartFor] missing runId; aborted | user=%s hasRun=%s", player and player.Name or "?", tostring(hasRun))
+		return false
+	end
+	DeckReg.ensureFromContext(runCtx)
+	local store = DeckReg.read(runId)
+	if typeof(store) ~= "table" or typeof(store.entries) ~= "table" or #store.entries == 0 then
+		LOG.info("[StartFor] no deck entries; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
 		return false
 	end
 
-	-- セーブ（上書き）
+	-- EN-only target kind
+	local tgtKind = "bright"
+	local policy  = tostring(Balance.KITO_SAME_KIND_POLICY or "block") -- "block"|"allow"
+	local pickN   = tonumber(Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12) or 12
+
+	-- Build pool (UID-first)
+	local pool = {}
+	for _, e in ipairs(store.entries) do
+		local s = toSummary(e, tgtKind, policy)
+		if s then table.insert(pool, s) end
+	end
+	if #pool == 0 then
+		LOG.info("[StartFor] no candidates; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
+		return false
+	end
+
+	-- Shuffle and take first N (independent RNG)
+	local seed = math.floor((os.clock() % 1) * 1e9)
+	local rng  = Random.new(seed)
+	for i = #pool, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		pool[i], pool[j] = pool[j], pool[i]
+	end
+	local list = {}
+	for i = 1, math.min(#pool, pickN) do
+		list[#list+1] = pool[i]
+	end
+
+	-- Session
+	local sess = {
+		id        = string.format("kito-%d-%d", player.UserId, now()),
+		version   = "v3",
+		createdAt = now(),
+		expiresAt = now() + ttlSec(),
+		runId     = runId,
+		effectId  = effectId,
+		uids      = (function()
+			local t = {}
+			for _, s in ipairs(list) do t[#t+1] = s.uid end
+			return t
+		end)(),
+	}
 	put(player.UserId, sess)
 
-	-- 要約を作成（画像＋eligible付き）
-	local list = {}
-	local sameKind, otherKind = 0, 0
-	local tgtKind = targetKind or "bright"
-	local policy  = Balance.KITO_SAME_KIND_POLICY or "block"
-
-	for _, uid in ipairs(sess.uids) do
-		local e = sess.snap[uid]
-		if e then
-			if e.kind == tgtKind then sameKind += 1 else otherKind += 1 end
-			local sum = summarize(e, tgtKind, policy)
-			if sum then table.insert(list, sum) end
-		end
-	end
-
-	-- 送信
+	-- Client payload (EN-only)
 	local payload = {
 		sessionId  = sess.id,
 		version    = sess.version,
 		expiresAt  = sess.expiresAt,
 		effectId   = effectId,
 		targetKind = tgtKind,
-		list       = list, -- ← 各要素に image / imageId / eligible を含む
+		list       = list,    -- {uid,code?,name,kind,month,image?/imageId?,eligible}
+		effect     = ("Select one target (goal: %s)"):format("Bright"),
 	}
 	EvStart:FireClient(player, payload)
 
-	-- 詳細ログ
-	LOG.info(
-		"[StartFor] u=%s sess=%s size=%d tgt=%s sameKind=%d otherKind=%d head5=[%s]",
+	-- Log summary
+	local same, other = 0, 0
+	for _, s in ipairs(list) do
+		if tostring(s.kind or "") == tgtKind then same += 1 else other += 1 end
+	end
+	LOG.info("[StartFor] user=%s sid=%s size=%d tgt=%s same=%d other=%d head5=[%s]",
 		player and player.Name or "?",
 		tostring(sess.id),
-		#list,
-		tostring(tgtKind),
-		sameKind, otherKind,
-		headUidList(sess.uids, 5)
+		#list, tgtKind, same, other,
+		headList(sess.uids, 5)
 	)
 
 	return true
@@ -8313,207 +8281,306 @@ return Core
 ### src/server/KitoPickServer.server.lua
 ```lua
 -- ServerScriptService/KitoPickServer.lua
--- 目的: KITOの「12枚提示→選択→確定」をサーバで管理（UIは後付け）
+-- v0.9.10 KITO Pick Server (+diag logs, safe reopen with state, no reroll)
+-- 変更点:
+--   - reopenShopSnapshot: ShopService の想定シグネチャに合わせ state を第2引数へ
+--   - open/openFor の複数シグネチャを順に試すフォールバック実装
+--   - それ以外は前版踏襲（効果適用→pushState→在庫を維持したままOPEN再送）
 
--- ── Services ─────────────────────────────────────────────────
-local RS      = game:GetService("ReplicatedStorage")
-local SSS     = game:GetService("ServerScriptService")
-local Players = game:GetService("Players")
+local RS  = game:GetService("ReplicatedStorage")
+local SSS = game:GetService("ServerScriptService")
 
--- ── Logger ───────────────────────────────────────────────────
-local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
-local LOG    = Logger.scope("KitoPickServer")
-LOG.info("ready (handlers wiring)")
+-- Logger / Config
+local Logger  = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG     = Logger.scope("KitoPickServer")
+local Balance = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 
--- ── Deps ─────────────────────────────────────────────────────
-local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
-local PoolEditor  = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
-local CardEngine  = require(RS:WaitForChild("SharedModules"):WaitForChild("CardEngine"))
+-- Core / Registry / State
+local Shared       = RS:WaitForChild("SharedModules")
+local KitoCore     = require(SSS:WaitForChild("KitoPickCore"))
+local DeckRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+local StateHub     = require(Shared:WaitForChild("StateHub"))
 
--- ── Remotes ──────────────────────────────────────────────────
+-- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
-local EvStart  = Remotes:WaitForChild("KitoPickStart")   :: RemoteEvent -- S→C (提示) / C→S (任意開始要求)
-local EvDecide = Remotes:WaitForChild("KitoPickDecide")  :: RemoteEvent -- C→S 決定
-local EvResult = Remotes:WaitForChild("KitoPickResult")  :: RemoteEvent -- S→C 結果通知
+local EvDecide = Remotes:WaitForChild("KitoPickDecide")
+local EvCancel = Remotes:FindFirstChild("KitoPickCancel")
+local EvResult = Remotes:FindFirstChild("KitoPickResult") -- 任意/トースト用
 
--- ── Core（セッション正本）/ State ───────────────────────────
-local Core     = require(SSS:WaitForChild("KitoPickCore"))
-local StateHub = require(RS:WaitForChild("SharedModules"):WaitForChild("StateHub"))
-local function getLiveState(player: Player)
-	return StateHub.get(player)
+-- ─────────────────────────────────────────────────────────────
+-- Utility: safe require
+-- ─────────────────────────────────────────────────────────────
+local function tryRequire(inst: Instance?)
+	if not inst or not inst:IsA("ModuleScript") then return nil end
+	local ok, mod = pcall(function() return require(inst) end)
+	if ok then return mod end
+	LOG.warn("[KitoPickServer] require failed: %s", tostring(mod))
+	return nil
 end
 
--- ===== 任意: C→S Start を受けた場合も Core に移譲して開始 =====
-EvStart.OnServerEvent:Connect(function(player: Player, effectId: any, targetKind: any)
-	if Balance.KITO_UI_ENABLED ~= true then return end
-	local state = getLiveState(player)
-	LOG.info("[Start][REQ] u=%s eff=%s tgt=%s deck=%s",
-		player and player.Name or "?", tostring(effectId), tostring(targetKind),
-		(type(state) == "table" and type(state.deck) == "table") and #state.deck or "nil"
-	)
-	Core.startFor(player, state, tostring(effectId or "kito_tori"), tostring(targetKind or "bright"))
-end)
-LOG.debug("[Wire] Start handler wired")
+-- ─────────────────────────────────────────────────────────────
+-- EffectsRegistry 読み込み（正しい配置を優先）
+-- ─────────────────────────────────────────────────────────────
+local EffectsRegistry =
+	tryRequire(Shared:FindFirstChild("Deck") and Shared.Deck:FindFirstChild("EffectsRegistry"))
+	or tryRequire(Shared:FindFirstChild("EffectsRegistry"))
+	or tryRequire(SSS:FindFirstChild("EffectsRegistry"))
 
--- ================= C→S: 決定（sessionId, uid?, targetKind, noChange?） =================
-EvDecide.OnServerEvent:Connect(function(player: Player, payload: any)
-	if Balance.KITO_UI_ENABLED ~= true then return end
-	if type(payload) ~= "table" then return end
+if EffectsRegistry then
+	LOG.info("[KitoPickServer] EffectsRegistry wired (module loaded)")
+else
+	LOG.warn("[KitoPickServer] EffectsRegistry not found; brighten effect will be unavailable (server continues)")
+end
 
-	local wantId   = tostring(payload.sessionId or "")
-	local target   = tostring(payload.targetKind or "bright")
-	local noChange = payload.noChange == true
-	local policy   = tostring(Balance.KITO_SAME_KIND_POLICY or "block") -- "block" | "auto-skip" | "complete"
+-- ─────────────────────────────────────────────────────────────
+-- ShopService 解決（非ブロッキング探索）
+-- ─────────────────────────────────────────────────────────────
+local function resolveShopService()
+	local inst =
+		SSS:FindFirstChild("ShopService")
+		or (Shared:FindFirstChild("Shop") and Shared.Shop:FindFirstChild("ShopService"))
+		or Shared:FindFirstChild("ShopService")
+		or RS:FindFirstChild("ShopService")
+		or (RS:FindFirstChild("SharedModules") and RS.SharedModules:FindFirstChild("ShopService"))
 
-	-- uid はスキップ時は未指定でOK。空文字は nil 扱いに正規化。
-	local pickUid  = payload.uid
-	if type(pickUid) == "string" and pickUid == "" then
-		pickUid = nil
-	end
-	if pickUid ~= nil then
-		pickUid = tostring(pickUid)
-	end
-
-	-- sessionId は必須
-	if wantId == "" then
-		LOG.warn("[Decide][BADPAYLOAD] u=%s sid(empty)", player and player.Name or "?")
-		return
-	end
-
-	-- Core のセッションを参照（存在＆ID一致チェック）※ここでは consume しない
-	local peek = Core.peek(player.UserId)
-	if not peek then
-		LOG.warn("[Decide][NOSESS] u=%s sid=%s (peek=nil)", player and player.Name or "?", wantId)
-		return
-	end
-	if peek.id ~= wantId then
-		LOG.warn("[Decide][SID-MISMATCH] u=%s want=%s have=%s", player and player.Name or "?", wantId, tostring(peek.id))
-		return
-	end
-
-	local state = getLiveState(player)
-	if type(state) ~= "table" or type(state.deck) ~= "table" then
-		LOG.warn("[Decide][NOSTATE] u=%s", player and player.Name or "?")
-		return
-	end
-
-	-- ★ 分岐1: スキップ（変更なし確定）
-	if noChange then
-		local sess = Core.consume(player.UserId) -- セッションを閉じる
-		local okCommit, reason = PoolEditor.commit(state, sess)
-		local msg
-		if okCommit then
-			msg = "酉：変更せずに確定しました"
-			LOG.info("[Decide][SKIP][OK] u=%s sid=%s tgt=%s", player and player.Name or "?", wantId, target)
-		else
-			msg = ("酉：変更なし確定に失敗しました（%s）"):format(tostring(reason))
-			LOG.warn("[Decide][SKIP][COMMIT-NG] u=%s sid=%s reason=%s", player and player.Name or "?", wantId, tostring(reason))
-		end
-		EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
-		local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
-		ShopService.open(player, state, { notice = msg })
-		return
-	end
-
-	-- ★ 分岐2: 通常決定（カード指定が必要）
-	if not pickUid then
-		LOG.warn("[Decide][BADPAYLOAD] u=%s sid=%s uid=nil", player and player.Name or "?", wantId)
-		EvResult:FireClient(player, { ok=false, message="対象が選ばれていません", targetKind=target })
-		return
-	end
-
-	-- 候補の正当性を peek で確認（eligible チェックは“同種かどうか”でサーバ側もガード）
-	local entry = peek.snap and peek.snap[pickUid]
-	if not entry then
-		LOG.warn("[Decide][NOTINPOOL] u=%s sid=%s uid=%s (not in snapshot)", player and player.Name or "?", wantId, pickUid)
-		EvResult:FireClient(player, { ok=false, message="候補に存在しないカードです", targetKind=target })
-		return
-	end
-
-	local isSameKind = tostring(entry.kind) == target
-
-	-- ポリシー適用
-	if isSameKind then
-		if policy == "block" then
-			-- 対象外：セッションは維持（consume しない）
-			LOG.debug("[Decide][BLOCK] u=%s sid=%s uid=%s kind=%s tgt=%s",
-				player and player.Name or "?", wantId, pickUid, tostring(entry.kind), target)
-			EvResult:FireClient(player, {
-				ok=false,
-				message="対象外のカードです（同種は選べません）",
-				targetKind=target,
-			})
-			return
-		elseif policy == "auto-skip" or policy == "complete" then
-			-- ノーオペ確定（セッション終了）
-			local sess = Core.consume(player.UserId)
-			local okCommit, reason = PoolEditor.commit(state, sess)
-			local label = (entry.name or entry.code or pickUid)
-			local msg
-			if okCommit then
-				if policy == "auto-skip" then
-					msg = "酉：同種を選択したため、変更せずに確定しました"
-				else
-					msg = ("酉：%s を対象に実行しました（同種：変化なし）"):format(label)
-				end
-				LOG.info("[Decide][SAME][%s][OK] u=%s sid=%s uid=%s tgt=%s",
-					policy, player and player.Name or "?", wantId, pickUid, target)
-			else
-				msg = ("酉：処理に失敗しました（%s）"):format(tostring(reason))
-				LOG.warn("[Decide][SAME][%s][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
-					policy, player and player.Name or "?", wantId, pickUid, target, tostring(reason))
-			end
-			EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
-			local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
-			ShopService.open(player, state, { notice = msg })
-			return
-		end
-	end
-
-	-- ★ 分岐3: 異種変換（通常フロー）
-	local sess  = Core.consume(player.UserId) -- ここで消費
-	-- mutate（対象1枚）
-	local okMut = select(1, PoolEditor.mutate(sess, {
-		kind       = "convertKind",
-		targetKind = target,
-		uids       = { pickUid },
-	}))
-	if not okMut then
-		LOG.warn("[Decide][MUTATE-NG] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
-	end
-
-	local okCommit, reason = PoolEditor.commit(state, sess)
-	local label = (sess.snap and sess.snap[pickUid] and (sess.snap[pickUid].name or sess.snap[pickUid].code)) or pickUid
-	local msg
-	if okCommit then
-		msg = ("酉：%s を %s に変換しました（確定）"):format(label, target)
-		LOG.info("[Decide][OK] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+	local mod = tryRequire(inst)
+	if mod then
+		LOG.info("[KitoPickServer] ShopService wired from %s", inst:GetFullName())
 	else
-		msg = ("酉：変換に失敗しました（%s）"):format(tostring(reason))
-		LOG.warn("[Decide][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
-			player and player.Name or "?", wantId, pickUid, target, tostring(reason))
+		LOG.warn("[KitoPickServer] ShopService not found (no ModuleScript found); reopen will be skipped")
+	end
+	return mod
+end
+
+local ShopService = resolveShopService()
+
+-- ─────────────────────────────────────────────────────────────
+-- runId 解決（KitoPickCore と同一規則）
+-- ─────────────────────────────────────────────────────────────
+local function resolveRunId(ctx:any)
+	if type(ctx) ~= "table" then return nil end
+	if ctx.runId then return ctx.runId end
+	if ctx.deckRunId then return ctx.deckRunId end
+	if ctx.id then return ctx.id end
+	if ctx.runID then return ctx.runID end
+	if ctx.deckRunID then return ctx.deckRunID end
+	local run = ctx.run
+	if type(run) == "table" then
+		return run.runId or run.deckRunId or run.id or run.runID or run.deckRunID
+	end
+	return nil
+end
+
+-- 効果結果のゆるい解釈
+local function interpretApplyResult(r1, r2)
+	if type(r1) == "boolean" then
+		return r1, nil, r2
+	elseif type(r1) == "table" then
+		local ok = (r1.ok == nil) and true or (r1.ok ~= false)
+		return ok, r1.changed, r1.message or r1.meta or r1.reason or r2
+	else
+		return (r1 ~= nil), nil, r2
+	end
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- 効果適用（IDフォールバック）
+-- ─────────────────────────────────────────────────────────────
+local PRIMARY_ID   = "kito.tori_brighten"
+local FALLBACK_ID  = "Tori_Brighten"
+
+local function applyBrighten(runId:string?, payload:any)
+	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
+		return false, nil, "effects-registry-missing", nil
+	end
+	if not runId or runId == "" then
+		return false, nil, "runId-missing", nil
 	end
 
-	-- クライアントへ結果
-	EvResult:FireClient(player, {
-		ok         = okCommit == true,
-		message    = msg,
-		targetKind = target,
-	})
+	-- primary
+	LOG.debug("[Decide] call apply order=(runId,effectId,payload) id=%s run=%s", PRIMARY_ID, tostring(runId))
+	local okCall, r1, r2 = pcall(function()
+		return EffectsRegistry.apply(runId, PRIMARY_ID, payload)
+	end)
+	if not okCall then
+		LOG.warn("[Decide] apply threw (primary %s): %s", PRIMARY_ID, tostring(r1))
+	else
+		local success, changed, message = interpretApplyResult(r1, r2)
+		LOG.debug("[Decide] apply(primary) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
+			typeof(r1), typeof(r2), tostring(success), tostring(changed), tostring(message))
+		if success then return true, changed, message, PRIMARY_ID end
+	end
 
-	-- 屋台再描画（notice に結果掲載）
-	local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
-	ShopService.open(player, state, { notice = msg })
-end)
-LOG.debug("[Wire] Decide handler wired")
+	-- fallback
+	LOG.debug("[Decide] retry apply with fallback id=%s run=%s", FALLBACK_ID, tostring(runId))
+	local okCall2, r3, r4 = pcall(function()
+		return EffectsRegistry.apply(runId, FALLBACK_ID, payload)
+	end)
+	if not okCall2 then
+		LOG.warn("[Decide] apply threw (fallback %s): %s", FALLBACK_ID, tostring(r3))
+		return false, nil, tostring(r3), FALLBACK_ID
+	end
+	local success2, changed2, message2 = interpretApplyResult(r3, r4)
+	LOG.debug("[Decide] apply(fallback) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
+		typeof(r3), typeof(r4), tostring(success2), tostring(changed2), tostring(message2))
+	return success2, changed2, message2, FALLBACK_ID
+end
 
--- ================= Cleanup =================
-Players.PlayerRemoving:Connect(function(p: Player)
-	Core.consume(p.UserId) -- 存在すれば破棄
-	LOG.debug("[Cleanup] user left; consumed any pending session for uid=%s", tostring(p.UserId))
-end)
-LOG.debug("[Wire] PlayerRemoving cleanup wired")
+-- ─────────────────────────────────────────────────────────────
+-- ショップを「在庫維持で開き直す」
+--   - ShopService の実装差に合わせて複数シグネチャを順に試す
+-- ─────────────────────────────────────────────────────────────
+local function reopenShopSnapshot(plr: Player, opts:any?)
+	if not ShopService then
+		LOG.warn("[ReopenShop] ShopService missing; skip")
+		return false, "no-shopservice"
+	end
+
+	local state = StateHub.get(plr) or {}
+	local notice = opts and opts.notice or "変換が完了しました"
+	local preserve = true
+
+	local tried = {}
+
+	local function tryCall(desc, f)
+		local t0 = os.clock()
+		local ok, err = pcall(f)
+		table.insert(tried, { desc = desc, ok = ok, err = ok and "" or tostring(err), ms = (os.clock()-t0)*1000 })
+		return ok, err
+	end
+
+	-- 優先1: openFor(plr, state, {notice=..., preserve=true})
+	if type(ShopService.openFor) == "function" then
+		local ok = select(1, tryCall("openFor(plr, state, opts)", function()
+			return ShopService.openFor(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok then
+			LOG.info("[ReopenShop] via openFor(plr,state,opts) in %.2fms", tried[#tried].ms)
+			return true
+		end
+		-- フォールバック: openFor(plr, { state=..., notice=..., preserve=true })
+		local ok2 = select(1, tryCall("openFor(plr, {state=...,notice=...})", function()
+			return ShopService.openFor(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok2 then
+			LOG.info("[ReopenShop] via openFor(plr,{state,...}) in %.2fms", tried[#tried].ms)
+			return true
+		end
+	end
+
+	-- 優先2: open(plr, state, {notice=..., preserve=true})
+	if type(ShopService.open) == "function" then
+		local ok3 = select(1, tryCall("open(plr, state, opts)", function()
+			return ShopService.open(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok3 then
+			LOG.info("[ReopenShop] via open(plr,state,opts) in %.2fms", tried[#tried].ms)
+			return true
+		end
+		-- フォールバック: open(plr, { state=..., notice=..., preserve=true })
+		local ok4 = select(1, tryCall("open(plr, {state=...,notice=...})", function()
+			return ShopService.open(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok4 then
+			LOG.info("[ReopenShop] via open(plr,{state,...}) in %.2fms", tried[#tried].ms)
+			return true
+		end
+	end
+
+	-- すべて失敗：詳細をまとめて WARN
+	for _, t in ipairs(tried) do
+		if not t.ok then
+			LOG.warn("[ReopenShop] tried %s → failed: %s (%.2fms)", t.desc, t.err, t.ms)
+		end
+	end
+	return false, "no-matching-signature"
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- Decide（確定）
+-- payload: { sessionId:string, uid:string, noChange?:boolean }
+-- ─────────────────────────────────────────────────────────────
+local PRIMARY_NOTICE_SKIP = "選択をスキップしました"
+local PRIMARY_NOTICE_DONE = "変換が完了しました"
+
+local function onDecide(plr: Player, payload:any)
+	if Balance.KITO_UI_ENABLED ~= true then return end
+
+	local uid      = payload and payload.uid
+	local sidRecv  = payload and payload.sessionId
+	local noChange = (payload and payload.noChange) == true
+
+	-- 受信要約ログ
+	LOG.info("[Decide] recv u=%s sid=%s uid=%s noChange=%s",
+		plr and plr.Name or "?", tostring(sidRecv), tostring(uid), tostring(noChange))
+
+	-- 1) セッション消費（1回限り）
+	local sess = KitoCore.consume(plr.UserId)
+	if not sess or (sidRecv and sess.id ~= sidRecv) then
+		LOG.info("[Decide] invalid session | u=%s gotSid=%s holdSid=%s",
+			plr and plr.Name or "?", tostring(sidRecv), sess and tostring(sess.id) or "-")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="session" }) end
+		return
+	end
+	LOG.debug("[Decide] session ok sid=%s ttl=%s run?=%s",
+		tostring(sess.id), tostring(sess.expiresAt), tostring(sess.runId or "-"))
+
+	-- 2) TTL
+	local now = os.time()
+	if type(sess.expiresAt) == "number" and now > (sess.expiresAt or 0) then
+		LOG.info("[Decide] expired | u=%s sid=%s now=%d exp=%d",
+			plr and plr.Name or "?", tostring(sess.id), now, sess.expiresAt or -1)
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="expired" }) end
+		return
+	end
+
+	-- 3) 候補内チェック（noChange ならスキップ可）
+	local okUid = false
+	if type(uid) == "string" and type(sess.uids) == "table" then
+		for _, u in ipairs(sess.uids) do if u == uid then okUid = true; break end end
+	end
+	if (not okUid) and (not noChange) then
+		LOG.info("[Decide] uid not in session | u=%s sid=%s uid=%s", plr and plr.Name or "?", tostring(sess.id), tostring(uid))
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="uid" }) end
+		return
+	end
+
+	-- 4) state/runId/DeckRegistry 準備
+	local s = StateHub.get(plr)
+	if not s then
+		LOG.warn("[Decide] state missing | u=%s", plr and plr.Name or "?")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="state" }) end
+		return
+	end
+	local runId = resolveRunId(s) or resolveRunId(s.run)
+	DeckRegistry.ensureFromContext(s) -- 必要時のみ snap→registry 反映
+	LOG.debug("[Decide] runId=%s", tostring(runId))
+
+	-- runId 未解決なら明確に終了
+	if not runId or runId == "" then
+		LOG.warn("[Decide] runId missing | u=%s", plr and plr.Name or "?")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="run" }) end
+		return
+	end
+
+	-- 5) noChange: 変換せず終了 → ショップ開き直し
+	if noChange == true then
+		LOG.info("[Decide] noChange | u=%s sid=%s", plr and plr.Name or "?", tostring(sess.id))
+		reopenShopSnapshot(plr, { notice = PRIMARY_NOTICE_SKIP })
+		if EvResult then EvResult:FireClient(plr, { ok=true, changed=false, uid=nil }) end
+		return
+	end
+
+	-- 6) 効果適用（UIDファースト + 後方互換 codes 同値）
+	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
+		LOG.warn("[Decide] EffectsRegistry unavailable; cannot apply brighten | u=%s", plr and plr.Name or "?")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effects" }) end
+		return
+	end
+
+	local function isUidLike(sv:any)
+		local s = (type(sv) == "string") and sv or nil
+... (truncated)
 ```
 
 ### src/server/NavServer.lua
@@ -8796,6 +8863,19 @@ local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
 local TalismanState = require(SharedModules:WaitForChild("TalismanState"))
 
+-- ▼ 追加：DeckSchema（未配置でも落ちないように pcall で保護）
+local DeckSchema = nil
+do
+	local ok, mod = pcall(function()
+		local DeckFolder = SharedModules:FindFirstChild("Deck")
+		if DeckFolder then
+			return require(DeckFolder:WaitForChild("DeckSchema"))
+		end
+		return nil
+	end)
+	if ok then DeckSchema = mod else DeckSchema = nil end
+end
+
 --=== 設定 =========================================================
 local PROFILE_DS_NAME = "ProfileV1" -- 互換維持：version でのマイグレーション
 local USE_MEMORY_IN_STUDIO = true   -- Studioではメモリのみで動かす（API許可が無くても動作）
@@ -8834,7 +8914,7 @@ local DEFAULT_PROFILE = {
 	asc  = 0,       -- アセンション（0以上の整数）
 	clears = 0,     -- 通算クリア回数
 	lang = "en",    -- 保存言語（"ja"|"en"）
-	activeRun = nil,-- ★ 続き用スナップ（{version,season,atShop,bank,mon,deckSeed,shopStock?,effects?}）
+	activeRun = nil,-- ★ 続き用スナップ（{version,season,atShop,bank,mon,deckSeed,shopStock?,effects?, deck?}）
 }
 
 --=== 内部メモリ（サーバ滞在中のキャッシュ） ======================
@@ -8857,6 +8937,24 @@ local function detectLangFromLocaleId(plr: Player?): string
 	return "en"
 end
 
+-- ▼ 追加：activeRun 内の deck/currentDeck を v3 に“自然治癒”させる
+local function normalizeActiveRun(ar:any): any
+	if type(ar) ~= "table" then return nil end
+	-- DeckSchema が無い環境では素通し
+	if not DeckSchema then return ar end
+
+	local out = table.clone(ar)
+	-- 一般的なフィールド名の両対応
+	local deckFieldNames = { "deck", "currentDeck" }
+	for _, fname in ipairs(deckFieldNames) do
+		if type(out[fname]) == "table" then
+			local upgraded, changed = DeckSchema.upgradeToV3(out[fname])
+			out[fname] = upgraded
+		end
+	end
+	return out
+end
+
 --=== 正規化（不正値の矯正） =====================================
 local function normalizeProfile(p:any): Profile
 	local out:any = {}
@@ -8872,8 +8970,12 @@ local function normalizeProfile(p:any): Profile
 	local rawL = tostring(p and p.lang or ""):lower()
 	out.lang = normLang(rawL) -- "jp" 既存値は "ja" に正規化
 
-	-- ★ activeRun はテーブルなら素通し、それ以外は nil
-	out.activeRun = (type(p and p.activeRun) == "table") and p.activeRun or nil
+	-- ★ activeRun はテーブルなら v3 補完をかけて保持（将来 deck を持つ場合に対応）
+	if type(p and p.activeRun) == "table" then
+		out.activeRun = normalizeActiveRun(p.activeRun)
+	else
+		out.activeRun = nil
+	end
 
 	return out :: Profile
 end
@@ -8914,7 +9016,7 @@ function Save.load(plr: Player): Profile
 	-- - clears 欠損は 0 補完
 	-- - lang 欠損は OS ロケールから初期化（"ja"/"en"）
 	-- - "jp" が残っていたら "ja" に正規化
-	-- - activeRun は既存値を尊重（nil可）
+	-- - activeRun は v3 補完をかけたものを保持（将来 deck を含む場合）
 	local migrated = false
 	if prof.version < 4 then
 		prof.version = 4
@@ -8932,7 +9034,6 @@ function Save.load(plr: Player): Profile
 		prof.lang = detectLangFromLocaleId(plr)
 		migrated = true
 	end
-	-- 旧データが "jp" だった場合に備えてもう一度正規化（上の分岐を通らない可能性に備える）
 	local nlang = normLang(prof.lang)
 	if nlang ~= prof.lang then
 		prof.lang = nlang
@@ -9012,53 +9113,19 @@ end
 function Save.getLang(plr: Player): string
 	local p = Save._profiles[plr]
 	if p and (p.lang == "ja" or p.lang == "en") then
-		return p.lang                      -- ★保存があれば保存優先
+		return p.lang
 	end
-	return detectLangFromLocaleId(plr)     -- 保存が無い/不正なら OS 推定
+	return detectLangFromLocaleId(plr)
 end
 
 function Save.setLang(plr: Player, lang:string)
-	lang = normLang(lang) -- "jp" 受信時も "ja" へ正規化
+	lang = normLang(lang)
 	local p = Save._profiles[plr]; if not p then return end
 	if p.lang ~= lang then
 		p.lang = lang
 		Save._dirty[plr] = true
 	end
 end
-
---=== 基準年ユーティリティ =========================================
-function Save.getBaseStartYear(plr: Player): number
-	local p = Save._profiles[plr]
-	local asc = p and p.asc or 0
-	return baseStartYearForAsc(asc)
-end
-
-function Save.ensureBaseYear(plr: Player): number
-	local p = Save._profiles[plr]; if not p then return DEFAULT_PROFILE.year end
-	if (p.year or 0) <= 0 then
-		p.year = baseStartYearForAsc(p.asc or 0)
-		Save._dirty[plr] = true
-	end
-	return p.year
-end
-
---=== State へのマージ =============================================
--- UI/状態整合のため、clears は state.totalClears にも反映
-function Save.mergeIntoState(plr: Player, state:any)
-	local p = Save._profiles[plr]
-	if not p then return state end
-	state = state or {}
-	state.bank        = p.bank
-	state.year        = p.year
-	state.asc         = p.asc
-	state.clears      = p.clears
-	state.totalClears = p.clears
-	state.lang        = (p.lang == "ja") and "ja" or "en"
-
-	-- ▼ 追加：アカウント側の護符解放数（無ければ2枠）を state.account に橋渡し
-	state.account = state.account or {}
-	state.account.talismanUnlock = state.account.talismanUnlock or { unlocked = (p.talismanUnlocked or 2) }
-
 ... (truncated)
 ```
 
@@ -9145,23 +9212,50 @@ return M
 
 ### src/server/ShopEffects/Kito.lua
 ```lua
--- v0.9.3 祈祷：プール確定ルート優先（uid差分適用）＋共通ヘルパ導入
---        フォールバック: ラン構成(configSnapshot)を直接更新（旧実装互換・寅Lvはstate.kitoへ反映）
+-- src/server/ShopEffects/Kito.lua
+-- v0.9.9 Kito（祈祷）: UIDファースト / 酉は EffectsRegistry に委譲
+--  - 丑/寅：サーバ状態のみ変更（従来通り）
+--  - 酉   ：デッキ変更は Deck/Effects（"kito.tori_brighten"）で実施
 -- I/F:
 --   Kito.apply(effectId, state, ctx) -> (ok:boolean, message:string)
+--     state: ランタイム状態テーブル（mon/bonus/kito など）
+--     ctx:   {
+--       runId:any,
+--       -- ★UIDファースト：
+--       uids?:{string},        -- UIで選んだ1枚（推奨：1件）
+--       poolUids?:{string},    -- 12枚提示の候補（未選択時の補助）
+--       -- 後方互換（コード系・なくてもOK）：
+--       codes?:{string}, poolCodes?:{string},
+--       preferKind?: "hikari"|"bright",
+--       player?: Player        -- UIモード（提示）に必要
+--     }
 
-local RS = game:GetService("ReplicatedStorage")
+local RS   = game:GetService("ReplicatedStorage")
+local SSS  = game:GetService("ServerScriptService")
 
-local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
-local CardEngine  = require(RS:WaitForChild("SharedModules"):WaitForChild("CardEngine"))
-local PoolEditor  = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
+local Shared  = RS:WaitForChild("SharedModules")
+local Config  = RS:WaitForChild("Config")
+
+-- 酉（デッキ変更）窓口
+local EffectsRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("EffectsRegistry"))
+-- UIモード切替
+local Balance        = require(Config:WaitForChild("Balance"))
+
+-- 12枚提示→選択→確定（UIモード時のみ）
+local KitoPickCore = nil
+local function lazyGetKitoPickCore()
+	if not KitoPickCore then
+		KitoPickCore = require(SSS:WaitForChild("KitoPickCore"))
+	end
+	return KitoPickCore
+end
 
 local Kito = {}
 
 Kito.ID = {
-	USHI = "kito_ushi",   -- 所持文を即時2倍（上限あり）
-	TORA = "kito_tora",   -- 取り札の得点+1（恒常バフ）
-	TORI = "kito_tori",   -- ランダム1枚を bright へ変換（プール確定・候補無し→次季に繰越）
+	USHI = "kito_ushi",   -- 所持文2倍
+	TORA = "kito_tora",   -- 取り札+1
+	TORI = "kito_tori",   -- 光札に変換（Effects "kito.tori_brighten"）
 }
 
 local DEFAULTS = { CAP_MON = 999999 }
@@ -9178,86 +9272,32 @@ local function ensureKito(state)
 	return state.kito
 end
 
---========================
--- 共通ヘルパ：1枚変換（プール確定→SNAP構成 フォールバック）
---========================
--- opts = { targetKind:string, preferNonTarget:boolean?, rng:any? }
-local function pool_convert_one(state:any, opts)
-	local targetKind      = tostring(opts and opts.targetKind or "")
-	local preferNonTarget = not (opts and opts.preferNonTarget == false)
+local function isArray(t)
+	if typeof(t) ~= "table" then return false end
+	for i = 1, #t do if t[i] == nil then return false end end
+	return true
+end
 
-	-- --- プール確定（ライブデッキ） ---
-	if typeof(state) == "table" and typeof(state.deck) == "table" and #state.deck > 0 then
-		local sess = PoolEditor.start(state, 1)
-		if sess and typeof(sess.uids) == "table" and #sess.uids > 0 then
-			local pick, pickedLabel = {}, nil
-			for _, uid in ipairs(sess.uids) do
-				local e = sess.snap[uid]
-				if e then
-					if preferNonTarget and e.kind ~= targetKind then
-						table.insert(pick, uid)
-						pickedLabel = e.name or e.code
-						break
-					end
-				end
-			end
-			if #pick == 0 then
-				pick = { sess.uids[1] }
-				local e = sess.snap[pick[1]]
-				pickedLabel = e and (e.name or e.code) or "(unknown)"
-			end
-
-			PoolEditor.mutate(sess, { kind = "convertKind", targetKind = targetKind, uids = pick })
-			local ok, reason = PoolEditor.commit(state, sess)
-			if ok then
-				return true, ("【POOL確定】%s→%s"):format(pickedLabel or "対象", targetKind)
-			else
-				-- 版数不一致/期限切れなど。フォールバックへ。
-				-- reason: "deck changed; please retry" / "session expired" など
-			end
-		end
-	end
-
-	-- --- フォールバック（SNAP構成編集） ---
-	local deck = RunDeckUtil.loadConfig(state, true)
-	if not deck or #deck == 0 then
-		local b = ensureBonus(state)
-		b.queueBrightNext = (b.queueBrightNext or 0) + 1
-		return true, ("【SNAP構成】候補なし→次季に変換予約(+1) target=%s"):format(targetKind)
-	end
-
-	-- 既存の安全APIで bright 変換のみ対応（他kindは必要になったらCardEngine側を拡張）
-	if targetKind == "bright" then
-		local ok2, idx = CardEngine.convertRandomNonBrightToBright(deck, opts and opts.rng)
-		if ok2 then
-			local label = deck[idx].name or deck[idx].code
-			RunDeckUtil.saveConfig(state, deck)
-			return true, ("【SNAP構成】%s→%s"):format(label, targetKind)
-		else
-			local b = ensureBonus(state)
-			b.queueBrightNext = (b.queueBrightNext or 0) + 1
-			return true, ("【SNAP構成】対象なし→次季に変換予約(+1) target=%s"):format(targetKind)
-		end
-	end
-
-	return false, "unsupported fallback for kind=" .. targetKind
+-- Effects側の正は "hikari"（"bright" を受けても内部で扱えるが、ここでは正規化）
+local function normPreferKind(s: string?)
+	if s == "bright" then return "hikari" end
+	return "hikari"
 end
 
 --========================
--- 各 祈祷
+-- 丑：所持文2倍（ステートのみ）
 --========================
-
--- 丑：所持文2倍（プレイヤー状態のみ変更）
 local function effect_ushi(state, ctx)
-	local cap = (ctx and ctx.capMon) or DEFAULTS.CAP_MON
+	local cap    = (ctx and ctx.capMon) or DEFAULTS.CAP_MON
 	local before = tonumber(state.mon or 0) or 0
-	local after = math.min(before * 2, cap)
-	state.mon = after
+	local after  = math.min(before * 2, cap)
+	state.mon    = after
 	return true, msg(("丑：所持文2倍（%d → %d, 上限=%d）"):format(before, after, cap))
 end
 
+--========================
 -- 寅：取り札の得点+1（恒常）
--- ※ UI後方互換のため bonus.takenPointPlus も増やすが、参照の唯一真実は state.kito.tora
+--========================
 local function effect_tora(state, _ctx)
 	local b = ensureBonus(state)
 	b.takenPointPlus = (b.takenPointPlus or 0) + 1
@@ -9266,17 +9306,72 @@ local function effect_tora(state, _ctx)
 	return true, msg(("寅：取り札の得点+1（累計+%d / Lv=%d）"):format(b.takenPointPlus, k.tora))
 end
 
--- 酉：1枚を bright へ（プール確定優先）
+--========================
+-- 酉：デッキ変更は EffectsRegistry に委譲（UIDファースト）
+--========================
 local function effect_tori(state, ctx)
-	local ok, info = pool_convert_one(state, {
-		targetKind = "bright",
-		preferNonTarget = true,
-		rng = ctx and ctx.rng,
-	})
-	if ok then
-		return true, ("酉：1枚を光札に変換 %s"):format(info)
+	-- === 前提 ===
+	local runId = ctx and ctx.runId
+	if runId == nil then
+		return false, "酉：runId が未指定です"
+	end
+
+	local preferKind = normPreferKind(ctx and ctx.preferKind)
+
+	-- === UIモード（12枚提示） ===
+	-- UIが有効かつ、UID/Codeいずれも指定が無いときは提示へ
+	if Balance.KITO_UI_ENABLED == true then
+		local hasUids      = ctx and isArray(ctx.uids)
+		local hasPoolUids  = ctx and isArray(ctx.poolUids)
+		local hasCodes     = ctx and isArray(ctx.codes)
+		local hasPoolCodes = ctx and isArray(ctx.poolCodes)
+		if not hasUids and not hasPoolUids and not hasCodes and not hasPoolCodes then
+			local player = (ctx and ctx.player) or (state and state.player)
+			if not player then
+				return false, "酉：UIモードですが player が不明です（ctx.player を渡してください）"
+			end
+			lazyGetKitoPickCore().startFor(player, { runId = runId }, "kito_tori", preferKind)
+			return true, "酉：候補を表示しました。対象を選んでください。"
+		end
+	end
+
+	-- === 直接適用（UIDファースト／後方互換で codes 系も許容） ===
+	if ctx and ctx.uids and not isArray(ctx.uids) then
+		return false, "酉：uids は配列で指定してください"
+	end
+	if ctx and ctx.poolUids and not isArray(ctx.poolUids) then
+		return false, "酉：poolUids は配列で指定してください"
+	end
+	if ctx and ctx.codes and not isArray(ctx.codes) then
+		return false, "酉：codes は配列で指定してください"
+	end
+	if ctx and ctx.poolCodes and not isArray(ctx.poolCodes) then
+		return false, "酉：poolCodes は配列で指定してください"
+	end
+
+	-- Effects への入力は UID を主、codes は保険としてフォールバック
+	local payload = {
+		uids       = ctx and ctx.uids or nil,        -- 推奨：UIで選んだ1枚（UID）
+		poolUids   = ctx and ctx.poolUids or nil,    -- 12候補のUID
+		-- 互換（無ければUIDに委ねる）
+		codes      = ctx and ctx.codes or nil,
+		poolCodes  = ctx and ctx.poolCodes or nil,
+		preferKind = preferKind,                     -- "hikari" 固定運用
+		tag        = "eff:kito_tori_bright",         -- 再適用抑止タグ
+	}
+
+	-- 正式IDで適用（EffectsRegistry 側は runId 先行のシグネチャ）
+	local res = EffectsRegistry.apply(runId, "kito.tori_brighten", payload)
+	if not res or res.ok ~= true then
+		local reason = (res and (res.error or res.message)) or "unknown"
+		return false, ("酉：失敗（%s）"):format(tostring(reason))
+	end
+
+	local changed = tonumber(res.changed or 0) or 0
+	if changed > 0 then
+		return true, "酉：1枚を光札に変換（成功）"
 	else
-		return false, ("酉：変換失敗 %s"):format(info)
+		return true, ("酉：変換対象なし（%s）"):format(tostring(res.meta or "no-eligible-target"))
 	end
 end
 
@@ -9286,16 +9381,16 @@ end
 local DISPATCH = {
 	[Kito.ID.USHI] = effect_ushi,
 	[Kito.ID.TORA] = effect_tora,
-	[Kito.ID.TORI] = effect_tori,
+	[Kito.ID.TORI] = effect_tori, -- 酉は EffectsRegistry を叩く（UIモード時はKitoPickへ委譲）
 }
 
 function Kito.apply(effectId, state, ctx)
+	if typeof(state) ~= "table" then
+		return false, "state が無効です"
+	end
 	local fn = DISPATCH[effectId]
 	if not fn then
-		return false, msg(("不明な祈祷ID: %s"):format(tostring(effectId)))
-	end
-	if typeof(state) ~= "table" then
-		return false, msg("state が無効です")
+		return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
 	end
 	local ok, message = fn(state, ctx)
 	return ok == true, tostring(message or "")
@@ -9737,124 +9832,12 @@ end)
 
 ### src/shared/CardEngine.lua
 ```lua
--- SharedModules/CardEngine.lua
--- v0.9.1 カードエンジン：48枚定義（1103 を ribbon に修正）
-local M = {}
-
--- 48枚の定義
-M.cardsByMonth = {
-	[1]  = { {kind="bright", name="松に鶴", tags={"animal","crane"}}, {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[2]  = { {kind="seed",   name="鶯", tags={"animal"}},            {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[3]  = { {kind="bright", name="桜に幕"},                          {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
-	[4]  = { {kind="seed",   name="ホトトギス", tags={"animal"}},    {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
-	[5]  = { {kind="seed",   name="八つ橋", tags={"thing"}},         {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
-	[6]  = { {kind="seed",   name="蝶", tags={"animal"}},            {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
-	[7]  = { {kind="seed",   name="猪", tags={"animal"}},            {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
-	[8]  = { {kind="bright", name="芒に月"},                          {kind="seed",   name="雁", tags={"animal"}},                {kind="chaff"}, {kind="chaff"} },
-	[9]  = { {kind="seed",   name="盃", tags={"thing","sake"}},       {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
-	[10] = { {kind="seed",   name="鹿", tags={"animal"}},            {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
-	[11] = { {kind="bright", name="柳に雨", tags={"rain"}},          {kind="seed",   name="燕", tags={"animal"}},                {kind="ribbon", name="短冊(無地)"}, {kind="chaff"} }, -- ★ 1103 を ribbon に
-	[12] = { {kind="bright", name="桐に鳳凰", tags={"animal","phoenix"}}, {kind="chaff"}, {kind="chaff"}, {kind="chaff"} },
-}
-
--- ===== 基本操作 =====
-function M.toCode(month, idx) return string.format("%02d%02d", month, idx) end
-function M.fromCode(code) return tonumber(code:sub(1,2)), tonumber(code:sub(3,4)) end
-
--- 初期48枚
-function M.buildDeck()
-	local deck = {}
-	for m=1,12 do
-		for i,c in ipairs(M.cardsByMonth[m]) do
-			table.insert(deck, {
-				month=m, idx=i, kind=c.kind, name=c.name, tags=c.tags and table.clone(c.tags) or nil,
-				code = M.toCode(m,i),
-			})
-		end
-	end
-	return deck
-end
-
--- シャッフル
-function M.shuffle(deck, seed)
-	local rng = seed and Random.new(seed) or Random.new()
-	for i = #deck, 2, -1 do
-		local j = rng:NextInteger(1, i)
-		deck[i], deck[j] = deck[j], deck[i]
-	end
-end
-
--- n枚引き（末尾から）
-function M.draw(deck, n)
-	local hand = {}
-	for i=1,n do hand[i] = table.remove(deck) end
-	return hand
-end
-
--- ===== スナップショット（唯一の正本：v2 entries） =====
-function M.buildSnapshot(deck)
-	local codes, hist, entries = {}, {}, {}
-	for _, c in ipairs(deck or {}) do
-		local code = c.code or M.toCode(c.month, c.idx)
-		table.insert(codes, code)
-		hist[code] = (hist[code] or 0) + 1
-		table.insert(entries, { code = code, kind = c.kind })
-	end
-	return { v=2, count=#codes, codes=codes, histogram=hist, entries=entries }
-end
-
-function M.buildDeckFromSnapshot(snap)
-	if typeof(snap) ~= "table" then return {} end
-	if typeof(snap.entries) == "table" and #snap.entries > 0 then
-		local out = {}
-		for _, e in ipairs(snap.entries) do
-			local m,i = M.fromCode(tostring(e.code))
-			local defM = M.cardsByMonth[m]
-			local def  = defM and defM[i]
-			if def then
-				table.insert(out, {
-					month=m, idx=i, kind=e.kind or def.kind, name=def.name,
-					tags=def.tags and table.clone(def.tags) or nil, code=M.toCode(m,i),
-				})
-			end
-		end
-		return out
-	end
-	-- v1 後方互換
-	local out = {}
-	for _, code in ipairs(snap.codes or {}) do
-		local m,i = M.fromCode(tostring(code))
-		local defM = M.cardsByMonth[m]
-		local def  = defM and defM[i]
-		if def then
-			table.insert(out, {
-				month=m, idx=i, kind=def.kind, name=def.name,
-				tags=def.tags and table.clone(def.tags) or nil, code=M.toCode(m,i),
-			})
-		end
-	end
-	return out
-end
-
--- ===== デッキ変換ユーティリティ =====
-local function isNonBright(card) return card and card.kind ~= "bright" end
-
-function M.pickRandomIndex(deck, predicate, rng)
-	local idxs = {}
-	for i,c in ipairs(deck) do if predicate(c) then table.insert(idxs,i) end end
-	if #idxs == 0 then return nil end
-	local r = rng and rng:NextInteger(1, #idxs) or math.random(1, #idxs)
-	return idxs[r]
-end
-
-function M.convertRandomNonBrightToBright(deck, rng)
-	local idx = M.pickRandomIndex(deck, isNonBright, rng)
-	if not idx then return false, nil end
-	deck[idx].kind = "bright"
-	return true, idx
-end
-
-return M
+-- src/shared/CardEngine.lua
+-- Compatibility shim: 旧パスを新正本（Deck/CardEngine）へ委譲
+local RS = game:GetService("ReplicatedStorage")
+local Shared = RS:WaitForChild("SharedModules")
+local Deck   = Shared:WaitForChild("Deck")
+return require(Deck:WaitForChild("CardEngine"))
 ```
 
 ### src/shared/CardImageMap.lua
@@ -9921,6 +9904,1863 @@ end
 
 function M.getByMonthIdx(month, idx)
     return MAP[string.format("%02d%02d", month, idx)]
+end
+
+return M
+```
+
+### src/shared/Deck/CardEngine.lua
+```lua
+-- src/shared/Deck/CardEngine.lua
+-- v0.9.3 Deck/CardEngine（Deck所有・月札48 + month/idx 同梱スナップショット）
+-- 目的：
+--  - CardEngine を Deck 階層へ移管（Deck が正本）
+--  - snapshot.entries に {code, kind, month, idx} を同梱（v=2のまま後方互換）
+--  - buildDeckFromSnapshot() は month/idx を優先、無ければ code から復元
+
+local M = {}
+
+-- 48枚の定義（1103 を ribbon に修正済）
+M.cardsByMonth = {
+	[1]  = { {kind="bright", name="松に鶴", tags={"animal","crane"}}, {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
+	[2]  = { {kind="seed",   name="鶯", tags={"animal"}},            {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
+	[3]  = { {kind="bright", name="桜に幕"},                          {kind="ribbon", name="赤短(字あり)", tags={"aka","jiari"}}, {kind="chaff"}, {kind="chaff"} },
+	[4]  = { {kind="seed",   name="ホトトギス", tags={"animal"}},    {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
+	[5]  = { {kind="seed",   name="八つ橋", tags={"thing"}},         {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
+	[6]  = { {kind="seed",   name="蝶", tags={"animal"}},            {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
+	[7]  = { {kind="seed",   name="猪", tags={"animal"}},            {kind="ribbon", name="赤短(無地)",  tags={"aka"}},          {kind="chaff"}, {kind="chaff"} },
+	[8]  = { {kind="bright", name="芒に月"},                          {kind="seed",   name="雁", tags={"animal"}},                {kind="chaff"}, {kind="chaff"} },
+	[9]  = { {kind="seed",   name="盃", tags={"thing","sake"}},       {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
+	[10] = { {kind="seed",   name="鹿", tags={"animal"}},            {kind="ribbon", name="青短(字あり)", tags={"ao","jiari"}},  {kind="chaff"}, {kind="chaff"} },
+	[11] = { {kind="bright", name="柳に雨", tags={"rain"}},          {kind="seed",   name="燕", tags={"animal"}},                {kind="ribbon", name="短冊(無地)"}, {kind="chaff"} },
+	[12] = { {kind="bright", name="桐に鳳凰", tags={"animal","phoenix"}}, {kind="chaff"}, {kind="chaff"}, {kind="chaff"} },
+}
+
+-- ── 基本ユーティリティ ──────────────────────────
+function M.toCode(month, idx) return string.format("%02d%02d", month, idx) end
+function M.fromCode(code)
+	code = tostring(code or "")
+	return tonumber(code:sub(1,2)), tonumber(code:sub(3,4))
+end
+
+-- 初期48枚デッキを構築
+function M.buildDeck()
+	local deck = {}
+	for m=1,12 do
+		for i,c in ipairs(M.cardsByMonth[m]) do
+			table.insert(deck, {
+				month=m, idx=i, kind=c.kind, name=c.name,
+				tags=c.tags and table.clone(c.tags) or nil,
+				code = M.toCode(m,i),
+			})
+		end
+	end
+	return deck
+end
+
+-- シャッフル
+function M.shuffle(deck, seed)
+	local rng = seed and Random.new(seed) or Random.new()
+	for i = #deck, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		deck[i], deck[j] = deck[j], deck[i]
+	end
+end
+
+-- n枚引き（末尾から）
+function M.draw(deck, n)
+	local hand = {}
+	for i=1,n do hand[i] = table.remove(deck) end
+	return hand
+end
+
+-- ── スナップショット（正本 v2）────────────────────
+-- v2: entries = { {code, kind, month, idx}, ... }  ← month/idx を**同梱**
+function M.buildSnapshot(deck)
+	local codes, hist, entries = {}, {}, {}
+	for _, c in ipairs(deck or {}) do
+		local m = tonumber(c.month or 0) or 0
+		local i = tonumber(c.idx   or 0) or 0
+		local code = c.code or ((m>0 and i>0) and M.toCode(m,i) or nil)
+		if code then
+			table.insert(codes, code)
+			hist[code] = (hist[code] or 0) + 1
+			table.insert(entries, {
+				code  = code,
+				kind  = c.kind,
+				month = (m>0) and m or nil,
+				idx   = (i>0) and i or nil,
+			})
+		end
+	end
+	return { v=2, count=#codes, codes=codes, histogram=hist, entries=entries }
+end
+
+-- v2 を優先（month/idx を使い、無ければ code から復元）→ 完全デッキへ
+function M.buildDeckFromSnapshot(snap)
+	if typeof(snap) ~= "table" then return {} end
+
+	-- v2 entries 優先
+	if typeof(snap.entries) == "table" and #snap.entries > 0 then
+		local out = {}
+		for _, e in ipairs(snap.entries) do
+			local m = tonumber(e.month or 0) or 0
+			local i = tonumber(e.idx   or 0) or 0
+			local code = e.code
+			if (m<=0 or i<=0) and type(code)=="string" then
+				local pm, pi = M.fromCode(code)
+				m = (m>0 and m) or pm
+				i = (i>0 and i) or pi
+			end
+			if m and i and m>=1 and m<=12 and i>=1 and i<=4 then
+				local def = M.cardsByMonth[m] and M.cardsByMonth[m][i]
+				if def then
+					table.insert(out, {
+						month=m, idx=i,
+						kind = e.kind or def.kind,
+						name = def.name,
+						tags = def.tags and table.clone(def.tags) or nil,
+						code = M.toCode(m,i),
+					})
+				end
+			end
+		end
+		return out
+	end
+
+	-- v1 互換（codes 配列のみ）
+	local out = {}
+	for _, code in ipairs(snap.codes or {}) do
+		local m,i = M.fromCode(code)
+		local def = (M.cardsByMonth[m] or {})[i]
+		if def then
+			table.insert(out, {
+				month=m, idx=i, kind=def.kind, name=def.name,
+				tags=def.tags and table.clone(def.tags) or nil, code=M.toCode(m,i),
+			})
+		end
+	end
+	return out
+end
+
+-- ── 変換ユーティリティ ───────────────────────────
+local function isNonBright(card) return card and card.kind ~= "bright" end
+
+function M.pickRandomIndex(deck, predicate, rng)
+	local idxs = {}
+	for i,c in ipairs(deck) do if predicate(c) then table.insert(idxs,i) end end
+	if #idxs == 0 then return nil end
+	local r = rng and rng:NextInteger(1, #idxs) or math.random(1, #idxs)
+	return idxs[r]
+end
+
+function M.convertRandomNonBrightToBright(deck, rng)
+	local idx = M.pickRandomIndex(deck, isNonBright, rng)
+	if not idx then return false, nil end
+	deck[idx].kind = "bright"
+	return true, idx
+end
+
+return M
+```
+
+### src/shared/Deck/DeckOps.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/DeckOps.lua
+-- Step C: 変更ロジックの純関数群（入力Card -> 新Card）
+-- 仕様根拠:
+--  - Step C 要件: convertKind / convertMonth / attachTag / attachEffect / overrideImage【Deck_Refactor_FullSpec_Workplan.md】
+--  - tags/effects は「安全に無効（空 or nil）」初期で、指定が無ければ現状維持【DeckSchema Step A 確定版】
+
+local RS = game:GetService("ReplicatedStorage")
+local Shared = RS:WaitForChild("SharedModules")
+
+-- 依存（兄弟/既存）
+local DeckSchema = require(Shared:WaitForChild("Deck"):WaitForChild("DeckSchema"))
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
+
+local M = {}
+
+--========================
+-- 内部ヘルパ
+--========================
+
+local function _cloneArray(src)
+	if typeof(src) ~= "table" then return {} end
+	-- Luauの table.clone は配列/連想どちらも浅いコピー
+	return table.clone(src)
+end
+
+local function _deriveCode(month: number, idx: number): string
+	local m = math.clamp(math.floor(tonumber(month) or 0), 1, 12)
+	-- 月ごとの定義数に合わせて idx をクランプ（通常 1..4）
+	local defM = CardEngine.cardsByMonth[m]
+	local maxIdx = (typeof(defM) == "table") and #defM or 4
+	local i = math.clamp(math.floor(tonumber(idx) or 0), 1, math.max(1, maxIdx))
+	return string.format("%02d%02d", m, i)
+end
+
+local function _safeDefaults(card:any): any
+	-- DeckSchema.defaults() をベースに、既存カードの値で上書き
+	-- ※浅いコピーで十分（tags/effects は別途クローン）
+	local base = DeckSchema.defaults()
+	for k, v in pairs(card or {}) do
+		base[k] = v
+	end
+	-- 可変配列は必ずクローン
+	base.tags    = _cloneArray(base.tags)
+	base.effects = _cloneArray(base.effects)
+	return base
+end
+
+-- 同月で targetKind を持つ定義の idx を探索（無ければ現在の idx を返す）
+local function _findIdxOfKindInMonth(month: number, targetKind: string, fallbackIdx: number): number
+	local m = math.clamp(math.floor(tonumber(month) or 0), 1, 12)
+	local defM = CardEngine.cardsByMonth[m]
+	if typeof(defM) == "table" then
+		for i, def in ipairs(defM) do
+			if def and tostring(def.kind) == tostring(targetKind) then
+				return i
+			end
+		end
+		return math.clamp(fallbackIdx or 1, 1, #defM)
+	end
+	return math.clamp(fallbackIdx or 1, 1, 4)
+end
+
+-- 新しいカードテーブルを返す（codeの一貫更新）
+local function _with(card:any, patch:any): any
+	local c = _safeDefaults(card)
+	for k, v in pairs(patch or {}) do
+		c[k] = v
+	end
+	-- month/idx から code を再派生
+	c.code = _deriveCode(c.month, c.idx)
+	return c
+end
+
+--========================
+-- 公開API（純関数）
+--========================
+
+-- kind を変換。idx は「同月で指定kindを持つ定義」の idx に合わせる（なければ現idxをクランプして維持）
+function M.convertKind(card:any, toKind:string): any
+	local src = _safeDefaults(card)
+	local tgtKind = tostring(toKind or src.kind)
+	local nextIdx = _findIdxOfKindInMonth(src.month, tgtKind, src.idx)
+	return _with(src, { kind = tgtKind, idx = nextIdx })
+end
+
+-- month を変換。idx は「新しい月で現kindが存在すればそのidx、無ければ現idxをクランプ」
+function M.convertMonth(card:any, toMonth:number): any
+	local src = _safeDefaults(card)
+	local m = math.clamp(math.floor(tonumber(toMonth) or src.month), 1, 12)
+	local defM = CardEngine.cardsByMonth[m]
+	local nextIdx
+	if typeof(defM) == "table" then
+		-- 同kind の idx を優先探索
+		local found = nil
+		for i, def in ipairs(defM) do
+			if def and tostring(def.kind) == tostring(src.kind) then found = i; break end
+		end
+		if found then
+			nextIdx = found
+		else
+			-- 見つからなければ既存 idx をクランプ
+			nextIdx = math.clamp(src.idx or 1, 1, #defM)
+		end
+	else
+		nextIdx = math.clamp(src.idx or 1, 1, 4)
+	end
+	return _with(src, { month = m, idx = nextIdx })
+end
+
+-- タグを付与（配列tagsに重複なしで追加）
+-- keyのみ  or key,val（valがある場合は "key:value" の文字列として追加）
+function M.attachTag(card:any, key:any, val:any?): any
+	local src = _safeDefaults(card)
+	local tags = _cloneArray(src.tags)
+	if typeof(key) == "table" then
+		-- テーブル渡しは配列想定：すべて追加
+		for _, t in ipairs(key) do
+			local s = tostring(t)
+			local exists = false
+			for _, x in ipairs(tags) do if x == s then exists = true; break end end
+			if not exists then table.insert(tags, s) end
+		end
+	else
+		local s = tostring(key)
+		if val ~= nil and val ~= true then
+			s = ("%s:%s"):format(s, tostring(val))
+		end
+		local exists = false
+		for _, x in ipairs(tags) do if x == s then exists = true; break end end
+		if not exists then table.insert(tags, s) end
+	end
+	return _with(src, { tags = tags })
+end
+
+-- エフェクトを付与（effects 配列の末尾に追加。文字列/テーブルどちらも許容）
+function M.attachEffect(card:any, spec:any): any
+	local src = _safeDefaults(card)
+	local effects = _cloneArray(src.effects)
+	table.insert(effects, spec)
+	return _with(src, { effects = effects })
+end
+
+-- 画像差し替え（nil指定で解除）。最終決定は ViewAdapter: imageOverride ?? CardImageMap.get(code)
+function M.overrideImage(card:any, assetId:string?): any
+	local src = _safeDefaults(card)
+	local v
+if assetId == nil then
+	v = nil
+else
+	v = tostring(assetId)
+end
+return _with(src, { imageOverride = v })
+end
+
+return M
+```
+
+### src/shared/Deck/DeckRegistry.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/DeckRegistry.lua
+-- v0.9.3+uid DeckRegistry（ラン別の共有レジストリ）
+-- 役割:
+--   - runId 単位で v3 形式の deck store（{v=3, entries=[...] }）を保持
+--   - state(run.configSnapshot / state.deck など) から初期化/補完
+--   - v1/v2 スナップショットも CardEngine で復元して v3 entries へ正規化
+--   - ★ entries に uid を必ず付与（code 重複でも一意に識別できる）
+--   - ★ UID 指定での 1枚差し替えユーティリティを提供
+--
+-- 依存:
+--   - CardEngine（buildDeckFromSnapshot / buildSnapshot / toCode / fromCode / buildDeck）
+--   - RunDeckUtil（任意）: snapshot(state) があれば使う
+--   - Logger（任意）: scope("DeckRegistry")
+
+local RS     = game:GetService("ReplicatedStorage")
+local Shared = RS:WaitForChild("SharedModules")
+
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
+
+local RunDeckUtil do
+	local ok, mod = pcall(function()
+		return require(Shared:WaitForChild("RunDeckUtil"))
+	end)
+	RunDeckUtil = ok and mod or nil
+end
+
+local Logger do
+	local ok, mod = pcall(function()
+		return require(Shared:WaitForChild("Logger"))
+	end)
+	Logger = ok and mod or { scope=function() return { info=function()end, warn=function()end, debug=function()end } end }
+end
+local LOG = Logger.scope("DeckRegistry")
+
+local M = {}
+
+-- メモリレジストリ: { [runId] = { v=3, entries={...} } }
+local _byRunId : {[any]: any} = {}
+
+-- ─────────────────────────────────────────────────────────────
+-- 内部ユーティリティ
+-- ─────────────────────────────────────────────────────────────
+
+local function _cloneEntryLike(e:any)
+	if typeof(e) ~= "table" then return nil end
+	return {
+		uid   = e.uid,  -- ★透過（無ければ後で採番）
+		code  = tostring(e.code or ""),
+		kind  = e.kind,
+		month = e.month,
+		idx   = e.idx,
+		name  = e.name,  -- 任意
+		tags  = typeof(e.tags)=="table" and table.clone(e.tags) or nil,
+	}
+end
+
+local function _toV3Store(entries:any)
+	local out = {}
+	if typeof(entries) == "table" then
+	 for _, e in ipairs(entries) do
+			local c = _cloneEntryLike(e)
+			if c then
+				-- month/idx が無いなら code から補完
+				local m = tonumber(c.month or 0) or 0
+				local i = tonumber(c.idx   or 0) or 0
+				if (m <= 0 or i <= 0) and typeof(c.code) == "string" and #c.code >= 4 then
+					local pm, pi = CardEngine.fromCode(c.code)
+					if m <= 0 then c.month = pm end
+					if i <= 0 then c.idx   = pi end
+				end
+				-- code が無いなら month/idx から生成
+				if (not c.code or c.code == "") and c.month and c.idx then
+					c.code = CardEngine.toCode(c.month, c.idx)
+				end
+				if c.code and c.code ~= "" then
+					table.insert(out, c)
+				end
+			end
+		end
+	end
+	return { v=3, entries=out }
+end
+
+local function _resolveRunId(ctx:any)
+	if typeof(ctx) ~= "table" then return nil end
+	-- 直下候補
+	if ctx.runId then return ctx.runId end
+	if ctx.deckRunId then return ctx.deckRunId end
+	if ctx.id then return ctx.id end
+	if ctx.runID then return ctx.runID end
+	if ctx.deckRunID then return ctx.deckRunID end
+	-- run サブツリー
+	local run = ctx.run
+	if typeof(run) == "table" then
+		return run.runId or run.deckRunId or run.id or run.runID or run.deckRunID
+	end
+	return nil
+end
+
+-- state → 初期スナップ（優先順: run.configSnapshot → RunDeckUtil.snapshot(state) → state.deck）
+local function _snapshotFromState(state:any)
+	if typeof(state) ~= "table" then return nil end
+	state.run = state.run or {}
+
+	-- 1) 正本: run.configSnapshot
+	if typeof(state.run.configSnapshot) == "table" then
+		return state.run.configSnapshot
+	end
+
+	-- 2) 任意: RunDeckUtil.snapshot
+	if RunDeckUtil and typeof(RunDeckUtil.snapshot) == "function" then
+		local ok, snap = pcall(function() return RunDeckUtil.snapshot(state) end)
+		if ok and typeof(snap) == "table" then
+			return snap
+		end
+	end
+
+	-- 3) 後方互換: state.deck（配列から v2 snapshot）
+	if typeof(state.deck) == "table" and #state.deck > 0 then
+		local ok, snap = pcall(function()
+			return CardEngine.buildSnapshot(state.deck)
+		end)
+		if ok and typeof(snap) == "table" then
+			return snap
+		end
+	end
+
+	return nil
+end
+
+-- v1/v2 snapshot → entries（CardEngine が {month,idx,kind,name,tags,code} を返す想定）
+local function _entriesFromSnapshot(snap:any)
+	if typeof(snap) ~= "table" then return {} end
+	local ok, deck = pcall(function() return CardEngine.buildDeckFromSnapshot(snap) end)
+	if not ok or typeof(deck) ~= "table" then return {} end
+	return deck
+end
+
+-- uid 生成: "CODE#NNN"（NNN は 001 起算の 3桁ゼロパディング）
+local function _uidFor(code:string, seq:number)
+	return string.format("%s#%03d", tostring(code or ""), math.max(1, math.floor(tonumber(seq) or 1)))
+end
+
+-- entries に uid を採番（既存 uid は尊重）。code ごとに連番を採番する。
+local function _ensureUids(store:any)
+	if typeof(store) ~= "table" or typeof(store.entries) ~= "table" then return store end
+	local seqByCode = {} :: {[string]: number}
+	-- 既存 uid を走査して、code ごとの最大連番を把握
+	for _, e in ipairs(store.entries) do
+		local code = tostring(e.code or "")
+		if e.uid and typeof(e.uid) == "string" then
+			local seq = tonumber(string.match(e.uid, "#(%d+)$") or "")
+			if seq then
+				local cur = seqByCode[code] or 0
+				if seq > cur then seqByCode[code] = seq end
+			end
+		end
+	end
+	-- 未付与に順次採番
+	for _, e in ipairs(store.entries) do
+		if not e.uid or e.uid == "" then
+			local code = tostring(e.code or "")
+			local nextSeq = (seqByCode[code] or 0) + 1
+			e.uid = _uidFor(code, nextSeq)
+			seqByCode[code] = nextSeq
+		end
+	end
+	return store
+end
+
+-- 旧→新への uid 継承（新 entries に uid が無い場合、code の出現順で割り当て）
+local function _inheritUids(prev:any, incoming:any)
+	if typeof(incoming) ~= "table" or typeof(incoming.entries) ~= "table" then return _toV3Store({}) end
+	local newStore = _toV3Store(incoming.entries)
+
+	-- 新側に uid がほぼ載っていないケース向けに、code 毎のキューを作る
+	local byCodeQueues : {[string]: {any}} = {}
+	if typeof(prev) == "table" and typeof(prev.entries) == "table" then
+		for _, e in ipairs(prev.entries) do
+			local code = tostring(e.code or "")
+			byCodeQueues[code] = byCodeQueues[code] or {}
+			table.insert(byCodeQueues[code], e) -- 先頭から消費
+		end
+	end
+
+	for _, e in ipairs(newStore.entries) do
+		if not e.uid or e.uid == "" then
+			local code = tostring(e.code or "")
+			local q = byCodeQueues[code]
+			if q and #q > 0 then
+				-- 旧から1つ借りる
+				local old = table.remove(q, 1)
+				e.uid = old.uid
+			end
+		end
+	end
+
+	-- まだ uid が空いているものは採番
+	_ensureUids(newStore)
+	return newStore
+end
+
+-- 文字列整形ユーティリティ（ログ用）
+local function _short(e:any)
+	if typeof(e) ~= "table" then return "-" end
+	return string.format("uid=%s code=%s kind=%s tags=%d",
+		tostring(e.uid or "?"),
+		tostring(e.code or "?"),
+		tostring(e.kind or "?"),
+		(typeof(e.tags)=="table" and #e.tags) or 0
+	)
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- 公開API
+-- ─────────────────────────────────────────────────────────────
+
+-- state/runCtx から runId を解決し、未登録なら v3 store を生成して登録（uid も付与）
+function M.ensureFromContext(ctx:any): boolean
+	local runId = _resolveRunId(ctx)
+	if not runId then
+		LOG.info("[DeckRegistry] ensure: missing runId in ctx; skip")
+		return false
+	end
+	if _byRunId[runId] and typeof(_byRunId[runId].entries) == "table" and #_byRunId[runId].entries > 0 then
+		return true
+	end
+
+	-- state からスナップを得て v3 化
+	local snap    = _snapshotFromState(ctx)
+	local entries = _entriesFromSnapshot(snap)
+	local store   = _toV3Store(entries)
+	_ensureUids(store)
+
+	if typeof(store.entries) == "table" and #store.entries > 0 then
+		_byRunId[runId] = store
+		LOG.info("[DeckRegistry] ensure: set run=%s size=%d (from snapshot)", tostring(runId), #store.entries)
+		return true
+	end
+
+	-- それでも無ければ、CardEngine.buildDeck() から初期48で作る
+	local ok, deck48 = pcall(function() return CardEngine.buildDeck() end)
+	if ok and typeof(deck48) == "table" then
+		local s = _toV3Store(deck48)
+		_ensureUids(s)
+		_byRunId[runId] = s
+		LOG.warn("[DeckRegistry] ensure: fallback to base 48 for run=%s", tostring(runId))
+		return true
+	end
+
+	return false
+end
+
+-- 旧呼び名互換（ログにも合わせておく）
+M.ensure = M.ensureFromContext
+
+-- 直接書き込み（uid を整えて保存）
+function M.write(runId:any, v3store:any)
+	if not runId then return false end
+	if typeof(v3store) ~= "table" or typeof(v3store.entries) ~= "table" then return false end
+	local s = _toV3Store(v3store.entries)
+	_ensureUids(s)
+	_byRunId[runId] = s
+	LOG.info("[DeckRegistry] write: run=%s size=%d", tostring(runId), #(s.entries or {}))
+	return true
+end
+
+-- v2 snapshot を書き込み（移行/保存用）※uid 採番あり
+function M.writeSnapshot(runId:any, snap:any)
+	if not runId then return false end
+	local entries = _entriesFromSnapshot(snap)
+	local s = _toV3Store(entries)
+	_ensureUids(s)
+	_byRunId[runId] = s
+	LOG.info("[DeckRegistry] writeSnapshot: run=%s size=%d", tostring(runId), #(s.entries or {}))
+	return true
+end
+
+-- 読み出し
+function M.read(runId:any)
+	if not runId then return { v=3, entries={} } end
+	local s = _byRunId[runId]
+	if s and typeof(s.entries) == "table" then
+		return s
+	end
+	return { v=3, entries={} }
+end
+
+-- 破棄
+function M.clear(runId:any)
+	_byRunId[runId] = nil
+	LOG.info("[DeckRegistry] clear: run=%s", tostring(runId))
+end
+
+-- デバッグ/枚数
+function M.size(runId:any): number
+	local s = M.read(runId)
+	return typeof(s.entries)=="table" and #s.entries or 0
+end
+
+... (truncated)
+```
+
+### src/shared/Deck/DeckSchema.lua
+```lua
+-- SharedModules/Deck/DeckSchema.lua
+-- v3 schema 定義 + v2→v3 補完（Load時に一括）
+-- ✅ 正式 kind は英語 4 種のみ: "bright" | "seed" | "ribbon" | "chaff"
+--    旧/和名は入力時だけエイリアスとして受理し、内部では必ず英語へ正規化
+
+local RS = game:GetService("ReplicatedStorage")
+
+local M = {}
+
+--==============================
+-- 定数・規約（確定）
+--==============================
+M.KINDS = { bright=true, seed=true, ribbon=true, chaff=true } -- ✅英語のみ
+M.HIKARI_MONTHS = { [1]=true, [3]=true, [8]=true, [11]=true, [12]=true }
+
+-- 旧/和名 → 正式英語 の対応
+local KIND_ALIAS = {
+	-- 日本語/旧称 → 英語
+	hikari = "bright",
+	tane   = "seed",
+	tan    = "ribbon",
+	kas    = "chaff",
+
+	-- つづり揺れ・互換（念のため）
+	light  = "bright",
+	bright = "bright",
+	seed   = "seed",
+	ribbon = "ribbon",
+	chaff  = "chaff",
+}
+
+-- 公開: kind 正規化（他モジュールでも使えるように）
+function M.normalizeKind(k:any): string
+	local s = tostring(k or ""):lower()
+	local norm = KIND_ALIAS[s]
+	if norm and M.KINDS[norm] then return norm end
+	-- 不正は chaff にフォールバック（※ここで bright を潰さない）
+	return "chaff"
+end
+
+--==============================
+-- ユーティリティ
+--==============================
+local function cloneShallow(t)
+	if type(t) ~= "table" then return t end
+	local out = {}
+	for k,v in pairs(t) do out[k] = v end
+	return out
+end
+
+local function toMonth(n)
+	n = tonumber(n)
+	if not n then return nil end
+	if n >= 1 and n <= 12 then return n end
+	return nil
+end
+
+local function deriveMonthFromCode(code: string?)
+	if type(code) ~= "string" or #code < 2 then return nil end
+	local mm = tonumber(string.sub(code, 1, 2))
+	return toMonth(mm)
+end
+
+--==============================
+-- defaults（1枚分）
+--==============================
+export type CardEntryV3 = {
+	code: string,
+	kind: string,           -- "bright" | "seed" | "ribbon" | "chaff"
+	month: number,          -- 1..12
+	tags: {string},         -- []
+	effects: {string},      -- []
+	imageOverride: string?, -- nil or rbxassetid://...
+}
+
+function M.defaults(entryLike: any): CardEntryV3
+	local src = typeof(entryLike) == "table" and entryLike or {}
+	local dst = {}
+
+	dst.code = (type(src.code) == "string" and src.code) or ""
+
+	dst.month = toMonth(src.month) or deriveMonthFromCode(dst.code) or 1
+
+	-- ✅ kind は必ず英語4種へ正規化（未知は chaff）
+	dst.kind = M.normalizeKind(src.kind)
+
+	-- tags
+	local tags = src.tags
+	if typeof(tags) ~= "table" then tags = {} end
+	dst.tags = {}
+	for _, v in ipairs(tags) do
+		if type(v) == "string" then table.insert(dst.tags, v) end
+	end
+
+	-- effects
+	local effects = src.effects
+	if typeof(effects) ~= "table" then effects = {} end
+	dst.effects = {}
+	for _, v in ipairs(effects) do
+		if type(v) == "string" then table.insert(dst.effects, v) end
+	end
+
+	-- imageOverride
+	if src.imageOverride == nil or src.imageOverride == "" then
+		dst.imageOverride = nil
+	else
+		dst.imageOverride = tostring(src.imageOverride)
+	end
+
+	return dst
+end
+
+--==============================
+-- デッキ全体の補完（v2→v3）
+--==============================
+export type DeckV3 = {
+	v: number,             -- 3
+	codes: {string}?,      -- 既存踏襲
+	entries: {CardEntryV3},
+	count: number?,
+}
+
+function M.normalizeDeck(deckLike: any): DeckV3
+	local src = typeof(deckLike) == "table" and deckLike or {}
+	local out = {}
+
+	out.v = 3
+	out.codes = (typeof(src.codes) == "table") and cloneShallow(src.codes) or nil
+
+	local entries = {}
+	if typeof(src.entries) == "table" then
+		for i, ent in ipairs(src.entries) do
+			entries[i] = M.defaults(ent)
+		end
+	else
+		if typeof(src.codes) == "table" then
+			for i, code in ipairs(src.codes) do
+				entries[i] = M.defaults({ code = code })
+			end
+		else
+			entries = {}
+		end
+	end
+	out.entries = entries
+	out.count = typeof(src.count) == "number" and src.count or #entries
+
+	return out
+end
+
+function M.upgradeToV3(deckLike: any)
+	local before = typeof(deckLike) == "table" and deckLike or {}
+	local after = M.normalizeDeck(before)
+
+	local changed = (before.v ~= 3)
+		or (typeof(before.entries) ~= "table")
+		or (#(before.entries or {}) ~= #after.entries)
+
+	return after, changed
+end
+
+return M
+```
+
+### src/shared/Deck/DeckStore.lua
+```lua
+-- SharedModules/Deck/DeckStore.lua
+-- v3 Deck を **非破壊**で扱うストア（純関数API）
+-- 依存: DeckSchema（v2→v3補完/1枚補完）
+-- ★ 0.9.x+: すべてのエントリに一意ID(uid)を付与（code連番）し、uidでの操作を追加
+
+local RS = game:GetService("ReplicatedStorage")
+local SharedModules = RS:WaitForChild("SharedModules")
+local DeckSchema = require(SharedModules:WaitForChild("Deck"):WaitForChild("DeckSchema"))
+
+-- ★ DeckRegistry（transact で利用）
+local DeckRegistry = require(SharedModules:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+
+-- ★ code→month/idx 補完の保険（DeckSchemaで入れば不要だが互換のため同梱）
+local CardEngine do
+	local ok, mod = pcall(function() return require(SharedModules:WaitForChild("CardEngine")) end)
+	CardEngine = ok and mod or nil
+end
+
+local bit32 = bit32
+
+local M = {}
+
+--==================================================
+-- ユーティリティ
+--==================================================
+
+local function tableCreate(n:number)
+	n = math.max(0, math.floor(tonumber(n) or 0))
+	return table.create(n)
+end
+
+local function cloneArray(arr:any)
+	if typeof(arr) ~= "table" then return {} end
+	local n = #arr
+	local out = tableCreate(n)
+	for i = 1, n do
+		out[i] = arr[i]
+	end
+	return out
+end
+
+-- ★ cloneEntry: DeckSchema.defaults の戻りを尊重しつつ uid を落とさない
+local function cloneEntry(e:any)
+	-- DeckSchema.defaults は新テーブルを返す想定
+	local ok, res = pcall(function()
+		return DeckSchema.defaults(e)
+	end)
+	local out
+	if ok and typeof(res) == "table" then
+		out = res
+	else
+		-- 失敗時は最小限のダミー
+		out = {
+			code  = e and e.code or "",
+			kind  = e and e.kind or nil,
+			month = e and e.month or nil,
+			idx   = e and e.idx or nil,
+			name  = e and e.name or nil,
+			tags  = e and e.tags or nil,
+		}
+	end
+	-- 既存uidが来ていたら保持（後段で最終確定）
+	if e and e.uid and e.uid ~= "" then
+		out.uid = e.uid
+	end
+	return out
+end
+
+-- ★ uid採番: codeごとに通番（人間可読/安定）
+local function assignUids(entries:any)
+	local n = #entries
+	if n == 0 then return entries end
+
+	-- code -> seq
+	local seqByCode = {}
+
+	for i = 1, n do
+		local e = entries[i]
+		-- code正規化
+		local code = tostring(e.code or "")
+
+		-- month/idx の保険：なければ code から復元（DeckSchemaで入っていれば何もしない）
+		if (not e.month or not e.idx) and CardEngine and code ~= "" then
+			local ok, m, idx = pcall(function()
+				local mm, ii = CardEngine.fromCode(code)
+				return mm, ii
+			end)
+			if ok then
+				e.month = e.month or m
+				e.idx   = e.idx   or idx
+			end
+		end
+
+		-- codeが空のときは month/idx から生成（最悪 "0000"）
+		if code == "" then
+			local mm = tonumber(e.month) or 0
+			local ii = tonumber(e.idx) or 0
+			code = string.format("%02d%02d", mm, ii)
+			e.code = code
+		end
+
+		-- 既に uid があれば尊重（重複チェックはしない：外部生成を優先）
+		if not e.uid or e.uid == "" then
+			seqByCode[code] = (seqByCode[code] or 0) + 1
+			e.uid = string.format("%s#%03d", code, seqByCode[code])
+		end
+	end
+	return entries
+end
+
+local function normalizeEntries(entriesLike:any)
+	if typeof(entriesLike) ~= "table" then return {} end
+	local n = #entriesLike
+	local out = tableCreate(n)
+	for i = 1, n do
+		out[i] = cloneEntry(entriesLike[i])
+	end
+	-- ★ ここで uid を必ず付与/整える（本質ポイント）
+	return assignUids(out)
+end
+
+-- Mulberry32（32bit厳守版 / bit32使用）
+local function rngMulberry32(seed:any)
+	local s = tonumber(seed) or 0
+	s = s % 4294967296
+	return function()
+		s = (s + 0x6D2B79F5) % 4294967296
+		local t = s
+		t = bit32.bxor(t, bit32.rshift(t, 15))
+		t = (t * bit32.bor(t, 1)) % 4294967296
+		t = bit32.bxor(t, (t + ((bit32.bxor(t, bit32.rshift(t, 7)) * bit32.bor(t, 61)) % 4294967296)) % 4294967296)
+		t = bit32.bxor(t, bit32.rshift(t, 14))
+		return (t % 4294967296) / 4294967296
+	end
+end
+
+--==================================================
+-- 構築・スナップショット
+--==================================================
+
+function M.fromDeckV3(deckLike:any)
+	local v3 = DeckSchema.normalizeDeck(deckLike)
+	return {
+		v = 3,
+		entries = normalizeEntries(v3 and v3.entries),
+	}
+end
+
+function M.toDeckV3(store:any)
+	local entries = normalizeEntries(store and store.entries)
+	local n = #entries
+	local codes = tableCreate(n)
+	for i = 1, n do
+		codes[i] = entries[i].code
+	end
+	return {
+		v = 3,
+		codes = codes,
+		entries = entries,
+		count = n,
+	}
+end
+
+--==================================================
+-- 基本操作（すべて非破壊）
+--==================================================
+
+function M.size(store:any): number
+	local e = store and store.entries
+	return (typeof(e) == "table") and #e or 0
+end
+
+function M.peek(store:any, idx:number?) -- idx 未指定=トップ
+	local n = M.size(store)
+	if n == 0 then return nil end
+	idx = math.clamp(math.floor(tonumber(idx or 1) or 1), 1, n)
+	return store.entries[idx]
+end
+
+-- index の1枚を取り出す（戻り: newStore, takenEntry）
+function M.takeAt(store:any, idx:number)
+	local n = M.size(store)
+	if n == 0 then return store, nil end
+	idx = math.clamp(math.floor(tonumber(idx) or 1), 1, n)
+
+	local newEntries = tableCreate(math.max(n - 1, 0))
+	local k = 1
+	local taken = nil
+	for i = 1, n do
+		local e = store.entries[i]
+		if i == idx then
+			taken = e
+		else
+			newEntries[k] = e
+			k += 1
+		end
+	end
+	return { v = 3, entries = newEntries }, taken
+end
+
+-- トップ1枚を取り出す（戻り: newStore, takenEntry）
+function M.drawTop(store:any)
+	return M.takeAt(store, 1)
+end
+
+-- 指定コードの最初の1枚を取り出す（後方互換：なるべく使わない）
+function M.takeByCode(store:any, code:string)
+	if type(code) ~= "string" then return store, nil end
+	local n = M.size(store)
+	if n == 0 then return store, nil end
+	for i = 1, n do
+		local e = store.entries[i]
+		if e and e.code == code then
+			return M.takeAt(store, i)
+		end
+	end
+	return store, nil
+end
+
+-- ★ uid 検索/取り出し（推奨）
+function M.findIndexByUid(store:any, uid:string): number?
+	if type(uid) ~= "string" then return nil end
+	for i = 1, M.size(store) do
+		local e = store.entries[i]
+		if e and e.uid == uid then
+			return i
+		end
+	end
+	return nil
+end
+
+function M.takeByUid(store:any, uid:string)
+	local idx = M.findIndexByUid(store, uid)
+	if not idx then return store, nil end
+	return M.takeAt(store, idx)
+end
+
+-- 末尾に追加（複数可）
+function M.addBottom(store:any, entriesLike:any)
+	local base = (store and store.entries) or {}
+	local add = normalizeEntries((typeof(entriesLike) == "table" and entriesLike) or { entriesLike })
+	local nb, na = #base, #add
+	local newEntries = tableCreate(nb + na)
+	for i = 1, nb do newEntries[i] = base[i] end
+	for j = 1, na do newEntries[nb + j] = add[j] end
+	return { v = 3, entries = newEntries }
+end
+
+-- 先頭に追加（複数可）
+function M.addTop(store:any, entriesLike:any)
+	local base = (store and store.entries) or {}
+	local add = normalizeEntries((typeof(entriesLike) == "table" and entriesLike) or { entriesLike })
+	local nb, na = #base, #add
+	local newEntries = tableCreate(nb + na)
+	for i = 1, na do newEntries[i] = add[i] end
+	for j = 1, nb do newEntries[na + j] = base[j] end
+	return { v = 3, entries = newEntries }
+end
+
+-- 任意位置に差し替え（1枚）
+function M.replaceAt(store:any, idx:number, newEntry:any)
+	local n = M.size(store)
+	if n == 0 then return store end
+	idx = math.clamp(math.floor(tonumber(idx) or 1), 1, n)
+	local e = cloneEntry(newEntry)
+
+	local newEntries = cloneArray(store.entries)
+	newEntries[idx] = e
+	return { v = 3, entries = newEntries }
+end
+
+-- entries 全体を map（関数に通して置換）
+-- f: (entry, index) -> CardEntryV3|nil   nil を返すと削除
+function M.map(store:any, f:(any, number)->(any?))
+	if type(f) ~= "function" then return store end
+	local base = (store and store.entries) or {}
+	local out = {}
+	for i = 1, #base do
+		local ok, e = pcall(f, base[i], i)
+		if ok and e ~= nil then
+			out[#out + 1] = cloneEntry(e)
+		end
+	end
+	-- mapの出力にも uid を保証
+	return { v = 3, entries = assignUids(out) }
+end
+
+-- コードで検索（最初の index / 見つからなければ nil）
+function M.findIndexByCode(store:any, code:string): number?
+	if type(code) ~= "string" then return nil end
+	for i = 1, M.size(store) do
+		local e = store.entries[i]
+		if e and e.code == code then
+			return i
+		end
+	end
+	return nil
+end
+
+--==================================================
+... (truncated)
+```
+
+### src/shared/Deck/DeckViewAdapter.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/DeckViewAdapter.lua
+-- Step D: 表示用VM（View Model）アダプタ
+-- 仕様根拠:
+--  - VM項目: imageId / badges / kind / month / name（確定）【DeckSchema Step A】 
+--  - 画像決定: imageOverride ?? CardImageMap.get(code)（確定）【DeckSchema Step A】
+--  - 画像マップ: SharedModules/CardImageMap を利用（既存）【PROJECT_SNAPSHOT.md】
+
+local RS = game:GetService("ReplicatedStorage")
+local Shared = RS:WaitForChild("SharedModules")
+
+local CardImageMap = require(Shared:WaitForChild("CardImageMap"))
+
+local M = {}
+
+--========================
+-- 内部: 安全ユーティリティ
+--========================
+
+local function _deriveCode(card: any): string
+	-- code があれば最優先。無ければ month/idx から派生。
+	if card and card.code then
+		return tostring(card.code)
+	end
+	local m = tonumber(card and card.month) or 1
+	local i = tonumber(card and card.idx) or 1
+	if m < 1 then m = 1 end; if m > 12 then m = 12 end
+	if i < 1 then i = 1 end; if i > 4 then i = 4 end
+	return string.format("%02d%02d", m, i) -- 例: 0101
+end
+
+local function _buildBadges(card: any): {string}
+	-- “バッジ”はUI表示用の短いラベル配列。
+	-- 仕様上の必須は「badges を持つこと」まで（表記はUI側に委譲可能）【DeckSchema Step A】
+	-- ここでは tags と effects を素直に並べる（推測による翻訳や省略はしない）。
+	local out = {}
+
+	-- tags: 配列想定（なければ無視）
+	if card and typeof(card.tags) == "table" then
+		for _, t in ipairs(card.tags) do
+			table.insert(out, tostring(t))
+		end
+	end
+
+	-- effects: 文字列 or {id=..., ...} などを素直に見出し化
+	if card and typeof(card.effects) == "table" then
+		for _, e in ipairs(card.effects) do
+			if typeof(e) == "string" then
+				table.insert(out, e)
+			elseif typeof(e) == "table" then
+				local label = (e.id ~= nil) and tostring(e.id) or "effect"
+				table.insert(out, label)
+			end
+		end
+	end
+
+	return out
+end
+
+local function _pickImageId(card: any, code: string): string
+	-- 画像は imageOverride があればそれを採用、無ければマップから取得（確定仕様）
+	if card and card.imageOverride ~= nil then
+		return tostring(card.imageOverride)
+	end
+	local ok, id = pcall(function() return CardImageMap.get(code) end)
+	return ok and tostring(id) or ""
+end
+
+--========================
+-- 公開API
+--========================
+
+-- card 1枚 → 表示VM
+-- 返すテーブル：
+--   { code, imageId, badges, kind, month, name }
+function M.toVM(card: any): any
+	if typeof(card) ~= "table" then
+		return { code = "0101", imageId = "", badges = {}, kind = "", month = 1, name = "" }
+	end
+
+	local code = _deriveCode(card)
+	local imageId = _pickImageId(card, code)
+	local badges = _buildBadges(card)
+
+	-- kind/month/name はカードが持つソースをそのまま反映（推測で補完しない）
+	local out = {
+		code   = code,
+		imageId= imageId,
+		badges = badges,
+		kind   = card.kind,
+		month  = card.month,
+		name   = card.name,
+	}
+
+	return out
+end
+
+-- entries の配列（デッキなど）→ VM配列
+function M.toVMs(entries: {any}?): {any}
+	local src = (typeof(entries) == "table") and entries or {}
+	local out = table.create(#src)
+	for i, card in ipairs(src) do
+		out[i] = M.toVM(card)
+	end
+	return out
+end
+
+return M
+```
+
+### src/shared/Deck/Effects/kito/Tori_Brighten.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/Tori_Brighten.lua
+-- Rooster (KITO): convert one target card to "bright" (UID-first)
+--  - Effect IDs: "kito.tori_brighten" (primary), "Tori_Brighten" (legacy alias)
+--  - Prioritize payload.uids / payload.poolUids (UID uniquely identifies one card)
+--  - Fallback to codes only if no UID is provided
+--  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
+--  - RNG is separated (ctx.rng preferred, otherwise Random.new())
+--  - If the month has no "bright", do nothing (meta returned)
+--  - ★ Diagnostic logs added (scope: Effects.kito.tori_brighten)
+
+return function(Effects)
+	--─────────────────────────────────────────────────────
+	-- Logger (optional)
+	--─────────────────────────────────────────────────────
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(game:GetService("ReplicatedStorage")
+				:WaitForChild("SharedModules")
+				:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.tori_brighten")
+		else
+			-- silent no-op logger
+			LOG = {
+				info  = function(...) end,
+				debug = function(...) end,
+				warn  = function(...) warn(string.format(...)) end,
+			}
+		end
+	end
+
+	--─────────────────────────────────────────────────────
+	-- Shared handler for both effect IDs
+	--─────────────────────────────────────────────────────
+	local function handler(ctx)
+		local payload    = ctx.payload or {}
+		local uids       = (typeof(payload.uids)       == "table" and payload.uids)       or nil
+		local poolUids   = (typeof(payload.poolUids)   == "table" and payload.poolUids)   or nil
+		local codes      = (typeof(payload.codes)      == "table" and payload.codes)      or nil -- legacy compat
+		local poolCodes  = (typeof(payload.poolCodes)  == "table" and payload.poolCodes)  or nil -- legacy compat
+		local tagMark    = tostring(payload.tag or "eff:kito_tori_bright")
+		local pref       = tostring(payload.preferKind or "bright"):lower()
+		local preferKind = (pref == "bright") and "bright" or "bright" -- force EN-only "bright"
+		local runId      = ctx.runId
+
+		local rng = ctx.rng or Random.new()
+
+		-- quick payload summary for logs
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		-- 依存注入の存在可否も一度だけ観測
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+
+		LOG.info("[begin] run=%s prefer=%s tag=%s | uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), preferKind, tagMark,
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes),
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+		)
+
+		--─────────────────────────────────────────────────────
+		-- helpers
+		--─────────────────────────────────────────────────────
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+
+		local uidSet      = listToSet(uids)
+		local poolUidSet  = listToSet(poolUids)
+		local codeSet     = listToSet(codes)
+		local poolCodeSet = listToSet(poolCodes)
+
+		local function monthFromCard(card:any): number?
+			if not card then return nil end
+			if card.month ~= nil then
+				local m = tonumber(card.month)
+				if typeof(m) == "number" then return m end
+			end
+			local code = tostring(card.code or "")
+			if #code >= 2 then
+				local mm = tonumber(string.sub(code, 1, 2))
+				if typeof(mm) == "number" then return mm end
+			end
+			return nil
+		end
+
+		-- EN-only: a month is eligible only if it contains a "bright" definition
+		local function monthHasBright(month:number?): boolean
+			if not month or not ctx.CardEngine or not ctx.CardEngine.cardsByMonth then return false end
+			local defs = ctx.CardEngine.cardsByMonth[month]
+			if typeof(defs) ~= "table" then return false end
+			for _, def in ipairs(defs) do
+				if tostring(def.kind or "") == "bright" then
+					return true
+				end
+			end
+			return false
+		end
+
+		local function alreadyTagged(card)
+			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+			for _, t in ipairs(card.tags) do if t == tagMark then return true end end
+			return false
+		end
+
+		local function cardStr(c:any)
+			if typeof(c) ~= "table" then return "<nil>" end
+			return string.format("{uid=%s code=%s kind=%s month=%s idx=%s tags=%s}",
+				tostring(c.uid), tostring(c.code), tostring(c.kind),
+				tostring(c.month), tostring(c.idx),
+				(function()
+					if typeof(c.tags) ~= "table" then return "[]" end
+					local t = {}
+					for i,v in ipairs(c.tags) do t[i] = tostring(v) end
+					return "["..table.concat(t, ",").."]"
+				end)()
+			)
+		end
+
+		-- Replace one entry by UID (preserve UID and core fields)
+		local function replaceOneByUid(store, uid, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.uid == uid then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByUid] uid=%s -> %s", tostring(uid), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByUid] uid=%s not found (no-op)", tostring(uid))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- Replace one entry by code (legacy fallback)
+		local function replaceOneByCode(store, code, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.code == code then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByCode] code=%s -> %s", tostring(code), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByCode] code=%s not found (no-op)", tostring(code))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- Target selection order: UID → Code → pool(UID/Code) → all
+		-- In all cases, restrict to months that contain "bright".
+		local function pickTarget(store)
+			local entries = (store and store.entries) or {}
+			-- 0) direct UID
+			if uidSet then
+				local list = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and uidSet[e.uid] then
+						local m = monthFromCard(e)
+						if monthHasBright(m) then list[#list+1] = e end
+					end
+				end
+				LOG.debug("[pick] direct-uid candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-uid" end
+			end
+			-- 1) direct code
+			if codeSet then
+				local list = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and codeSet[e.code] then
+						local m = monthFromCard(e)
+						if monthHasBright(m) then list[#list+1] = e end
+					end
+				end
+				LOG.debug("[pick] direct-code candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-code" end
+			end
+			-- 2) pool by UID
+			if poolUidSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and poolUidSet[e.uid] then
+						local m = monthFromCard(e)
+						if monthHasBright(m) then cand[#cand+1] = e end
+					end
+				end
+				LOG.debug("[pick] pool-uid candidates=%d", #cand)
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-uid" end
+			end
+			-- 3) pool by code
+			if poolCodeSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and poolCodeSet[e.code] then
+						local m = monthFromCard(e)
+						if monthHasBright(m) then cand[#cand+1] = e end
+					end
+				end
+				LOG.debug("[pick] pool-code candidates=%d", #cand)
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-code" end
+			end
+			-- 4) any entry whose month has "bright"
+			local all = {}
+			for _, e in ipairs(entries) do
+				local m = monthFromCard(e)
+				if monthHasBright(m) then all[#all+1] = e end
+			end
+			LOG.debug("[pick] any-bright-month candidates=%d", #all)
+			if #all > 0 then return all[rng:NextInteger(1, #all)], "any-bright-month" end
+			return nil, "none"
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Main (DeckStore.transact)
+		--─────────────────────────────────────────────────────
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+		return ctx.DeckStore.transact(runId, function(store)
+			local storeSize = (store and store.entries and #store.entries) or 0
+			LOG.debug("[store] size=%s", tostring(storeSize))
+
+			local target, reason = pickTarget(store)
+			if not target then
+				LOG.info("[result] no-eligible-target (pickReason=%s)", tostring(reason))
+				return store, { ok = true, changed = 0, meta = "no-eligible-target", pickReason = reason }
+			end
+
+			LOG.debug("[target] via=%s %s", tostring(reason), cardStr(target))
+
+			if alreadyTagged(target) then
+				LOG.info("[result] already-applied uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			-- Convert to "bright"（同月の bright に idx を寄せる）
+			local beforeIdx, beforeCode, beforeKind = target.idx, target.code, target.kind
+			local next1 = ctx.DeckOps.convertKind(target, preferKind)
+			local afterIdx, afterCode, afterKind = next1.idx, next1.code, next1.kind
+			LOG.debug("[convert] idx:%s→%s code:%s→%s kind:%s→%s",
+				tostring(beforeIdx), tostring(afterIdx),
+				tostring(beforeCode), tostring(afterCode),
+				tostring(beforeKind), tostring(afterKind))
+
+			if tostring(afterKind or "") ~= "bright" then
+				LOG.info("[result] month-has-no-bright uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "month-has-no-bright", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			-- Tag（UID 維持）
+			local next2 = ctx.DeckOps.attachTag(next1, tagMark)
+			if not next2.uid then next2.uid = target.uid end
+			LOG.debug("[tagged] %s", cardStr(next2))
+
+			-- Replace: prefer UID when available
+			if target.uid and target.uid ~= "" then
+				store = replaceOneByUid(store, target.uid, next2)
+			else
+				store = replaceOneByCode(store, target.code, next2)
+			end
+
+			local dt = (os.clock() - t0) * 1000
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms", tostring(target.uid), tostring(target.code), tostring(reason), dt)
+			return store, { ok = true, changed = 1, targetUid = target.uid, targetCode = target.code, pickReason = reason }
+... (truncated)
+```
+
+### src/shared/Deck/EffectsRegisterAll.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/EffectsRegisterAll.lua
+-- Deck/Effects 以下の ModuleScript を自動スキャンして EffectsRegistry に一括登録する
+--
+-- サポートするモジュールの返り値（3通りすべて対応）:
+--   1) ビルダー関数: function(Effects) -> ()           -- ← NEW: Effects.register(...) を内部で呼ぶ
+--   2) ハンドラ関数: function(ctx) -> ...              -- 旧来: 直接適用される関数
+--   3) 設定テーブル: { id|name, apply|run|exec|call }  -- 旧来: idと関数をテーブルで返す
+--
+-- 登録キーの決定優先度:
+--   テーブル返り値: payload.id > payload.name > module._id > ModuleScript.Name
+--   関数返り値(ハンドラ扱い): module._id > ModuleScript.Name
+--
+-- ビルダー関数を検出した場合は、Effects.register をプロキシして捕捉し、内部で実レジストリへ中継登録する。
+-- これにより、モジュール内で "kito.xxx" のような命名規約を自律的に採用可能。
+
+local RS = game:GetService("ReplicatedStorage")
+
+-- Logger は任意（無ければダミー）
+local function getLogger()
+	local ok, Logger = pcall(function()
+		return require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+	end)
+	if ok and Logger then
+		return Logger.scope("EffectsBootstrap")
+	end
+	return {
+		info  = function(...) end,
+		warn  = function(...) warn(string.format(...)) end,
+		debug = function(...) end,
+	}
+end
+local LOG = getLogger()
+
+local DeckFolder = script.Parent
+local Registry = require(DeckFolder:WaitForChild("EffectsRegistry"))
+
+--====================
+-- 内部 util
+--====================
+local function tryRequire(mod: Instance)
+	local ok, res = pcall(require, mod)
+	if not ok then
+		LOG.warn("require failed: %s | err=%s", mod:GetFullName(), tostring(res))
+		return nil
+	end
+	return res
+end
+
+local function pickFn(from:any)
+	if type(from) == "function" then
+		return from
+	end
+	if type(from) == "table" then
+		for _, k in ipairs({ "apply", "run", "exec", "call" }) do
+			if type(from[k]) == "function" then
+				return from[k]
+			end
+		end
+	end
+	return nil
+end
+
+local function pickId(modInst: Instance, payload:any)
+	-- 明示指定があれば最優先（テーブル返り値）
+	if type(payload) == "table" then
+		if type(payload.id) == "string"   and #payload.id   > 0 then return payload.id   end
+		if type(payload.name) == "string" and #payload.name > 0 then return payload.name end
+	end
+	-- モジュールが _id を持っていたら（ハンドラ関数返し時にも参照）
+	if type(payload) == "table" and type(payload._id) == "string" and #payload._id > 0 then
+		return payload._id
+	end
+	-- それも無ければ ModuleScript の名前
+	return modInst.Name
+end
+
+-- Effects.register をプロキシして捕捉し、本体 Registry に中継
+local function buildEffectsProxy(modInst: Instance)
+	local captured = {}  -- { {id=id, fn=fn}, ... }
+	local Effects = {}
+
+	function Effects.register(id: string, fn: any)
+		local ok, err = pcall(function()
+			Registry.register(id, fn)
+		end)
+		if not ok then
+			LOG.warn("register failed via builder: id=%s mod=%s | err=%s",
+				tostring(id), modInst:GetFullName(), tostring(err))
+			return
+		end
+		table.insert(captured, { id = id, fn = fn })
+		LOG.info("registered: id=%s from=%s", tostring(id), modInst:GetFullName())
+	end
+
+	-- 任意: ビルダーがログを使いたい場合
+	function Effects.log(msg: string, ...)
+		LOG.debug("[effects:%s] "..tostring(msg), modInst.Name, ...)
+	end
+
+	return Effects, captured
+end
+
+local function registerAsBuilder(modInst: Instance, builderFn: any): boolean
+	local Effects, captured = buildEffectsProxy(modInst)
+	local ok, err = pcall(function()
+		-- ビルダーは副作用として Effects.register を呼ぶ想定
+		builderFn(Effects)
+	end)
+	if not ok then
+		LOG.warn("builder call failed: %s | err=%s", modInst:GetFullName(), tostring(err))
+		return false
+	end
+	return #captured > 0
+end
+
+local function registerAsTable(modInst: Instance, payload: table): boolean
+	local fn = pickFn(payload)
+	if type(fn) ~= "function" then
+		LOG.warn("skip (no callable) : %s", modInst:GetFullName())
+		return false
+	end
+	local id = pickId(modInst, payload)
+	if type(id) ~= "string" or #id == 0 then
+		LOG.warn("skip (no id) : %s", modInst:GetFullName())
+		return false
+	end
+	local ok, err = pcall(function()
+		Registry.register(id, fn)
+	end)
+	if not ok then
+		LOG.warn("register failed: id=%s mod=%s | err=%s", tostring(id), modInst:GetFullName(), tostring(err))
+		return false
+	end
+	LOG.info("registered: id=%s from=%s", id, modInst:GetFullName())
+	return true
+end
+
+local function registerAsHandler(modInst: Instance, handlerFn: any): boolean
+	-- 関数返り値が「ctxハンドラ」前提の旧流儀
+	local fakePayload = { _id = nil }
+	local id = pickId(modInst, fakePayload) -- _id が無ければファイル名
+	if type(id) ~= "string" or #id == 0 then
+		id = modInst.Name
+	end
+	local ok, err = pcall(function()
+		Registry.register(id, handlerFn)
+	end)
+	if not ok then
+		LOG.warn("register failed: id=%s mod=%s | err=%s", tostring(id), modInst:GetFullName(), tostring(err))
+		return false
+	end
+	LOG.info("registered: id=%s from=%s", id, modInst:GetFullName())
+	return true
+end
+
+local function registerOne(modInst: Instance)
+	local payload = tryRequire(modInst)
+	if payload == nil then return false end
+
+	-- 優先: 関数返り値はまず「ビルダー」として試す
+	if type(payload) == "function" then
+		if registerAsBuilder(modInst, payload) then
+			-- ビルダーとして 1件以上の register を捕捉できた
+			return true
+		end
+		-- 捕捉できなかった場合は旧流儀の「ctxハンドラ関数」として登録を試みる
+		return registerAsHandler(modInst, payload)
+	end
+
+	-- テーブル返り値は従来どおり
+	if type(payload) == "table" then
+		return registerAsTable(modInst, payload)
+	end
+
+	LOG.warn("skip (unsupported export type=%s) : %s", typeof(payload), modInst:GetFullName())
+	return false
+end
+
+local function isModuleScript(x: Instance): boolean
+	return x and x:IsA("ModuleScript")
+end
+
+local function scanAndRegister(root: Instance)
+	local count = 0
+	-- 深さ優先で下にある ModuleScript を全て対象にする
+	local stack = { root }
+	while #stack > 0 do
+		local cur = table.remove(stack)
+		for _, ch in ipairs(cur:GetChildren()) do
+			if isModuleScript(ch) then
+				if registerOne(ch) then
+					count += 1
+				end
+			else
+				-- フォルダ/サブツリーも潜る
+				table.insert(stack, ch)
+			end
+		end
+	end
+	return count
+end
+
+--====================
+-- エントリ
+--====================
+-- 規約: Deck/Effects 以下をスキャン（無ければ何もせず成功扱い）
+local effectsRoot = DeckFolder:FindFirstChild("Effects")
+local total = 0
+if effectsRoot then
+	total = scanAndRegister(effectsRoot)
+else
+	LOG.warn("Deck/Effects not found under %s (no effects registered)", DeckFolder:GetFullName())
+end
+
+LOG.info("EffectsRegistry initialized: %d module(s) registered", total)
+
+return true
+```
+
+### src/shared/Deck/EffectsRegistry.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/EffectsRegistry.lua
+-- Step E: 効果ハブ（集約と実行の窓口）
+-- 責務：
+--  - register(id, handler) で効果を登録
+--  - apply(runId, effectId, payload?) で効果を実行
+--  - handler 内で DeckStore / DeckOps / CardEngine を自由に使えるよう依存を注入
+--
+-- ポリシー：
+--  - Deck の変更は DeckStore.transact を通す（純関数 DeckOps で生成→差し替え）
+--  - ここでは「登録と実行の枠」だけ提供。個別効果のロジックは別モジュールで定義して register する
+
+local RS = game:GetService("ReplicatedStorage")
+local Shared = RS:WaitForChild("SharedModules")
+
+-- 依存（注入するための“共通道具”）
+local DeckStore  = require(Shared:WaitForChild("Deck"):WaitForChild("DeckStore"))
+local DeckOps    = require(Shared:WaitForChild("Deck"):WaitForChild("DeckOps"))
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
+
+local Registry: {[string]: (any)->(any)} = {}
+
+local M = {}
+
+export type ApplyResult = {
+	ok: boolean,
+	changed: number?,      -- 変更枚数など（任意）
+	meta: any?,            -- 効果側からの追加情報（任意）
+	error: string?,        -- エラー文字列（失敗時）
+}
+
+-- 効果を登録
+function M.register(id: string, handler: (ctx:any)->(any))
+	assert(type(id) == "string" and #id > 0, "EffectsRegistry.register: id must be non-empty string")
+	assert(type(handler) == "function", "EffectsRegistry.register: handler must be function")
+	if Registry[id] ~= nil then
+		warn(("[EffectsRegistry] overwriting existing effect id: %s"):format(id))
+	end
+	Registry[id] = handler
+end
+
+-- 効果が登録済みか
+function M.has(id: string): boolean
+	return Registry[id] ~= nil
+end
+
+-- 登録一覧（デバッグ用）
+function M.list(): {string}
+	local t = {}
+	for k,_ in pairs(Registry) do table.insert(t, k) end
+	table.sort(t)
+	return t
+end
+
+-- 効果を実行
+-- runId: DeckStore のランID（ゲーム/ラウンドなどの単位）
+-- effectId: 登録した効果ID
+-- payload: 効果固有の入力（対象コード配列など）
+function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
+	if type(effectId) ~= "string" or #effectId == 0 then
+		return { ok = false, error = "effectId is invalid" }
+	end
+	local handler = Registry[effectId]
+	if not handler then
+		return { ok = false, error = ("effect '%s' not registered"):format(tostring(effectId)) }
+	end
+
+	-- 効果ハンドラへ渡すコンテキスト
+	local ctx = {
+		runId   = runId,
+		payload = payload,
+		-- 共通道具（依存の注入）
+		DeckStore  = DeckStore,
+		DeckOps    = DeckOps,
+		CardEngine = CardEngine,
+
+		-- よく使う補助（任意で追加可能）
+		selectByCodes = function(deck, codes: {string})
+			local out = {}
+			if typeof(deck) ~= "table" or typeof(codes) ~= "table" then
+				return out
+			end
+			-- entriesByCode 優先、無ければ entries を走査
+			if deck.entriesByCode and typeof(deck.entriesByCode) == "table" then
+				for _, code in ipairs(codes) do
+					local c = deck.entriesByCode[code]
+					if c then table.insert(out, c) end
+				end
+			elseif deck.entries and typeof(deck.entries) == "table" then
+				-- 線形探索のフォールバック
+				local want = {}
+				for _, code in ipairs(codes) do want[code] = true end
+				for _, c in ipairs(deck.entries) do
+					if c and want[c.code] then table.insert(out, c) end
+				end
+			end
+			return out
+		end,
+
+		-- Deck 置換の薄いラッパ（関数名はプロジェクト実装に合わせて）
+		replace = function(deck, oldCode: string, newCard: any)
+			-- DeckStore に実体 API があればそちらを使う
+			if DeckStore.replaceEntry then
+				return DeckStore.replaceEntry(deck, oldCode, newCard)
+			elseif DeckStore.upsertEntry then
+				return DeckStore.upsertEntry(deck, oldCode, newCard)
+			else
+				error("DeckStore.replaceEntry/upsertEntry not found")
+			end
+		end,
+	}
+
+	-- ハンドラは（必要なら）内部で DeckStore.transact を呼ぶ想定
+	-- 返り値は自由だが、ここでは { ok, changed, meta } 形式に正規化して返す
+	local ok, res = pcall(handler, ctx)
+	if not ok then
+		return { ok = false, error = tostring(res) }
+	end
+
+	-- ハンドラ側が {ok=?, changed=?, meta=?} を返さなかった場合の救済
+	if typeof(res) ~= "table" then
+		return { ok = true, meta = res }
+	end
+	if res.ok == nil then res.ok = true end
+	return res :: ApplyResult
 end
 
 return M
@@ -10363,134 +12203,45 @@ return Pick
 ### src/shared/PoolEditor.lua
 ```lua
 -- ReplicatedStorage/SharedModules/PoolEditor.lua
--- 目的: 「プール編集セッション」の開始/変更/確定(コミット)を提供する。
--- 依存: Balance.KITO_POOL_TTL_SEC / RunDeckUtil.* / DeckSampler.sampleUids
+-- DEPRECATED: Deck リファクターにより役割を終了。
+-- すべてのデッキ編集は EffectsRegistry + DeckStore.transact + DeckOps に移行してください。
+--
+-- 互換のため public API(start/mutate/commit)は残すが、すべて no-op。
+-- 誤用に気づけるよう warn を出し、安全な戻り値を返す。
 
-local RS = game:GetService("ReplicatedStorage")
-
-local HttpService  = game:GetService("HttpService")
-local Balance      = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local RunDeckUtil  = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
-local DeckSampler  = require(RS:WaitForChild("SharedModules"):WaitForChild("DeckSampler"))
+local HttpService = game:GetService("HttpService")
 
 local M = {}
 
-local function now() return os.time() end
-local function ttlSec()
-	return tonumber(Balance.KITO_POOL_TTL_SEC or 45) or 45
+local function _warn(where: string)
+	warn(("[PoolEditor] DEPRECATED: '%s' was called. Use Deck/EffectsRegistry + DeckOps instead."):format(where))
 end
 
--- セッション開始:
---   戻り値 { id, version, createdAt, expiresAt, uids[], snap={ [uid]=entryCopy } }
-function M.start(state:any, k:number?)
-	if typeof(state) ~= "table" then return nil end
-	if typeof(state.deck) ~= "table" then return nil end
-
-	RunDeckUtil.ensureUids(state)
-
-	local version = RunDeckUtil.getDeckVersion(state)
-	local uids    = DeckSampler.sampleUids(state, k)
-	if #uids == 0 then
-		return { id = HttpService:GenerateGUID(false), version = version, createdAt = now(), expiresAt = now() + ttlSec(), uids = {}, snap = {} }
-	end
-
-	-- 現在デッキのスナップショット（uid 指定で複製）
-	local deck = state.deck
-	local map  = RunDeckUtil.buildUidIndexMap(state)
-	local snap = {}
-	for _, uid in ipairs(uids) do
-		local i = map[uid]
-		local e = i and deck[i]
-		if typeof(e) == "table" then
-			snap[uid] = table.clone(e) -- uid も含めた現状コピー
-		end
-	end
-
+-- セッション開始（ダミーを返す）
+-- 戻り値形式は維持: { id, version, createdAt, expiresAt, uids = {}, snap = {} }
+function M.start(_state: any, _k: number?)
+	_warn("start")
+	local now = os.time()
 	return {
 		id        = HttpService:GenerateGUID(false),
-		version   = version,
-		createdAt = now(),
-		expiresAt = now() + ttlSec(),
-		uids      = uids,
-		snap      = snap,
+		version   = 0,
+		createdAt = now,
+		expiresAt = now, -- すぐ失効扱い
+		uids      = {},
+		snap      = {},
 	}
 end
 
--- セッション内容に手を加える
--- op.kind:
---   - "convertKind"  : 指定 uid 群を「同月の targetKind」に置換（定義に基づく安全変換）
---       fields: targetKind:string, uids?:{string}（未指定なら sess.uids 全部）
---   - "remove"       : 指定 uid 群を削除マーク（コミット時に remove 適用）
---       fields: uids:{string}
-function M.mutate(sess:any, op:any): (boolean, any?)
-	if typeof(sess) ~= "table" or typeof(sess.snap) ~= "table" then
-		return false, "invalid session"
-	end
-	if typeof(op) ~= "table" or op.kind == nil then
-		return false, "invalid op"
-	end
-
-	if op.kind == "convertKind" then
-		local target = tostring(op.targetKind or "")
-		if target == "" then return false, "targetKind required" end
-		local list = (typeof(op.uids) == "table" and op.uids) or sess.uids
-		local changed = 0
-		for _, uid in ipairs(list) do
-			local src = sess.snap[uid]
-			if typeof(src) == "table" then
-				local repl = RunDeckUtil.entryWithKindLike(src, target)
-				if repl then
-					repl.uid = uid
-					sess.snap[uid] = repl
-					changed += 1
-				end
-			end
-		end
-		return true, changed
-	end
-
-	if op.kind == "remove" then
-		if typeof(op.uids) ~= "table" or #op.uids == 0 then
-			return false, "uids required"
-		end
-		sess._remove = sess._remove or {}
-		for _, uid in ipairs(op.uids) do
-			sess._remove[uid] = true
-			sess.snap[uid] = nil
-		end
-		return true, #op.uids
-	end
-
-	return false, "unsupported op"
+-- mutate: 互換のため false を返す（変更なし）
+function M.mutate(_sess: any, _op: any): (boolean, any?)
+	_warn("mutate")
+	return false, "PoolEditor is deprecated (no-op)"
 end
 
--- コミット（楽観ロック: deckVersion が一致した場合のみ反映）
-function M.commit(state:any, sess:any): (boolean, string)
-	if typeof(state) ~= "table" or typeof(state.deck) ~= "table" then
-		return false, "invalid state"
-	end
-	if typeof(sess) ~= "table" then
-		return false, "invalid session"
-	end
-	if sess.expiresAt and now() > sess.expiresAt then
-		return false, "session expired"
-	end
-	if RunDeckUtil.getDeckVersion(state) ~= sess.version then
-		return false, "deck changed; please retry"
-	end
-
-	-- 差分作成
-	local patch = { replace = {}, remove = {} }
-	for _, uid in ipairs(sess.uids or {}) do
-		if sess.snap[uid] then
-			patch.replace[uid] = sess.snap[uid]
-		elseif sess._remove and sess._remove[uid] then
-			patch.remove[uid] = true
-		end
-	end
-
-	local ok = RunDeckUtil.applyDeckPatchByUid(state, patch)
-	return ok == true, ok and "ok" or "failed"
+-- commit: 互換のため false を返す（変更なし）
+function M.commit(_state: any, _sess: any): (boolean, string)
+	_warn("commit")
+	return false, "PoolEditor is deprecated (no-op)"
 end
 
 return M
@@ -10684,10 +12435,15 @@ return Round
 -- 変更:
 --  - getUnlockedTalismanSlots(state): state.run から安全に読取り、無ければ 0 を返す
 --  - ensureTalisman(state, opts): 護符テーブルの存在と最低限の形を保証（不足キーのみ補完）
---  - ★ 追加（KITOプール基盤）:
---      ensureUids(state) / getDeckVersion(state) / bumpDeckVersion(state)
---      buildUidIndexMap(state) / applyDeckPatchByUid(state, patch)
---      entryWithKindLike(srcEntry, targetKind)
+--  - ★ KITOプール基盤（正本=run.configSnapshot へ完全寄せ）
+--      * getDeckWithUids(state)       : 一時デッキ（uid=code 付与）を生成
+--      * ensureUids(state)            : no-op（互換のため残す）
+--      * getDeckVersion/bumpDeckVersion: run.deckVersion に集約
+--      * buildUidIndexMap(state)      : getDeckWithUids 基準で作成
+--      * applyDeckPatchByUid(state,p) : decode→patch→encode（正本更新）
+--      * addEffectTag/hasEffectTag    : 再適用ガード用タグ
+--      * monthHasBright(month)        : 当月に光札が“定義として”存在するか判定
+--      * entryWithKindLike(src, kind) : 同月で指定kindの定義エントリを返す
 
 -- v0.9.0+ ラン構成ユーティリティ（唯一の正本：run.configSnapshot）
 -- ここだけを読み書きする。季節ごとの山札は毎季これをクローンして生成。
@@ -10879,23 +12635,66 @@ end
 -- ★ KITOプール基盤：Deck Versioning / UID / 差分適用
 --==================================================
 
--- Deck内の各エントリに uid を保証（存在時は上書きしない）
-function M.ensureUids(state:any)
-	if typeof(state) ~= "table" then return end
-	local deck = (state and state.deck) or {}
-	for i, e in ipairs(deck) do
-		if typeof(e) == "table" and e.uid == nil then
-			local gid = string.gsub(HttpService:GenerateGUID(false), "-", "")
-			e.uid = string.sub(gid, 1, 8) .. "_" .. tostring(i)
-		end
+-- 内部: snapshot から「uid=code」を付与した一時デッキを生成
+local function _deckWithUidsFromSnapshot(snap)
+	local deck = CardEngine.buildDeckFromSnapshot(snap)
+	for _, e in ipairs(deck) do
+		e.code = e.code or CardEngine.toCode(tonumber(e.month), tonumber(e.idx))
+		e.uid  = e.uid  or e.code
 	end
+	return deck
 end
 
--- デッキ版数を取得（無ければ1から開始）。state.run.deckVersion を優先。
+-- 公開API: 現在ランの一時デッキ（uid付き）を取得
+function M.getDeckWithUids(state)
+	local snap = M.snapshot(state)
+	return _deckWithUidsFromSnapshot(snap)
+end
+
+-- 再適用ガード用タグ
+local function ensureEffectTags(state)
+	state.run = state.run or {}
+	state.run.meta = state.run.meta or {}
+	state.run.meta.effectTags = state.run.meta.effectTags or {}
+	return state.run.meta.effectTags
+end
+
+function M.addEffectTag(state, tag)
+	if type(tag) ~= "string" or tag == "" then return end
+	local t = ensureEffectTags(state)
+	t[tag] = true
+end
+
+function M.hasEffectTag(state, tag)
+	local t = ensureEffectTags(state)
+	return t[tag] == true
+end
+
+-- 当月に光札が“定義として”存在するか
+function M.monthHasBright(month)
+	local m = tonumber(month or 0) or 0
+	if m <= 0 then return false end
+	local defs = CardEngine.cardsByMonth[m]
+	if typeof(defs) ~= "table" then return false end
+	for _, def in ipairs(defs) do
+		if def and tostring(def.kind) == "hikari" then
+			return true
+		end
+	end
+	return false
+end
+
+-- Deck内の各エントリに uid を保証（旧APIは no-op に）
+function M.ensureUids(_state:any)
+	-- no-op（互換維持。必要なら getDeckWithUids を使用）
+	return
+end
+
+-- デッキ版数を取得（run.deckVersion のみを正とする）
 function M.getDeckVersion(state:any): number
 	if typeof(state) ~= "table" then return 1 end
 	state.run = state.run or {}
-	local v = tonumber(state.run.deckVersion or state.deckVersion or 0) or 0
+	local v = tonumber(state.run.deckVersion or 0) or 0
 	if v <= 0 then v = 1 end
 	state.run.deckVersion = v
 	return v
@@ -10904,15 +12703,14 @@ end
 -- デッキ版数を+1して返す
 function M.bumpDeckVersion(state:any): number
 	local v = M.getDeckVersion(state) + 1
-	state.run = state.run or {}
 	state.run.deckVersion = v
 	return v
 end
 
--- uid→index のマップを構築
+-- uid→index のマップを構築（スナップショット復元基準）
 function M.buildUidIndexMap(state:any): {[string]:number}
 	local map = {}
-	local deck = (state and state.deck) or {}
+	local deck = M.getDeckWithUids(state)
 	for i, e in ipairs(deck) do
 		if typeof(e) == "table" and e.uid then
 			map[e.uid] = i
@@ -10921,64 +12719,17 @@ function M.buildUidIndexMap(state:any): {[string]:number}
 	return map
 end
 
--- uid 指定差分を適用
+-- uid 指定差分を適用（対象：run.configSnapshot）
 -- patch = {
 --   replace = { [uid]=entryTable, ... }?,  -- entry.uid は無視され uid を再付与
 --   remove  = { [uid]=true, ... }?         -- 対象 uid のカードをデッキから削除
 -- }
 function M.applyDeckPatchByUid(state:any, patch:{replace:any?, remove:any?})
 	if typeof(state) ~= "table" then return false end
-	local deck = state.deck
-	if typeof(deck) ~= "table" then return false end
 
-	local map = M.buildUidIndexMap(state)
-
-	-- 置換系
-	if patch and typeof(patch.replace) == "table" then
-		for uid, entry in pairs(patch.replace) do
-			local idx = map[uid]
-			if idx then
-				local copy = table.clone(entry)
-				copy.uid = uid
-				deck[idx] = copy
-			end
-		end
-	end
-
-	-- 削除系（降順で消す）
-	if patch and typeof(patch.remove) == "table" then
-		local rm = {}
-		for uid, flag in pairs(patch.remove) do
-			if flag and map[uid] then table.insert(rm, map[uid]) end
-		end
-		table.sort(rm, function(a,b) return a>b end)
-		for _, idx in ipairs(rm) do
-			table.remove(deck, idx)
-		end
-	end
-
-	M.bumpDeckVersion(state)
-	return true
-end
-
--- 同月で kind が近い（=指定kind）の定義エントリに安全変換
--- src: 現在のデッキエントリ {month, idx, kind, ...}
--- 戻り値: 変換後の「定義に基づく」エントリ（uidは含まない）
-function M.entryWithKindLike(src:any, targetKind:string)
-	if typeof(src) ~= "table" then return nil end
-	local m = tonumber(src.month or 0) or 0
-	if m <= 0 then return nil end
-	local defs = CardEngine.cardsByMonth[m]
-	if typeof(defs) ~= "table" then return nil end
-	for i, def in ipairs(defs) do
-		if def and tostring(def.kind) == tostring(targetKind) then
-			return {
-				month = m,
-				idx   = i,
-				kind  = def.kind,
-				name  = def.name,
-				tags  = def.tags and table.clone(def.tags) or nil,
-				code  = CardEngine.toCode(m, i),
+	-- 1) decode（uid=code 付与）
+	local snap = M.snapshot(state)
+	local deck = _deckWithUidsFromSnapshot(snap)
 ... (truncated)
 ```
 
@@ -11893,17 +13644,69 @@ return P5
 ### src/shared/score/util/kind.lua
 ```lua
 -- ReplicatedStorage/SharedModules/score/util/kind.lua
--- v0.9.3-S2 kind正規化（現行同等）
+-- v0.9.3-S3  kind 正規化（英名へ統一 / 後方互換の別名を広めに吸収）
 
 local VALID_KIND = { bright=true, seed=true, ribbon=true, chaff=true }
-local KIND_ALIAS = { kasu="chaff", tane="seed", tan="ribbon", tanzaku="ribbon", hikari="bright", light="bright" }
+
+-- 後方互換の別名（英/和/ローマ字・大小文字を吸収）
+local KIND_ALIAS = {
+	-- 英別名
+	light = "bright",
+
+	-- ローマ字（和名）
+	hikari = "bright",
+	tane   = "seed",
+	tan    = "ribbon",
+	kasu   = "chaff",
+
+	-- 日本語（代表的に使われがちな表記）
+	["光"]     = "bright",
+	["種"]     = "seed",
+	["短冊"]   = "ribbon",
+	["カス"]   = "chaff",
+	["かす"]   = "chaff",
+	["タネ"]   = "seed",
+	["たね"]   = "seed",
+	["タン"]   = "ribbon",
+	["たん"]   = "ribbon",
+}
 
 local M = {}
 
-function M.normKind(k: any): string?
-	if not k then return nil end
-	local v = KIND_ALIAS[k] or k
-	return VALID_KIND[v] and v or nil
+-- 前後空白除去＋小文字化
+local function _canon(s:any): string?
+	if type(s) ~= "string" then return nil end
+	-- 前後空白
+	s = string.gsub(s, "^%s+", "")
+	s = string.gsub(s, "%s+$", "")
+	if #s == 0 then return nil end
+	-- 小文字
+	s = string.lower(s)
+	return s
+end
+
+-- k を英名に正規化して返す（不正は nil）
+function M.normKind(k:any): string?
+	local key = _canon(k)
+	if not key then return nil end
+	-- そのまま有効？
+	if VALID_KIND[key] then return key end
+	-- 別名を英名へ
+	local aliased = KIND_ALIAS[key]
+	if aliased and VALID_KIND[aliased] then
+		return aliased
+	end
+	return nil
+end
+
+-- 補助：英名かどうか
+function M.isValid(k:any): boolean
+	return M.normKind(k) ~= nil
+end
+
+-- 補助：入力が不正なら fallback を返す（fallback も正規化）
+function M.ensureKind(k:any, fallback:any): string?
+	return M.normKind(k) or M.normKind(fallback)
 end
 
 return M
@@ -12521,13 +14324,22 @@ local BuyItem    = Remotes:WaitForChild("BuyItem")
 local ShopReroll = Remotes:WaitForChild("ShopReroll")
 
 -- ★ UI分岐用の Balance と、候補通知 Remote（RemotesInit で生成済みを待つ）
-local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local EvKitoStart = Remotes:WaitForChild("KitoPickStart")
-
+local Balance       = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
-local RunDeckUtil   = require(SharedModules:WaitForChild("RunDeckUtil"))
-local CardEngine    = require(SharedModules:WaitForChild("CardEngine"))
+
+-- ★ RunDeckUtil（安全ロード／無ければ nil）
+local RunDeckUtil do
+	local ok, mod = pcall(function()
+		return require(SharedModules:WaitForChild("RunDeckUtil"))
+	end)
+	if ok then
+		RunDeckUtil = mod
+	else
+		RunDeckUtil = nil
+		LOG.warn("RunDeckUtil not available; deck snapshot/matsuri logs will be limited.")
+	end
+end
 
 -- ★ 候補生成/送信の一元管理（セッション保持含む）
 local KitoPickCore  = require(SSS:WaitForChild("KitoPickCore"))
@@ -12588,6 +14400,19 @@ local function checkAndAddNonce(userId: number, nonce: string?): boolean
 end
 
 --========================
+-- ★ runId 保証ヘルパ
+--========================
+local function ensureRunId(state:any): string
+	state.run = state.run or {}
+	local id = state.run.runId
+	if type(id) ~= "string" or id == "" then
+		id = Http:GenerateGUID(false) -- 例: "d8c9e0b1-..."
+		state.run.runId = id
+	end
+	return id
+end
+
+--========================
 -- ログ支援
 --========================
 local function j(v)
@@ -12596,8 +14421,12 @@ local function j(v)
 end
 
 local function matsuriJSON(state)
-	local levels = RunDeckUtil.getMatsuriLevels(state)
-	return j(levels or {})
+	-- RunDeckUtil が無い場合は {} を返す（ログ用途のため挙動非影響）
+	if RunDeckUtil and typeof(RunDeckUtil.getMatsuriLevels) == "function" then
+		local levels = RunDeckUtil.getMatsuriLevels(state)
+		return j(levels or {})
+	end
+	return j({})
 end
 
 local function stockBrief(stock)
@@ -12722,7 +14551,11 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 	local target = (opts and opts.target) or 0
 	local money  = tonumber(s.mon or 0) or 0
 
-	local deckView = RunDeckUtil.snapshot(s)
+	-- ★ RunDeckUtil が読めない環境でも nil 許容
+	local deckView = nil
+	if RunDeckUtil and typeof(RunDeckUtil.snapshot) == "function" then
+		deckView = RunDeckUtil.snapshot(s)
+	end
 
 	-- ★ talisman は state.run.talisman を“そのまま”搭載（補完や推測はしない）
 	local tali = readRunTalisman(s)
@@ -12765,36 +14598,6 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		state = {
 			run = { talisman = tali },
 			lang = s.lang,
-		},
-	})
-end
-
-function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
-	Service._getState  = getStateFn
-	Service._pushState = pushStateFn
-	LOG.info("init OK")
-
-	-- 購入
-	BuyItem.OnServerEvent:Connect(function(plr: Player, itemId: string)
-		local s = Service._getState and Service._getState(plr)
-		if not s then return end
-		if s.phase ~= "shop" then
-			return openFor(plr, s, { notice="現在は屋台の時間ではありません（同期します）" })
-		end
-
-		-- ===== pre-search =====
-		LOG.debug(
-			"[BUY][REQ] u=%s itemId=%s mon(before)=%d stock=%s matsuri(before)=%s",
-			tostring(plr and plr.Name or "?"),
-			tostring(itemId), tonumber(s.mon or 0),
-			stockBrief(s.shop and s.shop.stock), matsuriJSON(s)
-		)
-
-		local foundIndex, found
-		for i, it in ipairs(((s.shop and s.shop.stock) or {})) do
-			if it.id == itemId then foundIndex = i; found = it; break end
-		end
-		if not found then
 ... (truncated)
 ```
 
@@ -12804,6 +14607,7 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
 -- P0-11: StatePush の payload に goal:number を追加（UI側の文字列パース依存を排除）
 -- P1-3: Logger 導入（print/warn を LOG.* に置換）
+-- P1-4: ★計測/詳細ログを追加（pushStateの入口～出口、各FireClient、Scoring/RunDeckUtilの例外捕捉）
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -12888,7 +14692,13 @@ end
 --========================
 function StateHub.init(remotesTable:any)
 	Remotes = remotesTable
-	LOG.info("initialized")
+	LOG.info("initialized | remotes: State=%s Score=%s Hand=%s Field=%s Taken=%s",
+		Remotes and tostring(Remotes.StatePush ~= nil) or "nil",
+		Remotes and tostring(Remotes.ScorePush ~= nil) or "nil",
+		Remotes and tostring(Remotes.HandPush  ~= nil) or "nil",
+		Remotes and tostring(Remotes.FieldPush ~= nil) or "nil",
+		Remotes and tostring(Remotes.TakenPush ~= nil) or "nil"
+	)
 end
 
 --========================
@@ -12931,83 +14741,169 @@ local function ensureDefaults(s: PlrState)
 	-- lang / run は任意
 end
 
+-- 小さいユーティリティ
+local function safeLen(t:any)
+	return (typeof(t) == "table") and #t or 0
+end
+
 --========================
 -- クライアント送信（状態/得点/札）
 --========================
 function StateHub.pushState(plr: Player)
-	if not Remotes then return end
-	local s = stateByPlr[plr]; if not s then return end
+	local tAll0 = os.clock()
+
+	if not Remotes then
+		LOG.warn("pushState: Remotes table missing (skip) | u=%s", plr and plr.Name or "?")
+		return
+	end
+
+	local s = stateByPlr[plr]
+	if not s then
+		LOG.warn("pushState: state missing (skip) | u=%s", plr and plr.Name or "?")
+		return
+	end
+
 	ensureDefaults(s)
 
+	local deckN  = safeLen(s.deck)
+	local handN  = safeLen(s.hand)
+	local boardN = safeLen(s.board)
+	local takenN = safeLen(s.taken)
+
+	LOG.info("pushState.begin u=%s phase=%s season=%s(%s) deck=%d hand=%d board=%d taken=%d mon=%s bank=%s",
+		plr and plr.Name or "?", tostring(s.phase), tostring(s.season), seasonName(s.season),
+		deckN, handN, boardN, takenN, tostring(s.mon), tostring(s.bank)
+	)
+
 	-- サマリー算出（Scoring は state（=s）内の祭事レベルも参照可能）
-	local takenCards = s.taken or {}
-	local total, roles, detail = Scoring.evaluate(takenCards, s) -- detail={mon,pts}
+	local score_t0 = os.clock()
+	local okScore, total, roles, detail = pcall(function()
+		local takenCards = s.taken or {}
+		return Scoring.evaluate(takenCards, s) -- detail={mon,pts}
+	end)
+	local score_ms = (os.clock() - score_t0) * 1000.0
+	if not okScore then
+		LOG.warn("pushState: Scoring.evaluate threw: %s", tostring(total))
+		total, roles, detail = 0, {}, { mon = s.mon or 0, pts = 0 }
+	else
+		LOG.debug("ScorePush types: %s %s %s (in %.2fms)", typeof(total), typeof(roles), typeof(detail), score_ms)
+	end
 
 	-- 祭事レベル（UI用にフラットで同梱）
-	local matsuriLevels = RunDeckUtil.getMatsuriLevels(s) or {} -- ★追加
+	local mats_t0 = os.clock()
+	local okM, matsuriLevels = pcall(function()
+		return RunDeckUtil.getMatsuriLevels(s) or {}
+	end)
+	local mats_ms = (os.clock() - mats_t0) * 1000.0
+	if not okM then
+		LOG.warn("pushState: RunDeckUtil.getMatsuriLevels threw: %s", tostring(matsuriLevels))
+		matsuriLevels = {}
+	end
 
 	-- 状態（HUD/UI用）
+	local goalVal = targetForSeason(s.season) -- ★P0-11: 数値ゴールを一度だけ算出
 	if Remotes.StatePush then
-		local goalVal = targetForSeason(s.season) -- ★P0-11: 数値ゴールを一度だけ算出
-		Remotes.StatePush:FireClient(plr, {
-			-- 基本
-			season      = s.season,
-			seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
-			target      = goalVal,                    -- 既存フィールド（互換維持）
-			goal        = goalVal,                    -- ★追加：UIが直接参照する数値ゴール
+		local t0 = os.clock()
+		local okSend, err = pcall(function()
+			Remotes.StatePush:FireClient(plr, {
+				-- 基本
+				season      = s.season,
+				seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
+				target      = goalVal,                    -- 既存フィールド（互換維持）
+				goal        = goalVal,                    -- ★追加：UIが直接参照する数値ゴール
 
-			-- 残り系
-			hands       = s.handsLeft or 0,
-			rerolls     = s.rerollsLeft or 0,
+				-- 残り系
+				hands       = s.handsLeft or 0,
+				rerolls     = s.rerollsLeft or 0,
 
-			-- 経済/表示
-			sum         = s.seasonSum or 0,
-			mult        = s.mult or 1.0,
-			bank        = s.bank or 0,
-			mon         = s.mon or 0,
+				-- 経済/表示
+				sum         = s.seasonSum or 0,
+				mult        = s.mult or 1.0,
+				bank        = s.bank or 0,
+				mon         = s.mon or 0,
 
-			-- 進行/年数
-			phase       = s.phase or "play",
-			year        = s.year or 1,
-			homeReturns = s.homeReturns or 0,
+				-- 進行/年数
+				phase       = s.phase or "play",
+				year        = s.year or 1,
+				homeReturns = s.homeReturns or 0,
 
-			-- 言語（UIで利用）
-			lang        = s.lang,                     -- ★任意
+				-- 言語（UIで利用）
+				lang        = s.lang,                     -- ★任意
 
-			-- 祭事レベル（YakuPanel 等のUIで利用）
-			matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
+				-- 祭事レベル（YakuPanel 等のUIで利用）
+				matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
 
-			-- ▼▼ 追加：Run 側のスナップショット（護符ボード反映用）
-			run         = {                           -- ★追加
-				talisman = (s.run and s.run.talisman) or nil
-			},
+				-- ▼▼ 追加：Run 側のスナップショット（護符ボード反映用）
+				run         = {                           -- ★追加
+					talisman = (s.run and s.run.talisman) or nil
+				},
 
-			-- 山/手の残枚数（UIの安全表示用）
-			deckLeft    = #(s.deck or {}),
-			handLeft    = #(s.hand or {}),
-		})
+				-- 山/手の残枚数（UIの安全表示用）
+				deckLeft    = deckN,
+				handLeft    = handN,
+			})
+		end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.info("pushState.StatePush u=%s season=%s goal=%s phase=%s sent in %.2fms (mats#=%d)",
+				plr and plr.Name or "?", tostring(s.season), tostring(goalVal), tostring(s.phase),
+				ms, (typeof(matsuriLevels)=="table" and #matsuriLevels or -1)
+			)
+		else
+			LOG.warn("pushState.StatePush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: StatePush remote missing")
 	end
 
 	-- スコア（リスト/直近役表示）
 	if Remotes.ScorePush then
-		LOG.debug("ScorePush types: %s %s %s", typeof(total), typeof(roles), typeof(detail))
-		Remotes.ScorePush:FireClient(plr, total, roles, detail) -- detail={mon,pts}
+		local t0 = os.clock()
+		local okSend, err = pcall(function()
+			Remotes.ScorePush:FireClient(plr, total, roles, detail) -- detail={mon,pts}
+		end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.debug("pushState.ScorePush u=%s in %.2fms (score=%s, pts=%s, mon=%s)",
+				plr and plr.Name or "?", ms,
+				tostring(total),
+				(detail and tostring(detail.pts) or "?"),
+				(detail and tostring(detail.mon) or "?")
+			)
+		else
+			LOG.warn("pushState.ScorePush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: ScorePush remote missing")
 	end
 
-	-- 札（手/場/取り）
-	if Remotes.HandPush  then Remotes.HandPush:FireClient(plr, s.hand  or {}) end
-	if Remotes.FieldPush then Remotes.FieldPush:FireClient(plr, s.board or {}) end
-	if Remotes.TakenPush then Remotes.TakenPush:FireClient(plr, s.taken or {}) end
-end
+	-- 札（手/場/取り）— 各送信を個別計測
+	if Remotes.HandPush then
+		local t0 = os.clock()
+		local okSend, err = pcall(function() Remotes.HandPush:FireClient(plr, s.hand or {}) end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.debug("pushState.HandPush u=%s hand=%d in %.2fms", plr and plr.Name or "?", handN, ms)
+		else
+			LOG.warn("pushState.HandPush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: HandPush remote missing")
+	end
 
---========================
--- 共有ユーティリティ（他モジュールから利用）
---========================
-StateHub.targetForSeason = targetForSeason
-StateHub.seasonName      = seasonName
-StateHub.chainMult       = chainMult
-
-return StateHub
+	if Remotes.FieldPush then
+		local t0 = os.clock()
+		local okSend, err = pcall(function() Remotes.FieldPush:FireClient(plr, s.board or {}) end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.debug("pushState.FieldPush u=%s board=%d in %.2fms", plr and plr.Name or "?", boardN, ms)
+		else
+			LOG.warn("pushState.FieldPush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: FieldPush remote missing")
+	end
+... (truncated)
 ```
 
 ### src/shared/TalismanDefs.lua

@@ -1,9 +1,10 @@
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.7-P2-11 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
+-- v0.9.7-P2-12 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
 --  - payload.lang を Locale.normalize で正規化し _lang に保持（'jp'→'ja' を含む）
 --  - show/setData/update で _lang を子へ伝播（TalismanBoard 含む）
 --  - サーバ確定 talisman を優先反映（差分時のみ）
 --  - 同一データの再描画を抑止（talisman シグネチャ比較）
+--  - 在庫署名と一時非表示キャッシュの整合を強化（可視0なら強制解除のセーフティ）
 
 local Shop = {}
 Shop.__index = Shop
@@ -67,6 +68,26 @@ local function countItems(p: Payload?): number
 	return 0
 end
 
+-- 在庫構成のシグネチャを生成（順序も反映する軽量版）
+local function stockSignature(items: {any}?): string
+	if typeof(items) ~= "table" then return "<nil>" end
+	local parts = { tostring(#items) }
+	for _, it in ipairs(items) do
+		-- できるだけ安定するキーを優先
+		local id    = (it and it.id) or (it and it.code) or (it and it.sku) or ""
+		local kind  = (it and (it.kind or it.type or it.category)) or ""
+		local price = (it and (it.price or it.cost)) or ""
+		local extra = (it and it.uid) or (it and it.name) or ""
+		parts[#parts+1] = table.concat({
+			tostring(id),
+			tostring(kind),
+			tostring(price),
+			tostring(extra),
+		}, ":")
+	end
+	return table.concat(parts, "||")
+end
+
 local function getTalismanFromPayload(p: Payload?)
 	if not p then return nil end
 	local s = p.state
@@ -90,16 +111,6 @@ local function cloneTalismanData(t)
 		unlocked = tonumber(t.unlocked or 0) or 0,
 		slots    = cloneSlots6(t.slots),
 	}
-end
-
-local function stockSignature(itemsTbl)
-	if type(itemsTbl) ~= "table" then return "" end
-	local ids = {}
-	for i, it in ipairs(itemsTbl) do
-		ids[i] = tostring(it.id or ("#"..i))
-	end
-	table.sort(ids)
-	return table.concat(ids, "|")
 end
 
 local function talismanSignature(t)
@@ -221,13 +232,26 @@ function Shop:_findFirstEmpty()
 	return nil
 end
 
+-- 在庫シグネチャ更新 + 一時非表示キャッシュの整合
 function Shop:_refreshStockSignature(payload: Payload?)
 	local items = (payload and (payload.items or payload.stock)) or {}
 	local sig = stockSignature(items)
+
 	if sig ~= self._stockSig then
 		self._stockSig = sig
-		self._hiddenItems = {}
-		LOG.debug("[Shop] stock changed -> clear hidden")
+		self._hiddenItems = {}                -- 在庫が変わったら必ず解除
+		self.LOG.debug("[Shop] stock changed -> clear hidden")
+	else
+		-- セーフティ：可視件数0なのに在庫>0なら、隠しキャッシュを強制解除
+		local visible = 0
+		for _, it in ipairs(items) do
+			local id = it and it.id
+			if not self:isItemHidden(id) then visible += 1 end
+		end
+		if visible == 0 and #items > 0 then
+			self._hiddenItems = {}
+			self.LOG.warn("[Shop] visible=0 while items=%d; cleared hidden cache (safety)", #items)
+		end
 	end
 end
 
@@ -306,9 +330,14 @@ function Shop:show(payload: Payload?)
 		end
 		self:_refreshStockSignature(payload)
 		self._payload = payload
-		-- ★ 表示初期化：サーバ確定 talisman を即時反映（プレビューは破棄）
+		-- 表示初期化：サーバ確定 talisman を即時反映（プレビューは破棄）
 		self:_applyServerTalismanOnce(payload)
 		maybeClearPreview(self)
+
+		-- ★戻ってきたときの取りこぼし対策（UI状態を初期化）
+		self._hiddenItems = {}
+		self._buyBusy = false
+		self._rerollBusy = false
 	end
 	self.gui.Enabled = true
 	self:_ensureBg(true)

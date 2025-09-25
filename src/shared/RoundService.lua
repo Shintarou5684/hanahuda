@@ -1,4 +1,5 @@
--- v0.9.1 季節開始ロジック（configSnapshot → 当季デッキ → ★季節開始スナップ保存）
+-- v0.9.1 → v0.9.1-nextdeck
+-- 季節開始ロジック（configSnapshot/外部デッキスナップ → 当季デッキ → ★季節開始スナップ保存）
 local RS = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
 local HttpService = game:GetService("HttpService")
@@ -28,6 +29,15 @@ local function makeSeasonSeed(seasonNum: number?)
 	return num
 end
 
+-- ★ ランIDを状態に付与（なければ採番）
+local function ensureRunId(state)
+	state.run = state.run or {}
+	if not state.run.id or state.run.id == "" then
+		state.run.id = HttpService:GenerateGUID(false)
+	end
+	return state.run.id
+end
+
 -- 次季に繰り越された bright 変換スタックを消化（ラン構成に反映）
 local function consumeQueuedConversions(state, rng)
 	local bonus = state.bonus
@@ -46,13 +56,53 @@ local function consumeQueuedConversions(state, rng)
 	end
 end
 
--- 季節開始（1=春, 2=夏, ...）
-function Round.newRound(plr: Player, seasonNum: number)
-	local s = StateHub.get(plr) or {}
+-- ★ DeckRegistry.dumpSnapshot(runId) 等から来る可能性を想定して
+--   「構成デッキ」形式へ寄せる（配列 or snap.cards を許容）
+local function snapshotToConfigDeck(snap)
+	if not snap then return nil end
+	local src = snap.cards or snap
+	if type(src) ~= "table" then return nil end
 
-	-- 1) ラン構成をロード（無ければ初期化）
+	local cfg = {}
+	for i, c in ipairs(src) do
+		-- month/idx/kind/name/tags/code が取れればそのまま採用
+		cfg[i] = {
+			month = c.month, idx = c.idx, kind = c.kind,
+			name  = c.name,  tags = (c.tags and table.clone(c.tags) or nil),
+			code  = c.code,
+		}
+	end
+	-- 48枚想定。足りない/壊れていたら無効
+	if #cfg < 48 then return nil end
+	return cfg
+end
+
+-- 季節開始（1=春, 2=夏, ...）
+-- ★ 第3引数 opts を追加。opts.deckSnapshot があればそれを最優先で当季の構成に使う。
+function Round.newRound(plr: Player, seasonNum: number, opts: any?)
+	opts = opts or {}
+
+	local s = StateHub.get(plr) or {}
+	-- ランIDを必ず持たせる（GameInit からの参照用）
+	local runId = ensureRunId(s)
+
+	-- 1) ラン構成をロード or 外部スナップで上書き
 	consumeQueuedConversions(s, Random.new())
-	local configDeck = RunDeckUtil.loadConfig(s, true) -- 48枚
+
+	local configDeck
+	if opts.deckSnapshot then
+		configDeck = snapshotToConfigDeck(opts.deckSnapshot)
+		-- 破損や想定外フォーマットなら従来のロードにフォールバック
+		if not configDeck then
+			warn("[RoundService] deckSnapshot was invalid; falling back to RunDeckUtil.loadConfig")
+			configDeck = RunDeckUtil.loadConfig(s, true)
+		else
+			-- 外部スナップが有効なら構成の正本として保存しておく
+			RunDeckUtil.saveConfig(s, configDeck)
+		end
+	else
+		configDeck = RunDeckUtil.loadConfig(s, true) -- 48枚（従来）
+	end
 
 	-- 2) 当季デッキを構成からクローン
 	local seasonDeck = {}
@@ -74,6 +124,7 @@ function Round.newRound(plr: Player, seasonNum: number)
 
 	-- 4) 状態保存（命名統一：board/dump）
 	s.run         = s.run or {}
+	-- run.id は ensureRunId でセット済み
 	s.deck        = seasonDeck
 	s.hand        = hand
 	s.board       = board
@@ -95,8 +146,9 @@ function Round.newRound(plr: Player, seasonNum: number)
 
 	-- 5) ★ 季節開始スナップを保存（CONTINUE用）
 	if SaveService and SaveService.snapSeasonStart then
-		-- 失敗してもゲームは継続（pcallで保護）
 		pcall(function()
+			-- SaveService 側が deckSnapshot を受ける設計であれば、ここで configDeck も併せて保存しておくと復帰が堅牢
+			-- 既存インタフェース維持のため引数はそのまま
 			SaveService.snapSeasonStart(plr, s, seasonNum)
 		end)
 	end
@@ -112,12 +164,20 @@ function Round.resetRun(plr: Player)
 	local fresh = {
 		bank = keepBank, year = keepYear, totalClears = keepClears,
 		mult = 1.0, mon = 0, phase = "play",
-		run = { configSnapshot = nil }, -- 次で自動初期化
+		run = { configSnapshot = nil }, -- 次で自動初期化（run.id は newRound 内で自動採番）
 	}
 	StateHub.set(plr, fresh)
 
 	-- ★ 新ラン開始（newRound 内でスナップも作成される）
 	Round.newRound(plr, 1)
+end
+
+-- ★ GameInit から現在ランIDを引くためのAPI
+function Round.getRunId(plr: Player)
+	local s = StateHub.get(plr)
+	if not s then return nil end
+	if not (s.run and s.run.id) then return nil end
+	return s.run.id
 end
 
 return Round

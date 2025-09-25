@@ -2,10 +2,12 @@
 -- 目的: KitoPick の12枚一覧UI・効果説明＋カード画像＆情報表示・確定／スキップ
 -- 仕様: KitoPickWires の ClientSignals を購読し、シグナル受信時に Router 経由で表示
 -- 方針: 「選択可否の真実はサーバ」。各候補の entry.eligible を厳守して UI でブロックする。
+-- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
 
-local Players = game:GetService("Players")
-local RS      = game:GetService("ReplicatedStorage")
-local LP      = Players.LocalPlayer
+local Players    = game:GetService("Players")
+local RS         = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+local LP         = Players.LocalPlayer
 
 -- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
@@ -82,11 +84,18 @@ local function make(text, className, props, parent)
 end
 
 local function ensureGui()
-	if ui and ui.Parent then return ui end
+	local t0 = os.clock()
+	-- 既にあれば Parent ロスト時のみ復旧
+	if ui and ui.Parent then
+		LOG.debug("ensureGui: reuse existing gui (%.2fms)", (os.clock()-t0)*1000)
+		return ui
+	end
 	ui = make("KitoPickGui", "ScreenGui", {
 		ResetOnSpawn    = false,
 		ZIndexBehavior  = Enum.ZIndexBehavior.Global,
 		IgnoreGuiInset  = true,
+		DisplayOrder    = 50,
+		Enabled         = false,  -- ★初期は非表示
 	}, LP:WaitForChild("PlayerGui"))
 
 	local shade = make("Shade","Frame",{
@@ -178,7 +187,7 @@ local function ensureGui()
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, footer)
 
-	-- Skip（何も選ばない）
+	-- Skip
 	local skipBtn = make("Skip","TextButton",{
 		Text                   = "Skip",
 		Font                   = Enum.Font.GothamBold,
@@ -218,11 +227,13 @@ local function ensureGui()
 	refs.skipBtn    = skipBtn
 	refs.pickInfo   = pickInfo
 
+	LOG.info("ensureGui: built gui in %.2fms", (os.clock()-t0)*1000)
 	return ui
 end
 
 -- 効果説明の高さに合わせてグリッド領域を再レイアウト
 local function relayoutByEffectHeight()
+	local t0 = os.clock()
 	if not (refs.effect and refs.gridHolder) then return end
 	local topY      = 28 + 6
 	local baseBelow = 84 -- フッタ確保高さ
@@ -235,6 +246,7 @@ local function relayoutByEffectHeight()
 	local gridTop  = topY + needH + 8
 	refs.gridHolder.Position = UDim2.new(0, 0, 0, gridTop)
 	refs.gridHolder.Size     = UDim2.new(1, 0, 1, -gridTop - baseBelow)
+	LOG.debug("relayoutByEffectHeight: effectH=%d in %.2fms", needH, (os.clock()-t0)*1000)
 end
 
 -- 画像ソースを決定（rbxassetid:// またはそのまま文字列）
@@ -366,6 +378,7 @@ end
 
 -- リスト再描画（選択ハイライトのみ）
 local function rebuildList()
+	local t0 = os.clock()
 	if not ui then return end
 
 	-- 既存カードだけ消す（レイアウトは保持）
@@ -375,20 +388,29 @@ local function rebuildList()
 		end
 	end
 
+	local ineligible = 0
 	for _, ent in ipairs(current.list or {}) do
+		if ent.eligible == false then ineligible += 1 end
 		local b = makeCard(ent)
 		b.Parent = refs.gridFrame
 		setCardSelected(b, ent.uid == current.selectedUid)
 		b.MouseButton1Click:Connect(function()
-			if current.busy then return end
+			if current.busy then
+				LOG.debug("click ignored (busy) uid=%s", tostring(ent.uid))
+				return
+			end
 
 			-- ★ eligible=false はクリック無効（通知のみ）
 			if b:GetAttribute("canPick") == false then
-				game:GetService("StarterGui"):SetCore("SendNotification", {
-					Title = "KITO",
-					Text = "対象外のカードです（同種は選べません）",
-					Duration = 2,
-				})
+				local ok, err = pcall(function()
+					StarterGui:SetCore("SendNotification", {
+						Title = "KITO",
+						Text = "対象外のカードです（同種は選べません）",
+						Duration = 2,
+					})
+				end)
+				if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
+				LOG.debug("click blocked (ineligible) uid=%s", tostring(ent.uid))
 				return
 			end
 
@@ -405,26 +427,38 @@ local function rebuildList()
 				end
 			end
 			setConfirmEnabled(current.selectedUid ~= nil and not current.busy)
+			LOG.debug("selected uid=%s", tostring(current.selectedUid))
 		end)
 	end
 
 	-- Canvas 自動調整
 	task.defer(function()
+		local t1 = os.clock()
 		local content = refs.gridLayout.AbsoluteContentSize
 		refs.scroll.CanvasSize = UDim2.fromOffset(content.X, content.Y)
+		LOG.debug("rebuildList: CanvasSize set to (%d,%d) in %.2fms",
+			content.X, content.Y, (os.clock()-t1)*1000)
 	end)
+
+	LOG.info("rebuildList: items=%d ineligible=%d selected=%s in %.2fms",
+		#(current.list or {}), ineligible, tostring(current.selectedUid or "-"),
+		(os.clock()-t0)*1000
+	)
 end
 
 -- 新規 payload 表示
 local function openPayload(payload)
+	local g = ensureGui()
+	-- 念のため、PlayerGui から外れていたら復旧
+	if g.Parent ~= LP:WaitForChild("PlayerGui") then
+		g.Parent = LP.PlayerGui
+	end
+
 	current.sessionId   = payload.sessionId
 	current.targetKind  = tostring(payload.targetKind or "bright")
 	current.list        = payload.list or {}
 	current.selectedUid = nil
 	current.busy        = false
-
-	local g = ensureGui()
-	g.Enabled = true
 
 	-- 効果説明テキスト（優先度: effect > message > note > デフォルト）
 	local desc = payload.effect or payload.message or payload.note
@@ -441,20 +475,32 @@ local function openPayload(payload)
 	refs.skipBtn.AutoButtonColor = true
 	rebuildList()
 
-	LOG.info("[KitoPickView] open sid=%s tgt=%s list=%s",
-		tostring(current.sessionId), tostring(current.targetKind), tostring(#current.list))
+	g.Enabled = true -- ★ここで可視化
+
+	LOG.info("[open] sid=%s tgt=%s list=%d router=%s",
+		tostring(current.sessionId), tostring(current.targetKind),
+		#(current.list or {}), ScreenRouter and "on" or "off"
+	)
 end
 
 -- 決定送信（選択あり）
 local function sendDecide()
-	if current.busy or not current.sessionId or not current.selectedUid then return end
+	if current.busy or not current.sessionId or not current.selectedUid then
+		LOG.debug("sendDecide: ignored | busy=%s sid=%s sel=%s",
+			tostring(current.busy), tostring(current.sessionId), tostring(current.selectedUid))
+		return
+	end
 
 	-- ★ 念のため「送信前」にも eligible を二重チェック（サーバと完全同期）
 	for _, e in ipairs(current.list or {}) do
 		if e.uid == current.selectedUid and e.eligible == false then
-			game:GetService("StarterGui"):SetCore("SendNotification", {
-				Title="KITO", Text="対象外のカードです（同種は選べません）", Duration=2,
-			})
+			local ok, err = pcall(function()
+				StarterGui:SetCore("SendNotification", {
+					Title="KITO", Text="対象外のカードです（同種は選べません）", Duration=2,
+				})
+			end)
+			if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
+			LOG.debug("sendDecide: abort (ineligible) uid=%s", tostring(current.selectedUid))
 			return
 		end
 	end
@@ -464,43 +510,115 @@ local function sendDecide()
 	refs.skipBtn.Active = false
 	refs.skipBtn.AutoButtonColor = false
 
+	local t0 = os.clock()
 	EvDecide:FireServer({
 		sessionId  = current.sessionId,
 		uid        = current.selectedUid,
 		targetKind = current.targetKind,
 	})
-	LOG.info("[KitoPickView] Decide sent sid=%s uid=%s tgt=%s",
-		tostring(current.sessionId), tostring(current.selectedUid), tostring(current.targetKind))
+	LOG.info("[sendDecide] -> FireServer sid=%s uid=%s tgt=%s in %.2fms",
+		tostring(current.sessionId), tostring(current.selectedUid),
+		tostring(current.targetKind), (os.clock()-t0)*1000
+	)
 end
 
 -- スキップ送信（何も選ばない＝変更なしで確定）
 local function sendSkip()
-	if current.busy or not current.sessionId then return end
+	if current.busy or not current.sessionId then
+		LOG.debug("sendSkip: ignored | busy=%s sid=%s", tostring(current.busy), tostring(current.sessionId))
+		return
+	end
 	current.busy = true
 	setConfirmEnabled(false)
 	refs.skipBtn.Active = false
 	refs.skipBtn.AutoButtonColor = false
 
+	local t0 = os.clock()
 	EvDecide:FireServer({
 		sessionId  = current.sessionId,
 		targetKind = current.targetKind,
 		noChange   = true,          -- ★ Core/Server と合意済みのフラグ
 	})
-	LOG.info("[KitoPickView] Skip sent sid=%s tgt=%s (noChange=true)",
-		tostring(current.sessionId), tostring(current.targetKind))
+	LOG.info("[sendSkip] -> FireServer sid=%s tgt=%s (noChange=true) in %.2fms",
+		tostring(current.sessionId), tostring(current.targetKind), (os.clock()-t0)*1000
+	)
 end
 
 -- 結果受信
 local function onResult(res)
 	if not ui then return end
 	current.busy = false
-	ui.Enabled = false
+	ui.Enabled = false  -- ★結果受信で確実に閉じる
 
-	game:GetService("StarterGui"):SetCore("SendNotification", {
-		Title    = res.ok and "KITO" or "KITO (failed)",
-		Text     = tostring(res.message or ""),
-		Duration = 3,
-	})
+	-- ★ 重要：Router でショップ画面へ戻す（空白＝青画面対策）
+	local routed = false
+	local okShow, errShow = pcall(function()
+		if ScreenRouter and ScreenRouter.show then
+			ScreenRouter.show("shop")
+			routed = true
+		end
+	end)
+	if not okShow then
+		LOG.warn("[result] route to 'shop' failed: %s", tostring(errShow))
+	elseif routed then
+		LOG.info("[result] routed back to 'shop'")
+	else
+		LOG.warn("[result] ScreenRouter not available; cannot route to 'shop'")
+	end
+
+-- 通知は最後に（本文フォールバック付き）
+local function _nonEmpty(s) return type(s)=="string" and s ~= "" end
+local function _reasonToText(reason)
+  local map = {
+    session        = "セッションが無効です。もう一度お試しください。",
+    expired        = "選択の有効期限が切れました。もう一度お試しください。",
+    uid            = "対象外のカードです（同種は選べません）。",
+    state          = "状態を取得できませんでした。同期してください。",
+    run            = "ラン情報が見つかりませんでした。",
+    effects        = "効果モジュールが利用できません。",
+    ["no-shopservice"] = "屋台画面を再表示できませんでした。",
+    effect         = nil, -- effect は res.message を優先（無ければ最後の既定文言へ）
+  }
+  return map[tostring(reason or "")] or nil
+end
+
+local title, body
+if res.cancel then
+  -- キャンセル
+  title = "KITO"
+  body  = "取消しました"
+elseif res.ok then
+  -- 成功（メッセージ優先→変更あり/なしでフォールバック）
+  title = "KITO"
+  if _nonEmpty(res.message) then
+    body = res.message
+  else
+    body = (res.changed ~= false) and "変換が完了しました" or "選択をスキップしました"
+  end
+else
+  -- 失敗（message優先→reason→既定文言）
+  title = "KITO (failed)"
+  body  = _nonEmpty(res.message)
+            and res.message
+            or (_reasonToText(res.reason) or ("処理に失敗しました" ..
+                 (res.reason and ("（"..tostring(res.reason).."）") or "")))
+end
+
+local ok, err = pcall(function()
+  StarterGui:SetCore("SendNotification", {
+    Title    = title,
+    Text     = body,
+    Duration = 3,
+  })
+end)
+if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
+
+LOG.info("[result] ok=%s changed=%s uid=%s id=%s msg=%s",
+  tostring(res.ok), tostring(res.changed), tostring(res.uid),
+  tostring(res.id), tostring(res.message or "")
+)
+LOG.debug("[toast] title=%s text=%s reason=%s", tostring(title), tostring(body), tostring(res.reason))
+
 end
 
 -- ボタン配線
@@ -508,6 +626,7 @@ local function wireButtons()
 	if not ui then return end
 	refs.confirm.MouseButton1Click:Connect(sendDecide)
 	refs.skipBtn.MouseButton1Click:Connect(sendSkip)
+	LOG.debug("wireButtons: connected")
 end
 
 -- 初期化：GUI作成だけ先にやってボタンを配線＆Router可視対象として gui を公開
@@ -532,24 +651,39 @@ if not script:GetAttribute("booted") then
 			ScreenRouter.register("kitoPick", View)
 		end
 	end)
-	if not ok then
+	if ok then
+		LOG.info("ScreenRouter.register ok")
+	else
 		LOG.warn("ScreenRouter.register failed: %s", tostring(err))
 	end
 
 	-- Signals 購読：受信→Router 経由で表示（正道）
 	SigIncoming.Event:Connect(function(payload)
-		if type(payload) ~= "table" then return end
+		local t0 = os.clock()
+		if type(payload) ~= "table" then
+			LOG.warn("SigIncoming: invalid payload type=%s", typeof(payload))
+			return
+		end
 		if ScreenRouter and ScreenRouter.show then
 			ScreenRouter.show("kitoPick", payload)
+			LOG.debug("SigIncoming: via Router in %.2fms", (os.clock()-t0)*1000)
 		else
 			View:show(payload)
+			LOG.debug("SigIncoming: direct show in %.2fms", (os.clock()-t0)*1000)
 		end
 	end)
 
 	SigResult.Event:Connect(function(res)
-		if type(res) ~= "table" then return end
+		local t0 = os.clock()
+		if type(res) ~= "table" then
+			LOG.warn("SigResult: invalid result type=%s", typeof(res))
+			return
+		end
 		View:onResult(res)
+		LOG.debug("SigResult: handled in %.2fms", (os.clock()-t0)*1000)
 	end)
+
+	LOG.info("booted | router=%s", ScreenRouter and "on" or "off")
 end
 
 return View

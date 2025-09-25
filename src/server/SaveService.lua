@@ -35,6 +35,19 @@ local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
 local TalismanState = require(SharedModules:WaitForChild("TalismanState"))
 
+-- ▼ 追加：DeckSchema（未配置でも落ちないように pcall で保護）
+local DeckSchema = nil
+do
+	local ok, mod = pcall(function()
+		local DeckFolder = SharedModules:FindFirstChild("Deck")
+		if DeckFolder then
+			return require(DeckFolder:WaitForChild("DeckSchema"))
+		end
+		return nil
+	end)
+	if ok then DeckSchema = mod else DeckSchema = nil end
+end
+
 --=== 設定 =========================================================
 local PROFILE_DS_NAME = "ProfileV1" -- 互換維持：version でのマイグレーション
 local USE_MEMORY_IN_STUDIO = true   -- Studioではメモリのみで動かす（API許可が無くても動作）
@@ -73,7 +86,7 @@ local DEFAULT_PROFILE = {
 	asc  = 0,       -- アセンション（0以上の整数）
 	clears = 0,     -- 通算クリア回数
 	lang = "en",    -- 保存言語（"ja"|"en"）
-	activeRun = nil,-- ★ 続き用スナップ（{version,season,atShop,bank,mon,deckSeed,shopStock?,effects?}）
+	activeRun = nil,-- ★ 続き用スナップ（{version,season,atShop,bank,mon,deckSeed,shopStock?,effects?, deck?}）
 }
 
 --=== 内部メモリ（サーバ滞在中のキャッシュ） ======================
@@ -96,6 +109,24 @@ local function detectLangFromLocaleId(plr: Player?): string
 	return "en"
 end
 
+-- ▼ 追加：activeRun 内の deck/currentDeck を v3 に“自然治癒”させる
+local function normalizeActiveRun(ar:any): any
+	if type(ar) ~= "table" then return nil end
+	-- DeckSchema が無い環境では素通し
+	if not DeckSchema then return ar end
+
+	local out = table.clone(ar)
+	-- 一般的なフィールド名の両対応
+	local deckFieldNames = { "deck", "currentDeck" }
+	for _, fname in ipairs(deckFieldNames) do
+		if type(out[fname]) == "table" then
+			local upgraded, changed = DeckSchema.upgradeToV3(out[fname])
+			out[fname] = upgraded
+		end
+	end
+	return out
+end
+
 --=== 正規化（不正値の矯正） =====================================
 local function normalizeProfile(p:any): Profile
 	local out:any = {}
@@ -111,8 +142,12 @@ local function normalizeProfile(p:any): Profile
 	local rawL = tostring(p and p.lang or ""):lower()
 	out.lang = normLang(rawL) -- "jp" 既存値は "ja" に正規化
 
-	-- ★ activeRun はテーブルなら素通し、それ以外は nil
-	out.activeRun = (type(p and p.activeRun) == "table") and p.activeRun or nil
+	-- ★ activeRun はテーブルなら v3 補完をかけて保持（将来 deck を持つ場合に対応）
+	if type(p and p.activeRun) == "table" then
+		out.activeRun = normalizeActiveRun(p.activeRun)
+	else
+		out.activeRun = nil
+	end
 
 	return out :: Profile
 end
@@ -153,7 +188,7 @@ function Save.load(plr: Player): Profile
 	-- - clears 欠損は 0 補完
 	-- - lang 欠損は OS ロケールから初期化（"ja"/"en"）
 	-- - "jp" が残っていたら "ja" に正規化
-	-- - activeRun は既存値を尊重（nil可）
+	-- - activeRun は v3 補完をかけたものを保持（将来 deck を含む場合）
 	local migrated = false
 	if prof.version < 4 then
 		prof.version = 4
@@ -171,7 +206,6 @@ function Save.load(plr: Player): Profile
 		prof.lang = detectLangFromLocaleId(plr)
 		migrated = true
 	end
-	-- 旧データが "jp" だった場合に備えてもう一度正規化（上の分岐を通らない可能性に備える）
 	local nlang = normLang(prof.lang)
 	if nlang ~= prof.lang then
 		prof.lang = nlang
@@ -251,13 +285,13 @@ end
 function Save.getLang(plr: Player): string
 	local p = Save._profiles[plr]
 	if p and (p.lang == "ja" or p.lang == "en") then
-		return p.lang                      -- ★保存があれば保存優先
+		return p.lang
 	end
-	return detectLangFromLocaleId(plr)     -- 保存が無い/不正なら OS 推定
+	return detectLangFromLocaleId(plr)
 end
 
 function Save.setLang(plr: Player, lang:string)
-	lang = normLang(lang) -- "jp" 受信時も "ja" へ正規化
+	lang = normLang(lang)
 	local p = Save._profiles[plr]; if not p then return end
 	if p.lang ~= lang then
 		p.lang = lang
@@ -282,7 +316,6 @@ function Save.ensureBaseYear(plr: Player): number
 end
 
 --=== State へのマージ =============================================
--- UI/状態整合のため、clears は state.totalClears にも反映
 function Save.mergeIntoState(plr: Player, state:any)
 	local p = Save._profiles[plr]
 	if not p then return state end
@@ -294,11 +327,9 @@ function Save.mergeIntoState(plr: Player, state:any)
 	state.totalClears = p.clears
 	state.lang        = (p.lang == "ja") and "ja" or "en"
 
-	-- ▼ 追加：アカウント側の護符解放数（無ければ2枠）を state.account に橋渡し
 	state.account = state.account or {}
 	state.account.talismanUnlock = state.account.talismanUnlock or { unlocked = (p.talismanUnlocked or 2) }
 
-	-- ▼ 追加：run.talisman ボードを初期化（6マス/解放数反映）
 	TalismanState.ensureRunBoard(state)
 
 	return state
@@ -312,7 +343,8 @@ end
 function Save.setActiveRun(plr: Player, snap: table)
 	if type(snap) ~= "table" then return end
 	local p = Save._profiles[plr]; if not p then return end
-	p.activeRun = snap
+	-- ▼ 追加：受け取り時にも v3 補完を適用（将来 deck を持つケース）
+	p.activeRun = normalizeActiveRun(snap)
 	Save._dirty[plr] = true
 end
 
@@ -335,6 +367,7 @@ function Save.snapSeasonStart(plr: Player, state:any, season:number)
 		mon     = tonumber(s.mon or 0) or 0,
 		deckSeed= s.deckSeed,
 		effects = s.effects,            -- { [effectId]=stacks } など（nil可）
+		-- deck/currentDeck を持つようになったらここに追加で OK（setActiveRun 側で補完）
 	})
 end
 
@@ -350,6 +383,7 @@ function Save.snapShopEnter(plr: Player, state:any)
 		deckSeed = s.deckSeed,
 		effects  = s.effects,
 		shopStock= (shop and shop.stock) or nil, -- 軽量化のためID/必要最小だけを持つのが理想
+		-- deck/currentDeck を持つようになったらここに追加で OK（setActiveRun 側で補完）
 	})
 end
 
@@ -359,13 +393,11 @@ function Save.isDirty(plr: Player): boolean
 end
 
 --=== 保存（DataStore / Studioメモリ） =============================
--- DataStore へ書き出し（最小実装：UpdateAsync 1回 + 軽いリトライ）
 function Save.flush(plr: Player)
 	local p = Save._profiles[plr]
 	if not p then return true end
 	if not Save._dirty[plr] then return true end
 
-	-- Studioメモリ運用時はメモリクリアだけ（成功扱い）
 	if (isStudio and USE_MEMORY_IN_STUDIO) or (not profileDS) then
 		Save._dirty[plr] = false
 		return true
@@ -402,7 +434,6 @@ function Save.flush(plr: Player)
 	return ok
 end
 
--- サーバ終了時などの保険
 function Save.flushAll()
 	for plr,_ in pairs(Save._profiles) do
 		pcall(function() Save.flush(plr) end)

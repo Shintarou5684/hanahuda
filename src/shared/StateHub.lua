@@ -2,6 +2,7 @@
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
 -- P0-11: StatePush の payload に goal:number を追加（UI側の文字列パース依存を排除）
 -- P1-3: Logger 導入（print/warn を LOG.* に置換）
+-- P1-4: ★計測/詳細ログを追加（pushStateの入口～出口、各FireClient、Scoring/RunDeckUtilの例外捕捉）
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -86,7 +87,13 @@ end
 --========================
 function StateHub.init(remotesTable:any)
 	Remotes = remotesTable
-	LOG.info("initialized")
+	LOG.info("initialized | remotes: State=%s Score=%s Hand=%s Field=%s Taken=%s",
+		Remotes and tostring(Remotes.StatePush ~= nil) or "nil",
+		Remotes and tostring(Remotes.ScorePush ~= nil) or "nil",
+		Remotes and tostring(Remotes.HandPush  ~= nil) or "nil",
+		Remotes and tostring(Remotes.FieldPush ~= nil) or "nil",
+		Remotes and tostring(Remotes.TakenPush ~= nil) or "nil"
+	)
 end
 
 --========================
@@ -129,73 +136,185 @@ local function ensureDefaults(s: PlrState)
 	-- lang / run は任意
 end
 
+-- 小さいユーティリティ
+local function safeLen(t:any)
+	return (typeof(t) == "table") and #t or 0
+end
+
 --========================
 -- クライアント送信（状態/得点/札）
 --========================
 function StateHub.pushState(plr: Player)
-	if not Remotes then return end
-	local s = stateByPlr[plr]; if not s then return end
+	local tAll0 = os.clock()
+
+	if not Remotes then
+		LOG.warn("pushState: Remotes table missing (skip) | u=%s", plr and plr.Name or "?")
+		return
+	end
+
+	local s = stateByPlr[plr]
+	if not s then
+		LOG.warn("pushState: state missing (skip) | u=%s", plr and plr.Name or "?")
+		return
+	end
+
 	ensureDefaults(s)
 
+	local deckN  = safeLen(s.deck)
+	local handN  = safeLen(s.hand)
+	local boardN = safeLen(s.board)
+	local takenN = safeLen(s.taken)
+
+	LOG.info("pushState.begin u=%s phase=%s season=%s(%s) deck=%d hand=%d board=%d taken=%d mon=%s bank=%s",
+		plr and plr.Name or "?", tostring(s.phase), tostring(s.season), seasonName(s.season),
+		deckN, handN, boardN, takenN, tostring(s.mon), tostring(s.bank)
+	)
+
 	-- サマリー算出（Scoring は state（=s）内の祭事レベルも参照可能）
-	local takenCards = s.taken or {}
-	local total, roles, detail = Scoring.evaluate(takenCards, s) -- detail={mon,pts}
+	local score_t0 = os.clock()
+	local okScore, total, roles, detail = pcall(function()
+		local takenCards = s.taken or {}
+		return Scoring.evaluate(takenCards, s) -- detail={mon,pts}
+	end)
+	local score_ms = (os.clock() - score_t0) * 1000.0
+	if not okScore then
+		LOG.warn("pushState: Scoring.evaluate threw: %s", tostring(total))
+		total, roles, detail = 0, {}, { mon = s.mon or 0, pts = 0 }
+	else
+		LOG.debug("ScorePush types: %s %s %s (in %.2fms)", typeof(total), typeof(roles), typeof(detail), score_ms)
+	end
 
 	-- 祭事レベル（UI用にフラットで同梱）
-	local matsuriLevels = RunDeckUtil.getMatsuriLevels(s) or {} -- ★追加
+	local mats_t0 = os.clock()
+	local okM, matsuriLevels = pcall(function()
+		return RunDeckUtil.getMatsuriLevels(s) or {}
+	end)
+	local mats_ms = (os.clock() - mats_t0) * 1000.0
+	if not okM then
+		LOG.warn("pushState: RunDeckUtil.getMatsuriLevels threw: %s", tostring(matsuriLevels))
+		matsuriLevels = {}
+	end
 
 	-- 状態（HUD/UI用）
+	local goalVal = targetForSeason(s.season) -- ★P0-11: 数値ゴールを一度だけ算出
 	if Remotes.StatePush then
-		local goalVal = targetForSeason(s.season) -- ★P0-11: 数値ゴールを一度だけ算出
-		Remotes.StatePush:FireClient(plr, {
-			-- 基本
-			season      = s.season,
-			seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
-			target      = goalVal,                    -- 既存フィールド（互換維持）
-			goal        = goalVal,                    -- ★追加：UIが直接参照する数値ゴール
+		local t0 = os.clock()
+		local okSend, err = pcall(function()
+			Remotes.StatePush:FireClient(plr, {
+				-- 基本
+				season      = s.season,
+				seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
+				target      = goalVal,                    -- 既存フィールド（互換維持）
+				goal        = goalVal,                    -- ★追加：UIが直接参照する数値ゴール
 
-			-- 残り系
-			hands       = s.handsLeft or 0,
-			rerolls     = s.rerollsLeft or 0,
+				-- 残り系
+				hands       = s.handsLeft or 0,
+				rerolls     = s.rerollsLeft or 0,
 
-			-- 経済/表示
-			sum         = s.seasonSum or 0,
-			mult        = s.mult or 1.0,
-			bank        = s.bank or 0,
-			mon         = s.mon or 0,
+				-- 経済/表示
+				sum         = s.seasonSum or 0,
+				mult        = s.mult or 1.0,
+				bank        = s.bank or 0,
+				mon         = s.mon or 0,
 
-			-- 進行/年数
-			phase       = s.phase or "play",
-			year        = s.year or 1,
-			homeReturns = s.homeReturns or 0,
+				-- 進行/年数
+				phase       = s.phase or "play",
+				year        = s.year or 1,
+				homeReturns = s.homeReturns or 0,
 
-			-- 言語（UIで利用）
-			lang        = s.lang,                     -- ★任意
+				-- 言語（UIで利用）
+				lang        = s.lang,                     -- ★任意
 
-			-- 祭事レベル（YakuPanel 等のUIで利用）
-			matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
+				-- 祭事レベル（YakuPanel 等のUIで利用）
+				matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
 
-			-- ▼▼ 追加：Run 側のスナップショット（護符ボード反映用）
-			run         = {                           -- ★追加
-				talisman = (s.run and s.run.talisman) or nil
-			},
+				-- ▼▼ 追加：Run 側のスナップショット（護符ボード反映用）
+				run         = {                           -- ★追加
+					talisman = (s.run and s.run.talisman) or nil
+				},
 
-			-- 山/手の残枚数（UIの安全表示用）
-			deckLeft    = #(s.deck or {}),
-			handLeft    = #(s.hand or {}),
-		})
+				-- 山/手の残枚数（UIの安全表示用）
+				deckLeft    = deckN,
+				handLeft    = handN,
+			})
+		end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.info("pushState.StatePush u=%s season=%s goal=%s phase=%s sent in %.2fms (mats#=%d)",
+				plr and plr.Name or "?", tostring(s.season), tostring(goalVal), tostring(s.phase),
+				ms, (typeof(matsuriLevels)=="table" and #matsuriLevels or -1)
+			)
+		else
+			LOG.warn("pushState.StatePush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: StatePush remote missing")
 	end
 
 	-- スコア（リスト/直近役表示）
 	if Remotes.ScorePush then
-		LOG.debug("ScorePush types: %s %s %s", typeof(total), typeof(roles), typeof(detail))
-		Remotes.ScorePush:FireClient(plr, total, roles, detail) -- detail={mon,pts}
+		local t0 = os.clock()
+		local okSend, err = pcall(function()
+			Remotes.ScorePush:FireClient(plr, total, roles, detail) -- detail={mon,pts}
+		end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.debug("pushState.ScorePush u=%s in %.2fms (score=%s, pts=%s, mon=%s)",
+				plr and plr.Name or "?", ms,
+				tostring(total),
+				(detail and tostring(detail.pts) or "?"),
+				(detail and tostring(detail.mon) or "?")
+			)
+		else
+			LOG.warn("pushState.ScorePush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: ScorePush remote missing")
 	end
 
-	-- 札（手/場/取り）
-	if Remotes.HandPush  then Remotes.HandPush:FireClient(plr, s.hand  or {}) end
-	if Remotes.FieldPush then Remotes.FieldPush:FireClient(plr, s.board or {}) end
-	if Remotes.TakenPush then Remotes.TakenPush:FireClient(plr, s.taken or {}) end
+	-- 札（手/場/取り）— 各送信を個別計測
+	if Remotes.HandPush then
+		local t0 = os.clock()
+		local okSend, err = pcall(function() Remotes.HandPush:FireClient(plr, s.hand or {}) end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.debug("pushState.HandPush u=%s hand=%d in %.2fms", plr and plr.Name or "?", handN, ms)
+		else
+			LOG.warn("pushState.HandPush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: HandPush remote missing")
+	end
+
+	if Remotes.FieldPush then
+		local t0 = os.clock()
+		local okSend, err = pcall(function() Remotes.FieldPush:FireClient(plr, s.board or {}) end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.debug("pushState.FieldPush u=%s board=%d in %.2fms", plr and plr.Name or "?", boardN, ms)
+		else
+			LOG.warn("pushState.FieldPush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: FieldPush remote missing")
+	end
+
+	if Remotes.TakenPush then
+		local t0 = os.clock()
+		local okSend, err = pcall(function() Remotes.TakenPush:FireClient(plr, s.taken or {}) end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
+			LOG.debug("pushState.TakenPush u=%s taken=%d in %.2fms", plr and plr.Name or "?", takenN, ms)
+		else
+			LOG.warn("pushState.TakenPush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
+		end
+	else
+		LOG.warn("pushState: TakenPush remote missing")
+	end
+
+	LOG.info("pushState.end   u=%s in %.2fms | score(ms)=%.2f mats(ms)=%.2f",
+		plr and plr.Name or "?", (os.clock()-tAll0)*1000.0, score_ms, mats_ms
+	)
 end
 
 --========================

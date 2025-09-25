@@ -3,10 +3,15 @@
 -- 変更:
 --  - getUnlockedTalismanSlots(state): state.run から安全に読取り、無ければ 0 を返す
 --  - ensureTalisman(state, opts): 護符テーブルの存在と最低限の形を保証（不足キーのみ補完）
---  - ★ 追加（KITOプール基盤）:
---      ensureUids(state) / getDeckVersion(state) / bumpDeckVersion(state)
---      buildUidIndexMap(state) / applyDeckPatchByUid(state, patch)
---      entryWithKindLike(srcEntry, targetKind)
+--  - ★ KITOプール基盤（正本=run.configSnapshot へ完全寄せ）
+--      * getDeckWithUids(state)       : 一時デッキ（uid=code 付与）を生成
+--      * ensureUids(state)            : no-op（互換のため残す）
+--      * getDeckVersion/bumpDeckVersion: run.deckVersion に集約
+--      * buildUidIndexMap(state)      : getDeckWithUids 基準で作成
+--      * applyDeckPatchByUid(state,p) : decode→patch→encode（正本更新）
+--      * addEffectTag/hasEffectTag    : 再適用ガード用タグ
+--      * monthHasBright(month)        : 当月に光札が“定義として”存在するか判定
+--      * entryWithKindLike(src, kind) : 同月で指定kindの定義エントリを返す
 
 -- v0.9.0+ ラン構成ユーティリティ（唯一の正本：run.configSnapshot）
 -- ここだけを読み書きする。季節ごとの山札は毎季これをクローンして生成。
@@ -198,23 +203,66 @@ end
 -- ★ KITOプール基盤：Deck Versioning / UID / 差分適用
 --==================================================
 
--- Deck内の各エントリに uid を保証（存在時は上書きしない）
-function M.ensureUids(state:any)
-	if typeof(state) ~= "table" then return end
-	local deck = (state and state.deck) or {}
-	for i, e in ipairs(deck) do
-		if typeof(e) == "table" and e.uid == nil then
-			local gid = string.gsub(HttpService:GenerateGUID(false), "-", "")
-			e.uid = string.sub(gid, 1, 8) .. "_" .. tostring(i)
-		end
+-- 内部: snapshot から「uid=code」を付与した一時デッキを生成
+local function _deckWithUidsFromSnapshot(snap)
+	local deck = CardEngine.buildDeckFromSnapshot(snap)
+	for _, e in ipairs(deck) do
+		e.code = e.code or CardEngine.toCode(tonumber(e.month), tonumber(e.idx))
+		e.uid  = e.uid  or e.code
 	end
+	return deck
 end
 
--- デッキ版数を取得（無ければ1から開始）。state.run.deckVersion を優先。
+-- 公開API: 現在ランの一時デッキ（uid付き）を取得
+function M.getDeckWithUids(state)
+	local snap = M.snapshot(state)
+	return _deckWithUidsFromSnapshot(snap)
+end
+
+-- 再適用ガード用タグ
+local function ensureEffectTags(state)
+	state.run = state.run or {}
+	state.run.meta = state.run.meta or {}
+	state.run.meta.effectTags = state.run.meta.effectTags or {}
+	return state.run.meta.effectTags
+end
+
+function M.addEffectTag(state, tag)
+	if type(tag) ~= "string" or tag == "" then return end
+	local t = ensureEffectTags(state)
+	t[tag] = true
+end
+
+function M.hasEffectTag(state, tag)
+	local t = ensureEffectTags(state)
+	return t[tag] == true
+end
+
+-- 当月に光札が“定義として”存在するか
+function M.monthHasBright(month)
+	local m = tonumber(month or 0) or 0
+	if m <= 0 then return false end
+	local defs = CardEngine.cardsByMonth[m]
+	if typeof(defs) ~= "table" then return false end
+	for _, def in ipairs(defs) do
+		if def and tostring(def.kind) == "hikari" then
+			return true
+		end
+	end
+	return false
+end
+
+-- Deck内の各エントリに uid を保証（旧APIは no-op に）
+function M.ensureUids(_state:any)
+	-- no-op（互換維持。必要なら getDeckWithUids を使用）
+	return
+end
+
+-- デッキ版数を取得（run.deckVersion のみを正とする）
 function M.getDeckVersion(state:any): number
 	if typeof(state) ~= "table" then return 1 end
 	state.run = state.run or {}
-	local v = tonumber(state.run.deckVersion or state.deckVersion or 0) or 0
+	local v = tonumber(state.run.deckVersion or 0) or 0
 	if v <= 0 then v = 1 end
 	state.run.deckVersion = v
 	return v
@@ -223,15 +271,14 @@ end
 -- デッキ版数を+1して返す
 function M.bumpDeckVersion(state:any): number
 	local v = M.getDeckVersion(state) + 1
-	state.run = state.run or {}
 	state.run.deckVersion = v
 	return v
 end
 
--- uid→index のマップを構築
+-- uid→index のマップを構築（スナップショット復元基準）
 function M.buildUidIndexMap(state:any): {[string]:number}
 	local map = {}
-	local deck = (state and state.deck) or {}
+	local deck = M.getDeckWithUids(state)
 	for i, e in ipairs(deck) do
 		if typeof(e) == "table" and e.uid then
 			map[e.uid] = i
@@ -240,42 +287,77 @@ function M.buildUidIndexMap(state:any): {[string]:number}
 	return map
 end
 
--- uid 指定差分を適用
+-- uid 指定差分を適用（対象：run.configSnapshot）
 -- patch = {
 --   replace = { [uid]=entryTable, ... }?,  -- entry.uid は無視され uid を再付与
 --   remove  = { [uid]=true, ... }?         -- 対象 uid のカードをデッキから削除
 -- }
 function M.applyDeckPatchByUid(state:any, patch:{replace:any?, remove:any?})
 	if typeof(state) ~= "table" then return false end
-	local deck = state.deck
+
+	-- 1) decode（uid=code 付与）
+	local snap = M.snapshot(state)
+	local deck = _deckWithUidsFromSnapshot(snap)
 	if typeof(deck) ~= "table" then return false end
 
-	local map = M.buildUidIndexMap(state)
+	-- 2) 作業用インデックス
+	local map = {}
+	for i, e in ipairs(deck) do
+		if typeof(e) == "table" and e.uid then
+			map[e.uid] = i
+		end
+	end
 
-	-- 置換系
+	-- 3) 置換
 	if patch and typeof(patch.replace) == "table" then
 		for uid, entry in pairs(patch.replace) do
 			local idx = map[uid]
 			if idx then
-				local copy = table.clone(entry)
-				copy.uid = uid
-				deck[idx] = copy
+				local src = deck[idx]
+				local nextEntry = table.clone(entry)
+				-- uid は維持（外部入力の uid は無視）
+				nextEntry.uid = uid
+
+				-- code が無ければ (month, idx) or kind から安全生成
+				if not nextEntry.code then
+					if nextEntry.month and nextEntry.idx then
+						nextEntry.code = CardEngine.toCode(nextEntry.month, nextEntry.idx)
+					elseif nextEntry.kind and src and src.month then
+						local def = M.entryWithKindLike(src, tostring(nextEntry.kind))
+						if def then
+							nextEntry.month = def.month
+							nextEntry.idx   = def.idx
+							nextEntry.kind  = def.kind
+							nextEntry.name  = def.name
+							nextEntry.tags  = def.tags and table.clone(def.tags) or nil
+							nextEntry.code  = def.code
+						end
+					end
+				end
+				-- 最後の保険
+				nextEntry.code = nextEntry.code or (src and src.code) or uid
+
+				deck[idx] = nextEntry
 			end
 		end
 	end
 
-	-- 削除系（降順で消す）
+	-- 4) 削除（降順）
 	if patch and typeof(patch.remove) == "table" then
 		local rm = {}
 		for uid, flag in pairs(patch.remove) do
 			if flag and map[uid] then table.insert(rm, map[uid]) end
 		end
 		table.sort(rm, function(a,b) return a>b end)
-		for _, idx in ipairs(rm) do
-			table.remove(deck, idx)
+		for _, i in ipairs(rm) do
+			table.remove(deck, i)
 		end
 	end
 
+	-- 5) encode（正本を更新）
+	M.saveConfig(state, deck)
+
+	-- 6) 版数UP（互換: run.deckVersion）
 	M.bumpDeckVersion(state)
 	return true
 end

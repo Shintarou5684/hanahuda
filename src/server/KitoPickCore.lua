@@ -1,20 +1,33 @@
 -- ServerScriptService/KitoPickCore.lua
--- 目的: KITO ピックのセッション生成/保持/失効と候補送信の中核
-local RS   = game:GetService("ReplicatedStorage")
-local SSS  = game:GetService("ServerScriptService")
+-- v0.9.5 KITO Pick Core (DeckRegistry + UID consistent, EN-only)
+-- Purpose:
+--   - Build and send a 12-card candidate pool for the picker UI
+--   - Keep/expire a simple session
+-- Policy:
+--   - UID-first (entries[*].uid is the single source of truth; legacy decks may use code as fallback)
+--   - Exclude months that do not have a "bright" card
+--   - KITO_SAME_KIND_POLICY: "block" (exclude already-bright) / "allow" (include)
 
+local RS = game:GetService("ReplicatedStorage")
+
+-- Config / Logger
 local Balance    = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local PoolEditor = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
 local Logger     = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG        = Logger.scope("KitoPickCore")
 
-local Remotes   = RS:WaitForChild("Remotes")
-local EvStart   = Remotes:WaitForChild("KitoPickStart") -- RemoteEvent
+-- Deck APIs
+local Shared     = RS:WaitForChild("SharedModules")
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
+local DeckReg    = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
 
--- 画像ルックアップ（存在しない環境でも落ちないようにフォールバック）
+-- Remotes
+local Remotes  = RS:WaitForChild("Remotes")
+local EvStart  = Remotes:WaitForChild("KitoPickStart") -- RemoteEvent
+
+-- Card image resolver (optional)
 local CardImageMap do
 	local ok, mod = pcall(function()
-		return require(RS:WaitForChild("SharedModules"):WaitForChild("CardImageMap"))
+		return require(Shared:WaitForChild("CardImageMap"))
 	end)
 	if ok and type(mod) == "table" then
 		CardImageMap = mod
@@ -26,86 +39,38 @@ end
 
 local Core = {}
 
--- ユーザー別セッション保持
+--─────────────────────────────────────────────────────────────
+-- Session store (simple)
+--─────────────────────────────────────────────────────────────
 local sessions: {[number]: any} = {}
 
--- 便宜: 先頭N件のUIDを "uid1,uid2,..." で返す
-local function headUidList(uids: {string}?, n: number)
+local function headList(list, n)
 	local out = {}
-	if type(uids) == "table" then
-		for i = 1, math.min(#uids, n) do
-			out[#out+1] = tostring(uids[i])
-		end
+	if type(list) == "table" then
+		for i = 1, math.min(#list, n) do out[#out+1] = tostring(list[i]) end
 	end
 	return table.concat(out, ",")
 end
 
--- 月の推定（code/uid の先頭2桁から 1..12 を推定、無ければ nil）
-local function guessMonth(e: any): number?
-	local s = tostring((e and (e.code or e.uid)) or "")
-	local two = string.match(s, "^(%d%d)")
-	if not two then return nil end
-	local n = tonumber(two)
-	if n and n >= 1 and n <= 12 then return n end
-	return nil
+local function now() return os.time() end
+local function ttlSec()
+	return tonumber(Balance.KITO_POOL_TTL_SEC or 45) or 45
 end
 
--- 送信用サマリ（画像＋eligible付与）
-local function summarize(e: any, tgtKind: string, policy: string)
-	if type(e) ~= "table" then return nil end
-	local code = tostring(e.code or "")
-
-	-- 画像の解決（CardImageMap.get は "rbxassetid://..." 文字列 or 数値ID を想定）
-	local img = nil
-	local ok, got = pcall(function()
-		if type(CardImageMap.get) == "function" then
-			return CardImageMap.get(code)
-		end
-	end)
-	if ok then img = got end
-
-	-- eligible（同種かつ"block"なら不可）
-	local same = tostring(e.kind) == tostring(tgtKind or "")
-	local eligible = true
-	if policy == "block" then
-		eligible = not same
-	end
-
-	local sum = {
-		uid      = e.uid,
-		code     = code,
-		name     = e.name,
-		kind     = e.kind,
-		month    = e.month or guessMonth(e),
-		eligible = eligible,
-	}
-
-	if type(img) == "string" then
-		sum.image = img                  -- 例: "rbxassetid://123456" or https://...
-	elseif type(img) == "number" or tonumber(img) then
-		sum.imageId = tonumber(img)      -- 数値IDなら imageId で渡す（クライアントで rbxassetid:// を付与）
-	end
-
-	return sum
+local function put(userId: number, sess: any)
+	sessions[userId] = sess
 end
 
--- 公開: 現在のセッション（あれば）を見る
 function Core.peek(userId: number)
 	local s = sessions[userId]
-	LOG.debug("[Peek] userId=%s has=%s sess=%s ver=%s",
-		tostring(userId),
-		tostring(s ~= nil),
-		s and tostring(s.id) or "-",
-		s and tostring(s.version) or "-")
+	LOG.debug("[Peek] userId=%s has=%s sid=%s", tostring(userId), tostring(s~=nil), s and tostring(s.id) or "-")
 	return s
 end
 
--- 公開: セッションを消費（取得して同時に削除）
 function Core.consume(userId: number)
 	local s = sessions[userId]
 	if s then
-		LOG.debug("[Consume] userId=%s take sess=%s ver=%s (expiresAt=%s)",
-			tostring(userId), tostring(s.id), tostring(s.version), tostring(s.expiresAt))
+		LOG.debug("[Consume] userId=%s take sid=%s", tostring(userId), tostring(s.id))
 	else
 		LOG.debug("[Consume] userId=%s no-session", tostring(userId))
 	end
@@ -113,77 +78,176 @@ function Core.consume(userId: number)
 	return s
 end
 
--- 内部: セッションを保存（上書き）
-local function put(userId: number, sess: any)
-	local existed = sessions[userId] ~= nil
-	sessions[userId] = sess
-	LOG.debug("[Put] userId=%s replace=%s sess=%s ver=%s uids#=%s",
-		tostring(userId), tostring(existed),
-		tostring(sess and sess.id), tostring(sess and sess.version),
-		tostring(sess and sess.uids and #sess.uids or 0))
+--─────────────────────────────────────────────────────────────
+-- Resolve runId from context
+--─────────────────────────────────────────────────────────────
+local function resolveRunId(runCtx:any)
+	if type(runCtx) ~= "table" then return nil end
+	-- direct
+	local direct = runCtx.runId or runCtx.deckRunId or runCtx.id or runCtx.deckRunID or runCtx.runID
+	if direct then return direct end
+	-- nested run
+	local run = runCtx.run
+	if type(run) == "table" then
+		return run.runId or run.deckRunId or run.id or run.deckRunID or run.runID
+	end
+	return nil
 end
 
--- 公開: 候補提示セッションを開始してクライアントへ送信
+--─────────────────────────────────────────────────────────────
+-- Helpers: month/image/eligibility
+--─────────────────────────────────────────────────────────────
+local function parseMonth(entry:any): number?
+	if type(entry) ~= "table" then return nil end
+	local m = tonumber(entry.month)
+	if m and m>=1 and m<=12 then return m end
+	local s = tostring(entry.code or entry.uid or "")
+	local two = string.match(s, "^(%d%d)")
+	return (two and tonumber(two)) or nil
+end
+
+-- Only check for "bright" existence in the month (EN-only)
+local function monthHasBright(month:number): boolean
+	local defs = CardEngine.cardsByMonth[month]
+	if typeof(defs) ~= "table" then return false end
+	for _, def in ipairs(defs) do
+		if tostring(def.kind or "") == "bright" then
+			return true
+		end
+	end
+	return false
+end
+
+local function resolveImage(code:string?)
+	local ok, got = pcall(function()
+		if type(CardImageMap.get) == "function" then return CardImageMap.get(code) end
+	end)
+	if ok and got ~= nil then return got end
+	return nil
+end
+
+local function toSummary(entry:any, targetKind:string, sameKindPolicy:string)
+	if type(entry) ~= "table" then return nil end
+	local m = parseMonth(entry)
+	if not m or not monthHasBright(m) then return nil end
+
+	local same = tostring(entry.kind or "") == tostring(targetKind or "")
+	if sameKindPolicy == "block" and same then
+		-- already the same kind ("bright") -> exclude from pool
+		return nil
+	end
+
+	local sum = {
+		uid      = entry.uid or entry.code,   -- UID is the truth; legacy may fallback to code
+		code     = entry.code,                -- for display/image lookup
+		name     = entry.name or entry.code,
+		kind     = entry.kind,
+		month    = m,
+		eligible = true,
+	}
+	local img = resolveImage(entry.code)
+	if type(img) == "string" then
+		sum.image = img
+	elseif type(img) == "number" or tonumber(img) then
+		sum.imageId = tonumber(img)
+	end
+	return sum
+end
+
+--─────────────────────────────────────────────────────────────
+-- Public: build & send 12-card pool (KITO: Rooster/bright)
+--─────────────────────────────────────────────────────────────
 -- effectId: "kito_tori" / targetKind: "bright"
-function Core.startFor(player: Player, state: any, effectId: string, targetKind: string)
+function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind: string)
 	if Balance.KITO_UI_ENABLED ~= true then
-		LOG.debug("[StartFor] UI disabled; ignored | u=%s", player and player.Name or "?")
+		LOG.debug("[StartFor] UI disabled; ignored | user=%s", player and player.Name or "?")
 		return false
 	end
 	if tostring(effectId) ~= "kito_tori" then
-		LOG.debug("[StartFor] unsupported effect=%s | u=%s", tostring(effectId), player and player.Name or "?")
-		return false
-	end
-	if type(state) ~= "table" or type(state.deck) ~= "table" or #state.deck == 0 then
-		LOG.debug("[StartFor] no live deck; u=%s", player and player.Name or "?")
+		LOG.debug("[StartFor] unsupported effect=%s | user=%s", tostring(effectId), player and player.Name or "?")
 		return false
 	end
 
-	local k = Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12
-	local sess = PoolEditor.start(state, k)
-	if not (sess and type(sess.uids) == "table" and #sess.uids > 0) then
-		LOG.info("[StartFor] no candidates; aborted | u=%s", player and player.Name or "?")
+	-- Resolve runId and ensure entries in DeckRegistry
+	local runId = resolveRunId(runCtx)
+	if not runId then
+		local hasRun = (type(runCtx)=="table" and type(runCtx.run)=="table")
+		LOG.info("[StartFor] missing runId; aborted | user=%s hasRun=%s", player and player.Name or "?", tostring(hasRun))
+		return false
+	end
+	DeckReg.ensureFromContext(runCtx)
+	local store = DeckReg.read(runId)
+	if typeof(store) ~= "table" or typeof(store.entries) ~= "table" or #store.entries == 0 then
+		LOG.info("[StartFor] no deck entries; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
 		return false
 	end
 
-	-- セーブ（上書き）
+	-- EN-only target kind
+	local tgtKind = "bright"
+	local policy  = tostring(Balance.KITO_SAME_KIND_POLICY or "block") -- "block"|"allow"
+	local pickN   = tonumber(Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12) or 12
+
+	-- Build pool (UID-first)
+	local pool = {}
+	for _, e in ipairs(store.entries) do
+		local s = toSummary(e, tgtKind, policy)
+		if s then table.insert(pool, s) end
+	end
+	if #pool == 0 then
+		LOG.info("[StartFor] no candidates; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
+		return false
+	end
+
+	-- Shuffle and take first N (independent RNG)
+	local seed = math.floor((os.clock() % 1) * 1e9)
+	local rng  = Random.new(seed)
+	for i = #pool, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		pool[i], pool[j] = pool[j], pool[i]
+	end
+	local list = {}
+	for i = 1, math.min(#pool, pickN) do
+		list[#list+1] = pool[i]
+	end
+
+	-- Session
+	local sess = {
+		id        = string.format("kito-%d-%d", player.UserId, now()),
+		version   = "v3",
+		createdAt = now(),
+		expiresAt = now() + ttlSec(),
+		runId     = runId,
+		effectId  = effectId,
+		uids      = (function()
+			local t = {}
+			for _, s in ipairs(list) do t[#t+1] = s.uid end
+			return t
+		end)(),
+	}
 	put(player.UserId, sess)
 
-	-- 要約を作成（画像＋eligible付き）
-	local list = {}
-	local sameKind, otherKind = 0, 0
-	local tgtKind = targetKind or "bright"
-	local policy  = Balance.KITO_SAME_KIND_POLICY or "block"
-
-	for _, uid in ipairs(sess.uids) do
-		local e = sess.snap[uid]
-		if e then
-			if e.kind == tgtKind then sameKind += 1 else otherKind += 1 end
-			local sum = summarize(e, tgtKind, policy)
-			if sum then table.insert(list, sum) end
-		end
-	end
-
-	-- 送信
+	-- Client payload (EN-only)
 	local payload = {
 		sessionId  = sess.id,
 		version    = sess.version,
 		expiresAt  = sess.expiresAt,
 		effectId   = effectId,
 		targetKind = tgtKind,
-		list       = list, -- ← 各要素に image / imageId / eligible を含む
+		list       = list,    -- {uid,code?,name,kind,month,image?/imageId?,eligible}
+		effect     = ("Select one target (goal: %s)"):format("Bright"),
 	}
 	EvStart:FireClient(player, payload)
 
-	-- 詳細ログ
-	LOG.info(
-		"[StartFor] u=%s sess=%s size=%d tgt=%s sameKind=%d otherKind=%d head5=[%s]",
+	-- Log summary
+	local same, other = 0, 0
+	for _, s in ipairs(list) do
+		if tostring(s.kind or "") == tgtKind then same += 1 else other += 1 end
+	end
+	LOG.info("[StartFor] user=%s sid=%s size=%d tgt=%s same=%d other=%d head5=[%s]",
 		player and player.Name or "?",
 		tostring(sess.id),
-		#list,
-		tostring(tgtKind),
-		sameKind, otherKind,
-		headUidList(sess.uids, 5)
+		#list, tgtKind, same, other,
+		headList(sess.uids, 5)
 	)
 
 	return true

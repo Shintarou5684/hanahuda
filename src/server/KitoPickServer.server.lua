@@ -1,202 +1,382 @@
 -- ServerScriptService/KitoPickServer.lua
--- 目的: KITOの「12枚提示→選択→確定」をサーバで管理（UIは後付け）
+-- v0.9.10 KITO Pick Server (+diag logs, safe reopen with state, no reroll)
+-- 変更点:
+--   - reopenShopSnapshot: ShopService の想定シグネチャに合わせ state を第2引数へ
+--   - open/openFor の複数シグネチャを順に試すフォールバック実装
+--   - それ以外は前版踏襲（効果適用→pushState→在庫を維持したままOPEN再送）
 
--- ── Services ─────────────────────────────────────────────────
-local RS      = game:GetService("ReplicatedStorage")
-local SSS     = game:GetService("ServerScriptService")
-local Players = game:GetService("Players")
+local RS  = game:GetService("ReplicatedStorage")
+local SSS = game:GetService("ServerScriptService")
 
--- ── Logger ───────────────────────────────────────────────────
-local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
-local LOG    = Logger.scope("KitoPickServer")
-LOG.info("ready (handlers wiring)")
+-- Logger / Config
+local Logger  = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local LOG     = Logger.scope("KitoPickServer")
+local Balance = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 
--- ── Deps ─────────────────────────────────────────────────────
-local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
-local PoolEditor  = require(RS:WaitForChild("SharedModules"):WaitForChild("PoolEditor"))
-local CardEngine  = require(RS:WaitForChild("SharedModules"):WaitForChild("CardEngine"))
+-- Core / Registry / State
+local Shared       = RS:WaitForChild("SharedModules")
+local KitoCore     = require(SSS:WaitForChild("KitoPickCore"))
+local DeckRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+local StateHub     = require(Shared:WaitForChild("StateHub"))
 
--- ── Remotes ──────────────────────────────────────────────────
+-- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
-local EvStart  = Remotes:WaitForChild("KitoPickStart")   :: RemoteEvent -- S→C (提示) / C→S (任意開始要求)
-local EvDecide = Remotes:WaitForChild("KitoPickDecide")  :: RemoteEvent -- C→S 決定
-local EvResult = Remotes:WaitForChild("KitoPickResult")  :: RemoteEvent -- S→C 結果通知
+local EvDecide = Remotes:WaitForChild("KitoPickDecide")
+local EvCancel = Remotes:FindFirstChild("KitoPickCancel")
+local EvResult = Remotes:FindFirstChild("KitoPickResult") -- 任意/トースト用
 
--- ── Core（セッション正本）/ State ───────────────────────────
-local Core     = require(SSS:WaitForChild("KitoPickCore"))
-local StateHub = require(RS:WaitForChild("SharedModules"):WaitForChild("StateHub"))
-local function getLiveState(player: Player)
-	return StateHub.get(player)
+-- ─────────────────────────────────────────────────────────────
+-- Utility: safe require
+-- ─────────────────────────────────────────────────────────────
+local function tryRequire(inst: Instance?)
+	if not inst or not inst:IsA("ModuleScript") then return nil end
+	local ok, mod = pcall(function() return require(inst) end)
+	if ok then return mod end
+	LOG.warn("[KitoPickServer] require failed: %s", tostring(mod))
+	return nil
 end
 
--- ===== 任意: C→S Start を受けた場合も Core に移譲して開始 =====
-EvStart.OnServerEvent:Connect(function(player: Player, effectId: any, targetKind: any)
-	if Balance.KITO_UI_ENABLED ~= true then return end
-	local state = getLiveState(player)
-	LOG.info("[Start][REQ] u=%s eff=%s tgt=%s deck=%s",
-		player and player.Name or "?", tostring(effectId), tostring(targetKind),
-		(type(state) == "table" and type(state.deck) == "table") and #state.deck or "nil"
-	)
-	Core.startFor(player, state, tostring(effectId or "kito_tori"), tostring(targetKind or "bright"))
-end)
-LOG.debug("[Wire] Start handler wired")
+-- ─────────────────────────────────────────────────────────────
+-- EffectsRegistry 読み込み（正しい配置を優先）
+-- ─────────────────────────────────────────────────────────────
+local EffectsRegistry =
+	tryRequire(Shared:FindFirstChild("Deck") and Shared.Deck:FindFirstChild("EffectsRegistry"))
+	or tryRequire(Shared:FindFirstChild("EffectsRegistry"))
+	or tryRequire(SSS:FindFirstChild("EffectsRegistry"))
 
--- ================= C→S: 決定（sessionId, uid?, targetKind, noChange?） =================
-EvDecide.OnServerEvent:Connect(function(player: Player, payload: any)
-	if Balance.KITO_UI_ENABLED ~= true then return end
-	if type(payload) ~= "table" then return end
+if EffectsRegistry then
+	LOG.info("[KitoPickServer] EffectsRegistry wired (module loaded)")
+else
+	LOG.warn("[KitoPickServer] EffectsRegistry not found; brighten effect will be unavailable (server continues)")
+end
 
-	local wantId   = tostring(payload.sessionId or "")
-	local target   = tostring(payload.targetKind or "bright")
-	local noChange = payload.noChange == true
-	local policy   = tostring(Balance.KITO_SAME_KIND_POLICY or "block") -- "block" | "auto-skip" | "complete"
+-- ─────────────────────────────────────────────────────────────
+-- ShopService 解決（非ブロッキング探索）
+-- ─────────────────────────────────────────────────────────────
+local function resolveShopService()
+	local inst =
+		SSS:FindFirstChild("ShopService")
+		or (Shared:FindFirstChild("Shop") and Shared.Shop:FindFirstChild("ShopService"))
+		or Shared:FindFirstChild("ShopService")
+		or RS:FindFirstChild("ShopService")
+		or (RS:FindFirstChild("SharedModules") and RS.SharedModules:FindFirstChild("ShopService"))
 
-	-- uid はスキップ時は未指定でOK。空文字は nil 扱いに正規化。
-	local pickUid  = payload.uid
-	if type(pickUid) == "string" and pickUid == "" then
-		pickUid = nil
-	end
-	if pickUid ~= nil then
-		pickUid = tostring(pickUid)
-	end
-
-	-- sessionId は必須
-	if wantId == "" then
-		LOG.warn("[Decide][BADPAYLOAD] u=%s sid(empty)", player and player.Name or "?")
-		return
-	end
-
-	-- Core のセッションを参照（存在＆ID一致チェック）※ここでは consume しない
-	local peek = Core.peek(player.UserId)
-	if not peek then
-		LOG.warn("[Decide][NOSESS] u=%s sid=%s (peek=nil)", player and player.Name or "?", wantId)
-		return
-	end
-	if peek.id ~= wantId then
-		LOG.warn("[Decide][SID-MISMATCH] u=%s want=%s have=%s", player and player.Name or "?", wantId, tostring(peek.id))
-		return
-	end
-
-	local state = getLiveState(player)
-	if type(state) ~= "table" or type(state.deck) ~= "table" then
-		LOG.warn("[Decide][NOSTATE] u=%s", player and player.Name or "?")
-		return
-	end
-
-	-- ★ 分岐1: スキップ（変更なし確定）
-	if noChange then
-		local sess = Core.consume(player.UserId) -- セッションを閉じる
-		local okCommit, reason = PoolEditor.commit(state, sess)
-		local msg
-		if okCommit then
-			msg = "酉：変更せずに確定しました"
-			LOG.info("[Decide][SKIP][OK] u=%s sid=%s tgt=%s", player and player.Name or "?", wantId, target)
-		else
-			msg = ("酉：変更なし確定に失敗しました（%s）"):format(tostring(reason))
-			LOG.warn("[Decide][SKIP][COMMIT-NG] u=%s sid=%s reason=%s", player and player.Name or "?", wantId, tostring(reason))
-		end
-		EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
-		local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
-		ShopService.open(player, state, { notice = msg })
-		return
-	end
-
-	-- ★ 分岐2: 通常決定（カード指定が必要）
-	if not pickUid then
-		LOG.warn("[Decide][BADPAYLOAD] u=%s sid=%s uid=nil", player and player.Name or "?", wantId)
-		EvResult:FireClient(player, { ok=false, message="対象が選ばれていません", targetKind=target })
-		return
-	end
-
-	-- 候補の正当性を peek で確認（eligible チェックは“同種かどうか”でサーバ側もガード）
-	local entry = peek.snap and peek.snap[pickUid]
-	if not entry then
-		LOG.warn("[Decide][NOTINPOOL] u=%s sid=%s uid=%s (not in snapshot)", player and player.Name or "?", wantId, pickUid)
-		EvResult:FireClient(player, { ok=false, message="候補に存在しないカードです", targetKind=target })
-		return
-	end
-
-	local isSameKind = tostring(entry.kind) == target
-
-	-- ポリシー適用
-	if isSameKind then
-		if policy == "block" then
-			-- 対象外：セッションは維持（consume しない）
-			LOG.debug("[Decide][BLOCK] u=%s sid=%s uid=%s kind=%s tgt=%s",
-				player and player.Name or "?", wantId, pickUid, tostring(entry.kind), target)
-			EvResult:FireClient(player, {
-				ok=false,
-				message="対象外のカードです（同種は選べません）",
-				targetKind=target,
-			})
-			return
-		elseif policy == "auto-skip" or policy == "complete" then
-			-- ノーオペ確定（セッション終了）
-			local sess = Core.consume(player.UserId)
-			local okCommit, reason = PoolEditor.commit(state, sess)
-			local label = (entry.name or entry.code or pickUid)
-			local msg
-			if okCommit then
-				if policy == "auto-skip" then
-					msg = "酉：同種を選択したため、変更せずに確定しました"
-				else
-					msg = ("酉：%s を対象に実行しました（同種：変化なし）"):format(label)
-				end
-				LOG.info("[Decide][SAME][%s][OK] u=%s sid=%s uid=%s tgt=%s",
-					policy, player and player.Name or "?", wantId, pickUid, target)
-			else
-				msg = ("酉：処理に失敗しました（%s）"):format(tostring(reason))
-				LOG.warn("[Decide][SAME][%s][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
-					policy, player and player.Name or "?", wantId, pickUid, target, tostring(reason))
-			end
-			EvResult:FireClient(player, { ok = okCommit == true, message = msg, targetKind = target })
-			local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
-			ShopService.open(player, state, { notice = msg })
-			return
-		end
-	end
-
-	-- ★ 分岐3: 異種変換（通常フロー）
-	local sess  = Core.consume(player.UserId) -- ここで消費
-	-- mutate（対象1枚）
-	local okMut = select(1, PoolEditor.mutate(sess, {
-		kind       = "convertKind",
-		targetKind = target,
-		uids       = { pickUid },
-	}))
-	if not okMut then
-		LOG.warn("[Decide][MUTATE-NG] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
-	end
-
-	local okCommit, reason = PoolEditor.commit(state, sess)
-	local label = (sess.snap and sess.snap[pickUid] and (sess.snap[pickUid].name or sess.snap[pickUid].code)) or pickUid
-	local msg
-	if okCommit then
-		msg = ("酉：%s を %s に変換しました（確定）"):format(label, target)
-		LOG.info("[Decide][OK] u=%s sid=%s uid=%s tgt=%s", player and player.Name or "?", wantId, pickUid, target)
+	local mod = tryRequire(inst)
+	if mod then
+		LOG.info("[KitoPickServer] ShopService wired from %s", inst:GetFullName())
 	else
-		msg = ("酉：変換に失敗しました（%s）"):format(tostring(reason))
-		LOG.warn("[Decide][COMMIT-NG] u=%s sid=%s uid=%s tgt=%s reason=%s",
-			player and player.Name or "?", wantId, pickUid, target, tostring(reason))
+		LOG.warn("[KitoPickServer] ShopService not found (no ModuleScript found); reopen will be skipped")
+	end
+	return mod
+end
+
+local ShopService = resolveShopService()
+
+-- ─────────────────────────────────────────────────────────────
+-- runId 解決（KitoPickCore と同一規則）
+-- ─────────────────────────────────────────────────────────────
+local function resolveRunId(ctx:any)
+	if type(ctx) ~= "table" then return nil end
+	if ctx.runId then return ctx.runId end
+	if ctx.deckRunId then return ctx.deckRunId end
+	if ctx.id then return ctx.id end
+	if ctx.runID then return ctx.runID end
+	if ctx.deckRunID then return ctx.deckRunID end
+	local run = ctx.run
+	if type(run) == "table" then
+		return run.runId or run.deckRunId or run.id or run.runID or run.deckRunID
+	end
+	return nil
+end
+
+-- 効果結果のゆるい解釈
+local function interpretApplyResult(r1, r2)
+	if type(r1) == "boolean" then
+		return r1, nil, r2
+	elseif type(r1) == "table" then
+		local ok = (r1.ok == nil) and true or (r1.ok ~= false)
+		return ok, r1.changed, r1.message or r1.meta or r1.reason or r2
+	else
+		return (r1 ~= nil), nil, r2
+	end
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- 効果適用（IDフォールバック）
+-- ─────────────────────────────────────────────────────────────
+local PRIMARY_ID   = "kito.tori_brighten"
+local FALLBACK_ID  = "Tori_Brighten"
+
+local function applyBrighten(runId:string?, payload:any)
+	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
+		return false, nil, "effects-registry-missing", nil
+	end
+	if not runId or runId == "" then
+		return false, nil, "runId-missing", nil
 	end
 
-	-- クライアントへ結果
-	EvResult:FireClient(player, {
-		ok         = okCommit == true,
-		message    = msg,
-		targetKind = target,
-	})
+	-- primary
+	LOG.debug("[Decide] call apply order=(runId,effectId,payload) id=%s run=%s", PRIMARY_ID, tostring(runId))
+	local okCall, r1, r2 = pcall(function()
+		return EffectsRegistry.apply(runId, PRIMARY_ID, payload)
+	end)
+	if not okCall then
+		LOG.warn("[Decide] apply threw (primary %s): %s", PRIMARY_ID, tostring(r1))
+	else
+		local success, changed, message = interpretApplyResult(r1, r2)
+		LOG.debug("[Decide] apply(primary) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
+			typeof(r1), typeof(r2), tostring(success), tostring(changed), tostring(message))
+		if success then return true, changed, message, PRIMARY_ID end
+	end
 
-	-- 屋台再描画（notice に結果掲載）
-	local ShopService = require(RS:WaitForChild("SharedModules"):WaitForChild("ShopService"))
-	ShopService.open(player, state, { notice = msg })
-end)
-LOG.debug("[Wire] Decide handler wired")
+	-- fallback
+	LOG.debug("[Decide] retry apply with fallback id=%s run=%s", FALLBACK_ID, tostring(runId))
+	local okCall2, r3, r4 = pcall(function()
+		return EffectsRegistry.apply(runId, FALLBACK_ID, payload)
+	end)
+	if not okCall2 then
+		LOG.warn("[Decide] apply threw (fallback %s): %s", FALLBACK_ID, tostring(r3))
+		return false, nil, tostring(r3), FALLBACK_ID
+	end
+	local success2, changed2, message2 = interpretApplyResult(r3, r4)
+	LOG.debug("[Decide] apply(fallback) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
+		typeof(r3), typeof(r4), tostring(success2), tostring(changed2), tostring(message2))
+	return success2, changed2, message2, FALLBACK_ID
+end
 
--- ================= Cleanup =================
-Players.PlayerRemoving:Connect(function(p: Player)
-	Core.consume(p.UserId) -- 存在すれば破棄
-	LOG.debug("[Cleanup] user left; consumed any pending session for uid=%s", tostring(p.UserId))
-end)
-LOG.debug("[Wire] PlayerRemoving cleanup wired")
+-- ─────────────────────────────────────────────────────────────
+-- ショップを「在庫維持で開き直す」
+--   - ShopService の実装差に合わせて複数シグネチャを順に試す
+-- ─────────────────────────────────────────────────────────────
+local function reopenShopSnapshot(plr: Player, opts:any?)
+	if not ShopService then
+		LOG.warn("[ReopenShop] ShopService missing; skip")
+		return false, "no-shopservice"
+	end
+
+	local state = StateHub.get(plr) or {}
+	local notice = opts and opts.notice or "変換が完了しました"
+	local preserve = true
+
+	local tried = {}
+
+	local function tryCall(desc, f)
+		local t0 = os.clock()
+		local ok, err = pcall(f)
+		table.insert(tried, { desc = desc, ok = ok, err = ok and "" or tostring(err), ms = (os.clock()-t0)*1000 })
+		return ok, err
+	end
+
+	-- 優先1: openFor(plr, state, {notice=..., preserve=true})
+	if type(ShopService.openFor) == "function" then
+		local ok = select(1, tryCall("openFor(plr, state, opts)", function()
+			return ShopService.openFor(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok then
+			LOG.info("[ReopenShop] via openFor(plr,state,opts) in %.2fms", tried[#tried].ms)
+			return true
+		end
+		-- フォールバック: openFor(plr, { state=..., notice=..., preserve=true })
+		local ok2 = select(1, tryCall("openFor(plr, {state=...,notice=...})", function()
+			return ShopService.openFor(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok2 then
+			LOG.info("[ReopenShop] via openFor(plr,{state,...}) in %.2fms", tried[#tried].ms)
+			return true
+		end
+	end
+
+	-- 優先2: open(plr, state, {notice=..., preserve=true})
+	if type(ShopService.open) == "function" then
+		local ok3 = select(1, tryCall("open(plr, state, opts)", function()
+			return ShopService.open(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok3 then
+			LOG.info("[ReopenShop] via open(plr,state,opts) in %.2fms", tried[#tried].ms)
+			return true
+		end
+		-- フォールバック: open(plr, { state=..., notice=..., preserve=true })
+		local ok4 = select(1, tryCall("open(plr, {state=...,notice=...})", function()
+			return ShopService.open(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
+		end))
+		if ok4 then
+			LOG.info("[ReopenShop] via open(plr,{state,...}) in %.2fms", tried[#tried].ms)
+			return true
+		end
+	end
+
+	-- すべて失敗：詳細をまとめて WARN
+	for _, t in ipairs(tried) do
+		if not t.ok then
+			LOG.warn("[ReopenShop] tried %s → failed: %s (%.2fms)", t.desc, t.err, t.ms)
+		end
+	end
+	return false, "no-matching-signature"
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- Decide（確定）
+-- payload: { sessionId:string, uid:string, noChange?:boolean }
+-- ─────────────────────────────────────────────────────────────
+local PRIMARY_NOTICE_SKIP = "選択をスキップしました"
+local PRIMARY_NOTICE_DONE = "変換が完了しました"
+
+local function onDecide(plr: Player, payload:any)
+	if Balance.KITO_UI_ENABLED ~= true then return end
+
+	local uid      = payload and payload.uid
+	local sidRecv  = payload and payload.sessionId
+	local noChange = (payload and payload.noChange) == true
+
+	-- 受信要約ログ
+	LOG.info("[Decide] recv u=%s sid=%s uid=%s noChange=%s",
+		plr and plr.Name or "?", tostring(sidRecv), tostring(uid), tostring(noChange))
+
+	-- 1) セッション消費（1回限り）
+	local sess = KitoCore.consume(plr.UserId)
+	if not sess or (sidRecv and sess.id ~= sidRecv) then
+		LOG.info("[Decide] invalid session | u=%s gotSid=%s holdSid=%s",
+			plr and plr.Name or "?", tostring(sidRecv), sess and tostring(sess.id) or "-")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="session" }) end
+		return
+	end
+	LOG.debug("[Decide] session ok sid=%s ttl=%s run?=%s",
+		tostring(sess.id), tostring(sess.expiresAt), tostring(sess.runId or "-"))
+
+	-- 2) TTL
+	local now = os.time()
+	if type(sess.expiresAt) == "number" and now > (sess.expiresAt or 0) then
+		LOG.info("[Decide] expired | u=%s sid=%s now=%d exp=%d",
+			plr and plr.Name or "?", tostring(sess.id), now, sess.expiresAt or -1)
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="expired" }) end
+		return
+	end
+
+	-- 3) 候補内チェック（noChange ならスキップ可）
+	local okUid = false
+	if type(uid) == "string" and type(sess.uids) == "table" then
+		for _, u in ipairs(sess.uids) do if u == uid then okUid = true; break end end
+	end
+	if (not okUid) and (not noChange) then
+		LOG.info("[Decide] uid not in session | u=%s sid=%s uid=%s", plr and plr.Name or "?", tostring(sess.id), tostring(uid))
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="uid" }) end
+		return
+	end
+
+	-- 4) state/runId/DeckRegistry 準備
+	local s = StateHub.get(plr)
+	if not s then
+		LOG.warn("[Decide] state missing | u=%s", plr and plr.Name or "?")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="state" }) end
+		return
+	end
+	local runId = resolveRunId(s) or resolveRunId(s.run)
+	DeckRegistry.ensureFromContext(s) -- 必要時のみ snap→registry 反映
+	LOG.debug("[Decide] runId=%s", tostring(runId))
+
+	-- runId 未解決なら明確に終了
+	if not runId or runId == "" then
+		LOG.warn("[Decide] runId missing | u=%s", plr and plr.Name or "?")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="run" }) end
+		return
+	end
+
+	-- 5) noChange: 変換せず終了 → ショップ開き直し
+	if noChange == true then
+		LOG.info("[Decide] noChange | u=%s sid=%s", plr and plr.Name or "?", tostring(sess.id))
+		reopenShopSnapshot(plr, { notice = PRIMARY_NOTICE_SKIP })
+		if EvResult then EvResult:FireClient(plr, { ok=true, changed=false, uid=nil }) end
+		return
+	end
+
+	-- 6) 効果適用（UIDファースト + 後方互換 codes 同値）
+	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
+		LOG.warn("[Decide] EffectsRegistry unavailable; cannot apply brighten | u=%s", plr and plr.Name or "?")
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effects" }) end
+		return
+	end
+
+	local function isUidLike(sv:any)
+		local s = (type(sv) == "string") and sv or nil
+		return s and (string.find(s, "#%d+$") ~= nil) or false
+	end
+	if payload and type(payload.codes) == "table" and #payload.codes > 0 then
+		for i, c in ipairs(payload.codes) do
+			if isUidLike(c) then
+				LOG.warn("[Decide] payload.codes[%d] looks like UID (%s). legacy fallback may miss.", i, tostring(c))
+				break
+			end
+		end
+	end
+
+	local applyPayload = {
+		plr        = plr,
+		runId      = runId,
+		uids       = (uid and { tostring(uid) } or nil),
+		codes      = (uid and { tostring(uid) } or nil), -- 後方互換のため現状維持
+		preferKind = "bright",
+		tag        = "eff:kito_tori_bright",
+		now        = os.time(),
+		lang       = s.lang or "ja",
+	}
+	LOG.info("[Decide] apply start run=%s uid=%s uids#=%s codes#=%s",
+		tostring(runId), tostring(uid),
+		tostring(applyPayload.uids and #applyPayload.uids or 0),
+		tostring(applyPayload.codes and #applyPayload.codes or 0)
+	)
+
+	local success, changed, message, usedId = applyBrighten(runId, applyPayload)
+
+	if not success then
+		LOG.info("[Decide] effect failed | id=%s msg=%s", tostring(usedId or PRIMARY_ID), tostring(message))
+		if EvResult then
+			local res = { ok=false, reason="effect", message=tostring(message), id=tostring(usedId or PRIMARY_ID) }
+			EvResult:FireClient(plr, res)
+			LOG.debug("[Result->C] %s", game.HttpService and game.HttpService:JSONEncode(res) or "sent")
+		end
+		return
+	end
+
+	-- 7) 状態同期
+	local okPush, errPush = pcall(function() StateHub.pushState(plr) end)
+	LOG.info("[Decide] pushState ok=%s err=%s", tostring(okPush), okPush and "" or tostring(errPush))
+
+	-- 8) 在庫を「リロールせず」再送（OPEN）
+	reopenShopSnapshot(plr, { notice = (message and tostring(message) ~= "" and tostring(message)) or PRIMARY_NOTICE_DONE })
+
+	-- 9) 結果通知
+	if EvResult then
+		local res = {
+			ok      = true,
+			changed = (changed == nil) and true or (changed ~= 0 and changed ~= false),
+			uid     = tostring(uid),
+			message = tostring(message or ""),
+			id      = tostring(usedId or PRIMARY_ID),
+		}
+		EvResult:FireClient(plr, res)
+		LOG.debug("[Result->C] %s", game.HttpService and game.HttpService:JSONEncode(res) or "sent")
+	end
+
+	LOG.info("[Decide] OK | u=%s run=%s uid=%s id=%s msg=%s",
+		plr and plr.Name or "?", tostring(runId), tostring(uid), tostring(usedId or PRIMARY_ID), tostring(message or ""))
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- Cancel（任意）
+-- ─────────────────────────────────────────────────────────────
+local function onCancel(plr: Player, _payload:any)
+	KitoCore.consume(plr.UserId) -- セッションを無言破棄
+	LOG.debug("[Cancel] u=%s", plr and plr.Name or "?")
+	reopenShopSnapshot(plr, { notice = "取消しました" })
+	if EvResult then EvResult:FireClient(plr, { ok=true, changed=false, cancel=true }) end
+end
+
+-- ─────────────────────────────────────────────────────────────
+-- Wiring
+-- ─────────────────────────────────────────────────────────────
+local function wire()
+	if EvDecide then EvDecide.OnServerEvent:Connect(onDecide) end
+	if EvCancel then EvCancel.OnServerEvent:Connect(onCancel) end
+	LOG.info("ready (handlers wiring)")
+end
+wire()

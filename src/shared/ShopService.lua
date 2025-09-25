@@ -24,13 +24,22 @@ local BuyItem    = Remotes:WaitForChild("BuyItem")
 local ShopReroll = Remotes:WaitForChild("ShopReroll")
 
 -- ★ UI分岐用の Balance と、候補通知 Remote（RemotesInit で生成済みを待つ）
-local Balance     = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
-local EvKitoStart = Remotes:WaitForChild("KitoPickStart")
-
+local Balance       = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
-local RunDeckUtil   = require(SharedModules:WaitForChild("RunDeckUtil"))
-local CardEngine    = require(SharedModules:WaitForChild("CardEngine"))
+
+-- ★ RunDeckUtil（安全ロード／無ければ nil）
+local RunDeckUtil do
+	local ok, mod = pcall(function()
+		return require(SharedModules:WaitForChild("RunDeckUtil"))
+	end)
+	if ok then
+		RunDeckUtil = mod
+	else
+		RunDeckUtil = nil
+		LOG.warn("RunDeckUtil not available; deck snapshot/matsuri logs will be limited.")
+	end
+end
 
 -- ★ 候補生成/送信の一元管理（セッション保持含む）
 local KitoPickCore  = require(SSS:WaitForChild("KitoPickCore"))
@@ -90,6 +99,17 @@ local function checkAndAddNonce(userId: number, nonce: string?): boolean
 	return true
 end
 
+-- 置換後（★ run.id を唯一源泉に）
+local function ensureRunId(state:any): string
+  state.run = state.run or {}
+  local id = state.run.id
+  if type(id) ~= "string" or id == "" then
+    id = Http:GenerateGUID(false)
+    state.run.id = id
+  end
+  return id
+end
+
 --========================
 -- ログ支援
 --========================
@@ -99,8 +119,12 @@ local function j(v)
 end
 
 local function matsuriJSON(state)
-	local levels = RunDeckUtil.getMatsuriLevels(state)
-	return j(levels or {})
+	-- RunDeckUtil が無い場合は {} を返す（ログ用途のため挙動非影響）
+	if RunDeckUtil and typeof(RunDeckUtil.getMatsuriLevels) == "function" then
+		local levels = RunDeckUtil.getMatsuriLevels(state)
+		return j(levels or {})
+	end
+	return j({})
 end
 
 local function stockBrief(stock)
@@ -225,7 +249,11 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 	local target = (opts and opts.target) or 0
 	local money  = tonumber(s.mon or 0) or 0
 
-	local deckView = RunDeckUtil.snapshot(s)
+	-- ★ RunDeckUtil が読めない環境でも nil 許容
+	local deckView = nil
+	if RunDeckUtil and typeof(RunDeckUtil.snapshot) == "function" then
+		deckView = RunDeckUtil.snapshot(s)
+	end
 
 	-- ★ talisman は state.run.talisman を“そのまま”搭載（補完や推測はしない）
 	local tali = readRunTalisman(s)
@@ -327,7 +355,8 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			snapShop(plr, s)
 
 			-- ★ 移譲：セッション作成・保持・FireClient を KitoPickCore に任せる
-			local started = KitoPickCore.startFor(plr, s, "kito_tori", "bright")
+			local runId = ensureRunId(s)
+			local started = KitoPickCore.startFor(plr, { runId = runId }, "kito_tori", "bright")
 			local uiMsg = started and "酉：対象を選んでください（候補を表示中…）" or "酉：選択候補が用意できませんでした"
 
 			LOG.info("[BUY][RES] ok=true msg=%s matsuri(after)=%s", uiMsg, matsuriJSON(s))
