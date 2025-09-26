@@ -1,18 +1,13 @@
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.7-P2-12 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
---  - payload.lang を Locale.normalize で正規化し _lang に保持（'jp'→'ja' を含む）
---  - show/setData/update で _lang を子へ伝播（TalismanBoard 含む）
---  - サーバ確定 talisman を優先反映（差分時のみ）
---  - 同一データの再描画を抑止（talisman シグネチャ比較）
---  - 在庫署名と一時非表示キャッシュの整合を強化（可視0なら強制解除のセーフティ）
+-- v0.9.9-P2-16 ShopScreen（診断ログ強化）
+--  - 可視件数・在庫署名の遷移・リロール可否を INFO で出力
+--  - 他は前版(P2-15)の selfバインド/LOG統一そのまま
 
 local Shop = {}
 Shop.__index = Shop
 
---========= 依存読込 =========
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
-local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 
 local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
@@ -23,7 +18,6 @@ local LOG = (typeof(Logger.scope) == "function" and Logger.scope("ShopScreen"))
 	or (typeof(Logger["for"]) == "function" and Logger["for"]("ShopScreen"))
 	or { debug=function()end, info=function()end, warn=function(...) warn(...) end }
 
--- ui/components/*
 local uiRoot = script.Parent.Parent
 local componentsFolder = uiRoot:WaitForChild("components")
 local ShopUI        = require(componentsFolder:WaitForChild("ShopUI"))
@@ -32,29 +26,16 @@ local ShopWires     = require(componentsFolder:WaitForChild("controllers"):WaitF
 local TalismanBoard = require(componentsFolder:WaitForChild("TalismanBoard"))
 
 export type Payload = {
-	items: {any}?,
-	stock: {any}?,
-	mon: number?,
-	totalMon: number?,
-	rerollCost: number?,
-	canReroll: boolean?,
-	seasonSum: number?,
-	target: number?,
-	rewardMon: number?,
-	lang: string?,
-	notice: string?,
-	currentDeck: any?,
-	state: any?,
+	items: {any}?, stock: {any}?,
+	mon: number?, totalMon: number?,
+	rerollCost: number?, canReroll: boolean?,
+	seasonSum: number?, target: number?, rewardMon: number?,
+	lang: string?, notice: string?, currentDeck: any?, state: any?,
 }
 
---==================================================
--- helpers
---==================================================
-
+--================ helpers ================
 local function normalizeLang(lang: string?): string
-	-- Locale.normalize が 'jp'→'ja' を内包
 	local v = Locale.normalize(lang)
-	-- 念のため 'jp' の名残を検知してログ（フォレンジック用）
 	if tostring(lang or ""):lower() == "jp" and v == "ja" then
 		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
 	end
@@ -68,22 +49,15 @@ local function countItems(p: Payload?): number
 	return 0
 end
 
--- 在庫構成のシグネチャを生成（順序も反映する軽量版）
 local function stockSignature(items: {any}?): string
 	if typeof(items) ~= "table" then return "<nil>" end
 	local parts = { tostring(#items) }
 	for _, it in ipairs(items) do
-		-- できるだけ安定するキーを優先
 		local id    = (it and it.id) or (it and it.code) or (it and it.sku) or ""
 		local kind  = (it and (it.kind or it.type or it.category)) or ""
 		local price = (it and (it.price or it.cost)) or ""
 		local extra = (it and it.uid) or (it and it.name) or ""
-		parts[#parts+1] = table.concat({
-			tostring(id),
-			tostring(kind),
-			tostring(price),
-			tostring(extra),
-		}, ":")
+		parts[#parts+1] = table.concat({tostring(id), tostring(kind), tostring(price), tostring(extra)}, ":")
 	end
 	return table.concat(parts, "||")
 end
@@ -103,29 +77,40 @@ local function cloneSlots6(slots)
 end
 
 local function cloneTalismanData(t)
-	if typeof(t) ~= "table" then
-		return nil
-	end
-	return {
-		maxSlots = tonumber(t.maxSlots or 6) or 6,
-		unlocked = tonumber(t.unlocked or 0) or 0,
-		slots    = cloneSlots6(t.slots),
-	}
+	if typeof(t) ~= "table" then return nil end
+	return { maxSlots=tonumber(t.maxSlots or 6) or 6, unlocked=tonumber(t.unlocked or 0) or 0, slots=cloneSlots6(t.slots) }
 end
 
 local function talismanSignature(t)
 	if typeof(t) ~= "table" then return "<nil>" end
 	local parts = { tostring(tonumber(t.unlocked or 0) or 0) }
 	local s = t.slots or {}
-	for i = 1, 6 do
-		parts[#parts+1] = tostring(s[i] or "")
-	end
+	for i=1,6 do parts[#parts+1] = tostring(s[i] or "") end
 	return table.concat(parts, "|")
 end
 
---==================================================
--- class
---==================================================
+local function taliTitleText(lang: string?): string
+	local l = lang or "ja"
+	local s = Locale.t(l, "SHOP_UI_TALISMAN_BOARD_TITLE")
+	if s == "SHOP_UI_TALISMAN_BOARD_TITLE" then s = Locale.t(l, "SHOP_UI_TALISMAN_BOARD") end
+	return s
+end
+
+local function normalizePayload(p: Payload?): Payload?
+	if not p then return nil end
+	if p.lang then
+		local nl = normalizeLang(p.lang); if nl and nl ~= p.lang then p.lang = nl end
+	end
+	if typeof(p.items) ~= "table" and typeof(p.stock) == "table" then
+		p.items = p.stock
+	end
+	return p
+end
+
+--================ class ==================
+local function _bindSelf(self, fn)
+	return function(_, ...) return fn(self, ...) end
+end
 
 function Shop.new(deps)
 	local self = setmetatable({}, Shop)
@@ -139,56 +124,41 @@ function Shop.new(deps)
 	self._bg = nil
 	self._taliBoard = nil
 
-	-- プレビュー/ローカル影/シグネチャ
 	self._preview = nil
 	self._lastPlaced = nil
 	self._localBoard = nil
 	self._taliSig = "<none>"
 
-	-- 一時SoldOut
 	self._hiddenItems = {}   -- [itemId]=true
 	self._stockSig = ""      -- 在庫構成署名
 
-	-- UI生成
 	local gui, nodes = ShopUI.build()
 	self.gui = gui
 	self._nodes = nodes
-
-	-- 背景
 	self:_ensureBg()
 
-	-- 配線＆初期プレースホルダ
 	ShopWires.wireButtons(self)
 	ShopWires.applyInfoPlaceholder(self)
 
-	-- ===== 護符ボード：下段（taliArea）に設置 =====
 	do
-		local parent = nodes.taliArea or gui  -- 念のためフォールバック
+		local parent = nodes.taliArea or gui
 		self._taliBoard = TalismanBoard.new(parent, {
-			title      = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE"),
-			widthScale = 0.95,   -- 下段にフィット
-			padScale   = 0.01,
+			title      = taliTitleText(self._lang or "ja"),
+			widthScale = 0.95, padScale = 0.01,
 		})
 		local inst = self._taliBoard:getInstance()
-		inst.AnchorPoint = Vector2.new(0.5, 0)     -- 中央寄せ
-		inst.Position    = UDim2.fromScale(0.5, 0) -- 上端中央
-		inst.ZIndex      = 2                       -- 本文よりやや上
+		inst.AnchorPoint = Vector2.new(0.5, 0); inst.Position = UDim2.fromScale(0.5, 0); inst.ZIndex = 2
 	end
-	-- ==============================================
 
-	-- Remotes（S4）
 	self._remotes = RS:WaitForChild("Remotes", 10)
 	if not self._remotes then
 		LOG.warn("[ShopScreen] Remotes folder missing (timeout)")
 	else
 		self._placeRE = self._remotes:WaitForChild("PlaceOnSlot", 10)
-		if not self._placeRE then
-			LOG.warn("[ShopScreen] PlaceOnSlot missing (timeout)")
-		end
+		if not self._placeRE then LOG.warn("[ShopScreen] PlaceOnSlot missing (timeout)") end
 		local ack = self._remotes:FindFirstChild("TalismanPlaced")
 		if ack and ack:IsA("RemoteEvent") then
 			ack.OnClientEvent:Connect(function(data)
-				-- サーバ確定：ローカル影を更新
 				local base = getTalismanFromPayload(self._payload) or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
 				self._localBoard = {
 					maxSlots = base.maxSlots or 6,
@@ -196,53 +166,48 @@ function Shop.new(deps)
 					slots    = (data and data.slots) or cloneSlots6(base.slots),
 				}
 				self._taliSig = talismanSignature(self._localBoard)
-				self._preview = nil
-				self._lastPlaced = nil
-				if self._taliBoard then
-					self._taliBoard:setData(self._localBoard)
-				end
-				LOG.debug("ack TalismanPlaced | idx=%s id=%s", tostring(data and data.index), tostring(data and data.id))
+				self._preview = nil; self._lastPlaced = nil
+				if self._taliBoard then self._taliBoard:setData(self._localBoard) end
+				LOG.info("ack TalismanPlaced | idx=%s id=%s sig=%s", tostring(data and data.index), tostring(data and data.id), self._taliSig)
 			end)
 		end
 	end
 
-	self.LOG = LOG
-	LOG.debug("boot")
+	self.show          = _bindSelf(self, Shop.show)
+	self.update        = _bindSelf(self, Shop.update)
+	self.setData       = _bindSelf(self, Shop.setData)
+	self.setLang       = _bindSelf(self, Shop.setLang)
+	self.attachRemotes = _bindSelf(self, Shop.attachRemotes)
+	self.autoPlace     = _bindSelf(self, Shop.autoPlace)
+
+	LOG.info("boot")
 	return self
 end
 
---==================================================
--- public
---==================================================
-
+--============ private utils =============
 function Shop:_snapBoard()
-	return self._localBoard
-		or self._preview
-		or getTalismanFromPayload(self._payload)
-		or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
+	return self._localBoard or self._preview or getTalismanFromPayload(self._payload) or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
 end
 
 function Shop:_findFirstEmpty()
 	local t = self:_snapBoard()
 	local unlocked = tonumber(t.unlocked or 0) or 0
 	local slots = t.slots or {}
-	for i=1, math.min(unlocked, 6) do
-		if slots[i] == nil then return i end
-	end
+	for i=1, math.min(unlocked, 6) do if slots[i] == nil then return i end end
 	return nil
 end
 
--- 在庫シグネチャ更新 + 一時非表示キャッシュの整合
 function Shop:_refreshStockSignature(payload: Payload?)
 	local items = (payload and (payload.items or payload.stock)) or {}
-	local sig = stockSignature(items)
+	local newSig = stockSignature(items)
+	local oldSig = self._stockSig
 
-	if sig ~= self._stockSig then
-		self._stockSig = sig
-		self._hiddenItems = {}                -- 在庫が変わったら必ず解除
-		self.LOG.debug("[Shop] stock changed -> clear hidden")
+	if newSig ~= oldSig then
+		self._stockSig = newSig
+		self._hiddenItems = {}
+		LOG.info("[stock] changed -> clear hidden | old=%s new=%s count=%d", tostring(oldSig), tostring(newSig), #items)
 	else
-		-- セーフティ：可視件数0なのに在庫>0なら、隠しキャッシュを強制解除
+		-- 現在の hidden 適用後の可視件数
 		local visible = 0
 		for _, it in ipairs(items) do
 			local id = it and it.id
@@ -250,144 +215,100 @@ function Shop:_refreshStockSignature(payload: Payload?)
 		end
 		if visible == 0 and #items > 0 then
 			self._hiddenItems = {}
-			self.LOG.warn("[Shop] visible=0 while items=%d; cleared hidden cache (safety)", #items)
+			LOG.warn("[stock] visible=0 while items=%d; forced clear hidden (safety)", #items)
 		end
+		LOG.info("[stock] unchanged | sig=%s items=%d visible=%d hiddenCache#=%d", tostring(newSig), #items, visible, (function() local c=0 for _ in pairs(self._hiddenItems) do c+=1 end return c end)())
 	end
-end
-
-function Shop:isItemHidden(id: any)
-	if id == nil then return false end
-	return self._hiddenItems[tostring(id)] == true
-end
-function Shop:hideItemTemporarily(id: any)
-	if id == nil then return end
-	self._hiddenItems[tostring(id)] = true
-	self:_render()
 end
 
 local function maybeClearPreview(self)
 	if not self._preview or not self._lastPlaced then return end
-	local base = self:_snapBoard()
-	if not base or not base.slots then return end
-	local idx = self._lastPlaced.index
-	local id  = self._lastPlaced.id
+	local base = self:_snapBoard(); if not base or not base.slots then return end
+	local idx = self._lastPlaced.index; local id  = self._lastPlaced.id
 	if idx and id and base.slots[idx] == id then
-		self._preview = nil
-		self._lastPlaced = nil
-		LOG.info("[Shop] preview cleared by server state | idx=%d id=%s", idx, id)
+		self._preview = nil; self._lastPlaced = nil
+		LOG.info("[preview] cleared by server state | idx=%d id=%s", idx, id)
 	end
 end
 
--- サーバ確定 talisman をローカルへ即時反映（重複ならスキップ）
 function Shop:_applyServerTalismanOnce(payload: Payload?)
 	local sv = cloneTalismanData(getTalismanFromPayload(payload))
 	if not sv then return end
 	local sig = talismanSignature(sv)
-	if sig == self._taliSig then
-		-- 同一なら再描画不要
-		return
-	end
-	self._localBoard = sv
-	self._taliSig = sig
-	self._preview = nil
-	self._lastPlaced = nil
-	if self._taliBoard then
-		self._taliBoard:setData(self._localBoard)
-	end
-	LOG.debug("[Shop] server talisman applied | sig=%s", sig)
+	if sig == self._taliSig then return end
+	self._localBoard = sv; self._taliSig = sig; self._preview = nil; self._lastPlaced = nil
+	if self._taliBoard then self._taliBoard:setData(self._localBoard) end
+	LOG.info("[talisman] server applied | sig=%s", sig)
 end
 
+function Shop:_syncTalismanBoard()
+	if not self._taliBoard then return end
+	local lang = self._lang or "ja"
+	pcall(function()
+		if typeof(self._taliBoard.setLang) == "function" then self._taliBoard:setLang(lang) end
+		if typeof(self._taliBoard.setData) == "function" then self._taliBoard:setData(self:_snapBoard()) end
+		local inst = self._taliBoard:getInstance()
+		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
+			inst.Title.Text = taliTitleText(lang)
+		end
+	end)
+end
+
+--================ public =================
 function Shop:setData(payload: Payload)
-	if payload and payload.lang then
-		local nl = normalizeLang(payload.lang)
-		if nl and nl ~= payload.lang then payload.lang = nl end
-		self._lang = nl or self._lang
-	end
+	payload = normalizePayload(payload)
+	if payload and payload.lang then self._lang = payload.lang end
 	self:_refreshStockSignature(payload)
 	self._payload = payload
 	maybeClearPreview(self)
-
-	-- サーバ確定護符を優先反映（差分時のみ）
 	self:_applyServerTalismanOnce(payload)
 
-	LOG.debug("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
-
-	if self._taliBoard then
-		self._taliBoard:setLang(self._lang or "ja")
-		-- ここでの setData は差分適用済み（_applyServerTalismanOnce 内）なので冪等維持
-		self._taliBoard:setData(self:_snapBoard())
-	end
-
+	LOG.info("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
+	self:_syncTalismanBoard()
 	self:_render()
 end
 
 function Shop:show(payload: Payload?)
 	if payload then
-		if payload.lang then
-			local nl = normalizeLang(payload.lang)
-			if nl and nl ~= payload.lang then payload.lang = nl end
-			self._lang = nl or self._lang
-		end
+		payload = normalizePayload(payload)
+		if payload and payload.lang then self._lang = payload.lang end
 		self:_refreshStockSignature(payload)
 		self._payload = payload
-		-- 表示初期化：サーバ確定 talisman を即時反映（プレビューは破棄）
 		self:_applyServerTalismanOnce(payload)
 		maybeClearPreview(self)
-
-		-- ★戻ってきたときの取りこぼし対策（UI状態を初期化）
-		self._hiddenItems = {}
-		self._buyBusy = false
-		self._rerollBusy = false
 	end
+
+	-- UI状態を必ず初期化（戻り遷移含む）
+	self._hiddenItems = {}; self._buyBusy = false; self._rerollBusy = false
+	-- セーフティ：初期化後の在庫整合を再チェック
+	self:_refreshStockSignature(self._payload)
+
 	self.gui.Enabled = true
 	self:_ensureBg(true)
 	LOG.info("show | enabled=true items=%d lang=%s", countItems(self._payload), tostring(self._lang))
 
-	if self._taliBoard then
-		self._taliBoard:setLang(self._lang or "ja")
-		self._taliBoard:setData(self:_snapBoard())
-		-- タイトルは言語に合わせて更新（Locale.t はフォールバック内蔵）
-		local inst = self._taliBoard:getInstance()
-		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
-			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
-		end
-	end
-
+	self:_syncTalismanBoard()
 	self:_render()
 	self:_applyRerollButtonState()
 end
 
 function Shop:hide()
-	if self.gui.Enabled then
-		LOG.debug("hide | enabled=false")
-	end
+	if self.gui.Enabled then LOG.info("hide | enabled=false") end
 	self.gui.Enabled = false
 end
 
 function Shop:update(payload: Payload?)
 	if payload then
-		if payload.lang then
-			local nl = normalizeLang(payload.lang)
-			if nl and nl ~= payload.lang then payload.lang = nl end
-			self._lang = nl or self._lang
-		end
+		payload = normalizePayload(payload)
+		if payload and payload.lang then self._lang = payload.lang end
 		self:_refreshStockSignature(payload)
 		self._payload = payload
-		-- 連続 open/update 時も差分だけ適用
 		self:_applyServerTalismanOnce(payload)
 		maybeClearPreview(self)
 	end
-	LOG.debug("update | items=%d lang=%s", countItems(self._payload), tostring(self._lang))
 
-	if self._taliBoard then
-		self._taliBoard:setLang(self._lang or "ja")
-		self._taliBoard:setData(self:_snapBoard())
-		local inst = self._taliBoard:getInstance()
-		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
-			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
-		end
-	end
-
+	LOG.info("update | items=%d lang=%s", countItems(self._payload), tostring(self._lang))
+	self:_syncTalismanBoard()
 	self:_render()
 	self:_applyRerollButtonState()
 end
@@ -395,67 +316,39 @@ end
 function Shop:setLang(lang: string?)
 	self._lang = normalizeLang(lang)
 	ShopWires.applyInfoPlaceholder(self)
-	if self._taliBoard then
-		self._taliBoard:setLang(self._lang or "ja")
-		local inst = self._taliBoard:getInstance()
-		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
-			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
-		end
-	end
+	self:_syncTalismanBoard()
 end
 
 function Shop:attachRemotes(remotes: any, router: any?)
-	LOG.debug("attachRemotes (compat)")
+	LOG.info("attachRemotes (compat)")
 	return ShopWires.attachRemotes(self, remotes, router)
 end
 
---==================================================
--- S4: auto-place（唯一の配置経路）
---==================================================
-
+--============== auto-place ==============
 function Shop:autoPlace(talismanId: string, item: any?)
 	if not talismanId or talismanId == "" then
-		LOG.warn("[Shop] autoPlace: invalid talismanId")
-		return
+		LOG.warn("[Shop] autoPlace: invalid talismanId"); return
 	end
-
-	-- 条件：護符配列が無い or 空スロットがある（_findFirstEmpty() が nil なら中止）
 	local idx = self:_findFirstEmpty()
 	if not idx then
 		local toast = self.deps and self.deps.toast
-		if typeof(toast) == "function" then
-			toast(Locale.t(self._lang, "SHOP_UI_NO_EMPTY_SLOT"))
-		end
-		LOG.info("[Shop] autoPlace aborted: no empty slot")
-		return
+		if typeof(toast) == "function" then toast(Locale.t(self._lang, "SHOP_UI_NO_EMPTY_SLOT")) end
+		LOG.info("[Shop] autoPlace aborted: no empty slot"); return
 	end
-
-	-- UI: 直ちに「売り切れ」扱いにして非表示
-	if item and item.id ~= nil then
-		self:hideItemTemporarily(item.id)
-	end
-
+	if item and item.id ~= nil then self:hideItemTemporarily(item.id) end
 	LOG.info("[Shop] auto-place index=%d id=%s", idx, tostring(talismanId))
 
-	-- プレビュー反映
 	local t = self:_snapBoard()
-	local preview = {
-		maxSlots = t.maxSlots or 6,
-		unlocked = t.unlocked or 0,
-		slots    = cloneSlots6(t.slots),
-	}
+	local preview = { maxSlots = t.maxSlots or 6, unlocked = t.unlocked or 0, slots = cloneSlots6(t.slots) }
 	preview.slots[idx] = tostring(talismanId) .. "(仮)"
-	self._preview = preview
-	self._lastPlaced = { index = idx, id = talismanId }
+	self._preview = preview; self._lastPlaced = { index = idx, id = talismanId }
 	if self._taliBoard then
 		self._taliBoard:setData(self._preview)
 		local inst = self._taliBoard:getInstance()
 		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
-			inst.Title.Text = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
+			inst.Title.Text = taliTitleText(self._lang or "ja")
 		end
 	end
-
-	-- サーバ確定
 	if self._placeRE and self._placeRE:IsA("RemoteEvent") then
 		self._placeRE:FireServer(idx, talismanId)
 	else
@@ -463,42 +356,36 @@ function Shop:autoPlace(talismanId: string, item: any?)
 	end
 end
 
---==================================================
--- render
---==================================================
-
+--============== render ==================
 function Shop:_render()
 	return ShopRenderer.render(self)
 end
 
---==================================================
--- internal utils
---==================================================
-
+--============== internals ===============
 function Shop:_ensureBg(forceToBack: boolean?)
 	if not self.gui then return end
 	local bg = self._bg
 	if not bg or not bg.Parent then
 		bg = Instance.new("ImageLabel")
-		bg.Name = "BgImage"
-		bg.BackgroundTransparency = 1
-		bg.BorderSizePixel = 0
-		bg.Active = false
-		bg.ScaleType = Enum.ScaleType.Crop
-		bg.AnchorPoint = Vector2.new(0.5, 0.5)
-		bg.Position = UDim2.fromScale(0.5, 0.5)
-		bg.Size = UDim2.fromScale(1, 1)
-		bg.ZIndex = 0
-		bg.Parent = self.gui
-		self._bg = bg
+		bg.Name = "BgImage"; bg.BackgroundTransparency = 1; bg.BorderSizePixel = 0; bg.Active = false
+		bg.ScaleType = Enum.ScaleType.Crop; bg.AnchorPoint = Vector2.new(0.5, 0.5); bg.Position = UDim2.fromScale(0.5, 0.5)
+		bg.Size = UDim2.fromScale(1, 1); bg.ZIndex = 0; bg.Parent = self.gui; self._bg = bg
 	end
 	bg.Image = Theme.IMAGES and Theme.IMAGES.SHOP_BG or ""
 	bg.ImageTransparency = (Theme.TRANSPARENCY and Theme.TRANSPARENCY.shopBg) or 0
-	if forceToBack then
-		bg.ZIndex = 0
-		bg.LayoutOrder = -10000
-		bg.Parent = self.gui
-	end
+	if forceToBack then bg.ZIndex = 0; bg.LayoutOrder = -10000; bg.Parent = self.gui end
+end
+
+function Shop:isItemHidden(id: any)
+	if id == nil then return false end
+	return self._hiddenItems[tostring(id)] == true
+end
+
+function Shop:hideItemTemporarily(id: any)
+	if id == nil then return end
+	self._hiddenItems[tostring(id)] = true
+	LOG.info("[stock] hideItem temp id=%s hidden#=%d", tostring(id), (function() local c=0 for _ in pairs(self._hiddenItems) do c+=1 end return c end)())
+	self:_render()
 end
 
 function Shop:_applyRerollButtonState()
@@ -506,10 +393,12 @@ function Shop:_applyRerollButtonState()
 	local money = tonumber(p.mon or p.totalMon or 0) or 0
 	local cost  = tonumber(p.rerollCost or 1) or 1
 	local can   = (p.canReroll ~= false) and (money >= cost)
+	local active = (self._rerollBusy ~= true) and can
 	if self._nodes and self._nodes.rerollBtn then
-		self._nodes.rerollBtn.Active = can
-		self._nodes.rerollBtn.AutoButtonColor = can
+		self._nodes.rerollBtn.Active = active
+		self._nodes.rerollBtn.AutoButtonColor = active
 	end
+	LOG.info("[reroll] btnState active=%s mon=%d cost=%d can=%s busy=%s", tostring(active), money, cost, tostring(can), tostring(self._rerollBusy))
 end
 
 return Shop

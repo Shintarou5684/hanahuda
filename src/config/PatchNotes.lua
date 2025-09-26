@@ -22,7 +22,28 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+		-- ★ 0.9.6.5（Deck Reforge / 外部向け）
+	{
+		ver  = "v0.9.6.5",
+		date = "2025-09-26",
+		changes = {
+			{ ja = "デッキの土台を作り直し、“強化・変身・付与”などカード変化系の効果を今後スムーズに追加できるようにしました。",
+			  en = "Reforged the deck foundation so evolve/transform/augment-type card effects can be added smoothly." },
+
+			{ ja = "今回のプレイ感はキープ（得点計算や難易度の変更はありません）。",
+			  en = "No balance change this update; scoring and difficulty remain the same." },
+
+			{ ja = "対象カードの選び方を統一し、選択が分かりやすくなりました（12枚候補から選ぶ流れ）。",
+			  en = "Target selection is clearer and more consistent (unified 12-card choice flow)." },
+
+			{ ja = "反映の信頼性を向上（カード変化が即時かつ一度だけ適用されます）。",
+			  en = "Improved reliability: card changes now apply instantly and only once." },
+		}
+	},
+
+	
 	-- ★ 0.9.6.3（外部向け・簡潔）
+	
 	{
 		ver  = "v0.9.6.3",
 		date = "2025-09-21",
@@ -57,6 +78,7 @@ local ENTRIES = {
 	},
 
 	-- ここから下は既存（変更なし）
+
 	{
 		ver  = "v0.9.6",
 		date = "2025-09-17",

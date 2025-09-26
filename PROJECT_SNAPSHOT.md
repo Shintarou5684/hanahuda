@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-26 01:09:07
+- Generated: 2025-09-26 08:22:39
 - Max lines/file: 300
 
 ## Folder Tree
@@ -809,7 +809,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-26 01:09:07
+- Generated: 2025-09-26 08:22:39
 - Max lines/file: 300
 
 ## Folder Tree
@@ -6645,11 +6645,12 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 ### src/client/ui/screens/ShopScreen.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.7-P2-11 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
+-- v0.9.7-P2-12 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
 --  - payload.lang を Locale.normalize で正規化し _lang に保持（'jp'→'ja' を含む）
 --  - show/setData/update で _lang を子へ伝播（TalismanBoard 含む）
 --  - サーバ確定 talisman を優先反映（差分時のみ）
 --  - 同一データの再描画を抑止（talisman シグネチャ比較）
+--  - 在庫署名と一時非表示キャッシュの整合を強化（可視0なら強制解除のセーフティ）
 
 local Shop = {}
 Shop.__index = Shop
@@ -6713,6 +6714,26 @@ local function countItems(p: Payload?): number
 	return 0
 end
 
+-- 在庫構成のシグネチャを生成（順序も反映する軽量版）
+local function stockSignature(items: {any}?): string
+	if typeof(items) ~= "table" then return "<nil>" end
+	local parts = { tostring(#items) }
+	for _, it in ipairs(items) do
+		-- できるだけ安定するキーを優先
+		local id    = (it and it.id) or (it and it.code) or (it and it.sku) or ""
+		local kind  = (it and (it.kind or it.type or it.category)) or ""
+		local price = (it and (it.price or it.cost)) or ""
+		local extra = (it and it.uid) or (it and it.name) or ""
+		parts[#parts+1] = table.concat({
+			tostring(id),
+			tostring(kind),
+			tostring(price),
+			tostring(extra),
+		}, ":")
+	end
+	return table.concat(parts, "||")
+end
+
 local function getTalismanFromPayload(p: Payload?)
 	if not p then return nil end
 	local s = p.state
@@ -6736,16 +6757,6 @@ local function cloneTalismanData(t)
 		unlocked = tonumber(t.unlocked or 0) or 0,
 		slots    = cloneSlots6(t.slots),
 	}
-end
-
-local function stockSignature(itemsTbl)
-	if type(itemsTbl) ~= "table" then return "" end
-	local ids = {}
-	for i, it in ipairs(itemsTbl) do
-		ids[i] = tostring(it.id or ("#"..i))
-	end
-	table.sort(ids)
-	return table.concat(ids, "|")
 end
 
 local function talismanSignature(t)
@@ -6867,13 +6878,26 @@ function Shop:_findFirstEmpty()
 	return nil
 end
 
+-- 在庫シグネチャ更新 + 一時非表示キャッシュの整合
 function Shop:_refreshStockSignature(payload: Payload?)
 	local items = (payload and (payload.items or payload.stock)) or {}
 	local sig = stockSignature(items)
+
 	if sig ~= self._stockSig then
 		self._stockSig = sig
-		self._hiddenItems = {}
-		LOG.debug("[Shop] stock changed -> clear hidden")
+		self._hiddenItems = {}                -- 在庫が変わったら必ず解除
+		self.LOG.debug("[Shop] stock changed -> clear hidden")
+	else
+		-- セーフティ：可視件数0なのに在庫>0なら、隠しキャッシュを強制解除
+		local visible = 0
+		for _, it in ipairs(items) do
+			local id = it and it.id
+			if not self:isItemHidden(id) then visible += 1 end
+		end
+		if visible == 0 and #items > 0 then
+			self._hiddenItems = {}
+			self.LOG.warn("[Shop] visible=0 while items=%d; cleared hidden cache (safety)", #items)
+		end
 	end
 end
 
@@ -6920,30 +6944,6 @@ function Shop:_applyServerTalismanOnce(payload: Payload?)
 end
 
 function Shop:setData(payload: Payload)
-	if payload and payload.lang then
-		local nl = normalizeLang(payload.lang)
-		if nl and nl ~= payload.lang then payload.lang = nl end
-		self._lang = nl or self._lang
-	end
-	self:_refreshStockSignature(payload)
-	self._payload = payload
-	maybeClearPreview(self)
-
-	-- サーバ確定護符を優先反映（差分時のみ）
-	self:_applyServerTalismanOnce(payload)
-
-	LOG.debug("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
-
-	if self._taliBoard then
-		self._taliBoard:setLang(self._lang or "ja")
-		-- ここでの setData は差分適用済み（_applyServerTalismanOnce 内）なので冪等維持
-		self._taliBoard:setData(self:_snapBoard())
-	end
-
-	self:_render()
-end
-
-function Shop:show(payload: Payload?)
 ... (truncated)
 ```
 
@@ -7367,7 +7367,28 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+		-- ★ 0.9.6.5（Deck Reforge / 外部向け）
+	{
+		ver  = "v0.9.6.5",
+		date = "2025-09-26",
+		changes = {
+			{ ja = "デッキの土台を作り直し、“強化・変身・付与”などカード変化系の効果を今後スムーズに追加できるようにしました。",
+			  en = "Reforged the deck foundation so evolve/transform/augment-type card effects can be added smoothly." },
+
+			{ ja = "今回のプレイ感はキープ（得点計算や難易度の変更はありません）。",
+			  en = "No balance change this update; scoring and difficulty remain the same." },
+
+			{ ja = "対象カードの選び方を統一し、選択が分かりやすくなりました（12枚候補から選ぶ流れ）。",
+			  en = "Target selection is clearer and more consistent (unified 12-card choice flow)." },
+
+			{ ja = "反映の信頼性を向上（カード変化が即時かつ一度だけ適用されます）。",
+			  en = "Improved reliability: card changes now apply instantly and only once." },
+		}
+	},
+
+	
 	-- ★ 0.9.6.3（外部向け・簡潔）
+	
 	{
 		ver  = "v0.9.6.3",
 		date = "2025-09-21",
@@ -7402,6 +7423,7 @@ local ENTRIES = {
 	},
 
 	-- ここから下は既存（変更なし）
+
 	{
 		ver  = "v0.9.6",
 		date = "2025-09-17",
@@ -7729,6 +7751,8 @@ return Theme
 --  - ★ P2-10: ラン終了後は強制NEW（_forceNewOnNextStart フラグを尊重）
 --  - ★ v0.9.3: Deck/EffectsRegistry の一括登録を起動時に実行
 --              ＋ 酉UI用 Remotes（KitoPickStart/KitoPickDecide）を正式に生やす
+--  - ★ v0.9.3-fix: ShopDone 時に DeckRegistry の最新スナップショットを次シーズンへ明示伝播
+--                  （変更されたデッキを直後のシーズンで必ず使用）
 
 --==================================================
 -- Services
@@ -7845,6 +7869,15 @@ local KitoPickServer do
 	else
 		KitoPickServer = nil
 	end
+end
+
+-- ★ DeckRegistry（最新デッキ状態のソース）
+local DeckRegistry do
+	local ok, mod = pcall(function()
+		-- プロジェクト構成に合わせて DeckRegistry の場所を解決
+		return require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+	end)
+	DeckRegistry = ok and mod or nil
 end
 
 --==================================================
@@ -8004,17 +8037,6 @@ Players.PlayerAdded:Connect(function(plr)
 	LOG.info(
 		"HomeOpen → C | user=%s lang=%s hasSave=%s bank=%d year=%d clears=%d",
 		plr.Name, s.lang, tostring(hasSave), s.bank or 0, s.year or 0, s.totalClears or 0
-	)
-
-	HomeOpen:FireClient(plr, {
-		hasSave = hasSave,
-		bank    = s.bank,
-		year    = s.year,
-		clears  = s.totalClears or 0,
-		lang    = s.lang, -- "ja" or "en"
-	})
-end)
-
 ... (truncated)
 ```
 
@@ -10226,14 +10248,15 @@ return M
 ### src/shared/Deck/DeckRegistry.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/DeckRegistry.lua
--- v0.9.3+uid DeckRegistry（ラン別の共有レジストリ）
+-- v0.9.3+uid +dumpSnapshot DeckRegistry（ラン別の共有レジストリ）
 -- 役割:
 --   - runId 単位で v3 形式の deck store（{v=3, entries=[...] }）を保持
 --   - state(run.configSnapshot / state.deck など) から初期化/補完
 --   - v1/v2 スナップショットも CardEngine で復元して v3 entries へ正規化
 --   - ★ entries に uid を必ず付与（code 重複でも一意に識別できる）
 --   - ★ UID 指定での 1枚差し替えユーティリティを提供
---
+--   - ★ dumpSnapshot を追加（v3 store → Round.newRound(opts.deckSnapshot) 互換形式へ）
+
 -- 依存:
 --   - CardEngine（buildDeckFromSnapshot / buildSnapshot / toCode / fromCode / buildDeck）
 --   - RunDeckUtil（任意）: snapshot(state) があれば使う
@@ -10284,7 +10307,7 @@ end
 local function _toV3Store(entries:any)
 	local out = {}
 	if typeof(entries) == "table" then
-	 for _, e in ipairs(entries) do
+		for _, e in ipairs(entries) do
 			local c = _cloneEntryLike(e)
 			if c then
 				-- month/idx が無いなら code から補完
@@ -10524,7 +10547,6 @@ function M.size(runId:any): number
 	local s = M.read(runId)
 	return typeof(s.entries)=="table" and #s.entries or 0
 end
-
 ... (truncated)
 ```
 
@@ -12303,7 +12325,8 @@ return Reroll
 
 ### src/shared/RoundService.lua
 ```lua
--- v0.9.1 季節開始ロジック（configSnapshot → 当季デッキ → ★季節開始スナップ保存）
+-- v0.9.1 → v0.9.1-nextdeck
+-- 季節開始ロジック（configSnapshot/外部デッキスナップ → 当季デッキ → ★季節開始スナップ保存）
 local RS = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
 local HttpService = game:GetService("HttpService")
@@ -12333,6 +12356,15 @@ local function makeSeasonSeed(seasonNum: number?)
 	return num
 end
 
+-- ★ ランIDを状態に付与（なければ採番）
+local function ensureRunId(state)
+	state.run = state.run or {}
+	if not state.run.id or state.run.id == "" then
+		state.run.id = HttpService:GenerateGUID(false)
+	end
+	return state.run.id
+end
+
 -- 次季に繰り越された bright 変換スタックを消化（ラン構成に反映）
 local function consumeQueuedConversions(state, rng)
 	local bonus = state.bonus
@@ -12351,13 +12383,53 @@ local function consumeQueuedConversions(state, rng)
 	end
 end
 
--- 季節開始（1=春, 2=夏, ...）
-function Round.newRound(plr: Player, seasonNum: number)
-	local s = StateHub.get(plr) or {}
+-- ★ DeckRegistry.dumpSnapshot(runId) 等から来る可能性を想定して
+--   「構成デッキ」形式へ寄せる（配列 or snap.cards を許容）
+local function snapshotToConfigDeck(snap)
+	if not snap then return nil end
+	local src = snap.cards or snap
+	if type(src) ~= "table" then return nil end
 
-	-- 1) ラン構成をロード（無ければ初期化）
+	local cfg = {}
+	for i, c in ipairs(src) do
+		-- month/idx/kind/name/tags/code が取れればそのまま採用
+		cfg[i] = {
+			month = c.month, idx = c.idx, kind = c.kind,
+			name  = c.name,  tags = (c.tags and table.clone(c.tags) or nil),
+			code  = c.code,
+		}
+	end
+	-- 48枚想定。足りない/壊れていたら無効
+	if #cfg < 48 then return nil end
+	return cfg
+end
+
+-- 季節開始（1=春, 2=夏, ...）
+-- ★ 第3引数 opts を追加。opts.deckSnapshot があればそれを最優先で当季の構成に使う。
+function Round.newRound(plr: Player, seasonNum: number, opts: any?)
+	opts = opts or {}
+
+	local s = StateHub.get(plr) or {}
+	-- ランIDを必ず持たせる（GameInit からの参照用）
+	local runId = ensureRunId(s)
+
+	-- 1) ラン構成をロード or 外部スナップで上書き
 	consumeQueuedConversions(s, Random.new())
-	local configDeck = RunDeckUtil.loadConfig(s, true) -- 48枚
+
+	local configDeck
+	if opts.deckSnapshot then
+		configDeck = snapshotToConfigDeck(opts.deckSnapshot)
+		-- 破損や想定外フォーマットなら従来のロードにフォールバック
+		if not configDeck then
+			warn("[RoundService] deckSnapshot was invalid; falling back to RunDeckUtil.loadConfig")
+			configDeck = RunDeckUtil.loadConfig(s, true)
+		else
+			-- 外部スナップが有効なら構成の正本として保存しておく
+			RunDeckUtil.saveConfig(s, configDeck)
+		end
+	else
+		configDeck = RunDeckUtil.loadConfig(s, true) -- 48枚（従来）
+	end
 
 	-- 2) 当季デッキを構成からクローン
 	local seasonDeck = {}
@@ -12379,6 +12451,7 @@ function Round.newRound(plr: Player, seasonNum: number)
 
 	-- 4) 状態保存（命名統一：board/dump）
 	s.run         = s.run or {}
+	-- run.id は ensureRunId でセット済み
 	s.deck        = seasonDeck
 	s.hand        = hand
 	s.board       = board
@@ -12400,8 +12473,9 @@ function Round.newRound(plr: Player, seasonNum: number)
 
 	-- 5) ★ 季節開始スナップを保存（CONTINUE用）
 	if SaveService and SaveService.snapSeasonStart then
-		-- 失敗してもゲームは継続（pcallで保護）
 		pcall(function()
+			-- SaveService 側が deckSnapshot を受ける設計であれば、ここで configDeck も併せて保存しておくと復帰が堅牢
+			-- 既存インタフェース維持のため引数はそのまま
 			SaveService.snapSeasonStart(plr, s, seasonNum)
 		end)
 	end
@@ -12417,12 +12491,20 @@ function Round.resetRun(plr: Player)
 	local fresh = {
 		bank = keepBank, year = keepYear, totalClears = keepClears,
 		mult = 1.0, mon = 0, phase = "play",
-		run = { configSnapshot = nil }, -- 次で自動初期化
+		run = { configSnapshot = nil }, -- 次で自動初期化（run.id は newRound 内で自動採番）
 	}
 	StateHub.set(plr, fresh)
 
 	-- ★ 新ラン開始（newRound 内でスナップも作成される）
 	Round.newRound(plr, 1)
+end
+
+-- ★ GameInit から現在ランIDを引くためのAPI
+function Round.getRunId(plr: Player)
+	local s = StateHub.get(plr)
+	if not s then return nil end
+	if not (s.run and s.run.id) then return nil end
+	return s.run.id
 end
 
 return Round
@@ -14399,17 +14481,15 @@ local function checkAndAddNonce(userId: number, nonce: string?): boolean
 	return true
 end
 
---========================
--- ★ runId 保証ヘルパ
---========================
+-- 置換後（★ run.id を唯一源泉に）
 local function ensureRunId(state:any): string
-	state.run = state.run or {}
-	local id = state.run.runId
-	if type(id) ~= "string" or id == "" then
-		id = Http:GenerateGUID(false) -- 例: "d8c9e0b1-..."
-		state.run.runId = id
-	end
-	return id
+  state.run = state.run or {}
+  local id = state.run.id
+  if type(id) ~= "string" or id == "" then
+    id = Http:GenerateGUID(false)
+    state.run.id = id
+  end
+  return id
 end
 
 --========================
@@ -14598,6 +14678,8 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		state = {
 			run = { talisman = tali },
 			lang = s.lang,
+		},
+	})
 ... (truncated)
 ```
 

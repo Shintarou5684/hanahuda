@@ -1,5 +1,7 @@
 -- StarterPlayerScripts/UI/ClientMain.client.lua
--- v0.9.6-P1-3 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
+-- v0.9.6-P1-4 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
+-- - ShopOpen: kitoPick前面時は画面切替せず、shopを裏でsetData/updateのみ（レース解消）
+-- - Routerの安全スタブに ensure/active を追加
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -110,6 +112,9 @@ do
 	mod.setDeps = (type(mod.setDeps) == "function") and mod.setDeps or function(_) end
 	mod.show    = (type(mod.show)    == "function") and mod.show    or function(_) end
 	mod.call    = (type(mod.call)    == "function") and mod.call    or function() end
+	-- ★ 追加：ensure/active を安全に生やす（bg更新で使用）
+	mod.ensure  = (type(mod.ensure)  == "function") and mod.ensure  or function() end
+	mod.active  = (type(mod.active)  == "function") and mod.active  or function() return nil end
 	-- ★ register を使うので、存在しない場合は安全な no-op を入れておく
 	mod.register = (type(mod.register) == "function") and mod.register or function() end
 	Router = mod
@@ -181,6 +186,30 @@ ShopOpen.OnClientEvent:Connect(function(payload)
 	end
 	local nl = LocaleUtil.norm(p.lang)
 	if nl and nl ~= p.lang then p.lang = nl end
+
+	-- ★ 根本対応：kitoPickが前面のときは shop を「裏で」更新のみ行い、画面は切り替えない
+	local active = (type(Router.active)=="function" and Router.active()) or nil
+	if active == "kitoPick" then
+		local okEnsure, shopInst = pcall(function() return Router.ensure("shop") end)
+		if okEnsure and shopInst then
+			if type(shopInst.setData) == "function" then
+				local ok1, err1 = pcall(function() shopInst:setData(p) end)
+				if not ok1 then LOG.warn("ShopOpen(bg): setData failed: %s", tostring(err1)) end
+			end
+			if type(shopInst.update) == "function" then
+				local ok2, err2 = pcall(function() shopInst:update(p) end)
+				if not ok2 then LOG.warn("ShopOpen(bg): update failed: %s", tostring(err2)) end
+			end
+			LOG.info("<ShopOpen> updated in background | lang=%s (kitoPick active)", tostring(p.lang))
+			return
+		end
+		-- ensure に失敗した場合のみフォールバック遷移
+		Router.show("shop", p)
+		LOG.info("<ShopOpen> routed (fallback) | lang=%s", tostring(p.lang))
+		return
+	end
+
+	-- 通常経路：kitoPick 以外なら素直に遷移
 	Router.show("shop", p)
 	LOG.info("<ShopOpen> routed once | lang=%s", tostring(p.lang))
 end)
