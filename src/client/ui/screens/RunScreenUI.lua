@@ -1,5 +1,6 @@
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
 -- UIビルダーは親付けしない契約（親付けは ScreenRouter の責務）
+-- v0.9.7-P1-5: 「あきらめる」ボタンを追加（refs.buttons.giveUp）
 -- v0.9.7-P1-4: Theme完全デフォルト化（色・画像・透過のUI側フォールバック撤去）
 -- v0.9.7-P1-3: Logger導入／言語コードを "ja"/"en" に統一（入力 "jp" は "ja" へ正規化）
 -- v0.9.6-P0-11 以降：親付け除去／その他の挙動は従来どおり
@@ -120,6 +121,14 @@ local function applyTexts(tRefs)
 				lbl = (_lang == "en") and "Yaku" or "役一覧"
 			end
 			tRefs.buttons.yaku.Text = lbl
+		end
+		-- ★ 新規：あきらめる
+		if tRefs.buttons.giveUp then
+			local txt = Locale.t(_lang, "RUN_BTN_GIVEUP")
+			if not txt or txt == "" or txt == "RUN_BTN_GIVEUP" then
+				txt = (_lang == "en") and "Give Up" or "あきらめる"
+			end
+			tRefs.buttons.giveUp.Text = txt
 		end
 	end
 
@@ -297,6 +306,8 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", BTN_PRIMARY_BG)
 	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", BTN_WARN_BG)
 	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", BTN_WARN_BG)
+	-- ★ 新規：あきらめる（Danger色が無いテーマ想定のため Warn を流用）
+	local btnGiveUp     = makeSideBtn(controlsPanel, "GiveUp",     "", BTN_WARN_BG)
 
 	-- Center
 	makeList(center, Enum.FillDirection.Vertical, 0.02, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
@@ -355,7 +366,13 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 		boardRowTop = M._boardRowTop, boardRowBottom = M._boardRowBottom,
 		takenBox = takenBox, takenPanel = takenPanel,
 		scorePanel = scorePanel, goalPanel = goalPanel,
-		buttons = { yaku = btnYaku, confirm = btnConfirm, rerollAll = btnRerollAll, rerollHand = btnRerollHand },
+		buttons = {
+			yaku = btnYaku,
+			confirm = btnConfirm,
+			rerollAll = btnRerollAll,
+			rerollHand = btnRerollHand,
+			giveUp = btnGiveUp, -- ★ 追加
+		},
 	}
 
 	-- 初期テキスト

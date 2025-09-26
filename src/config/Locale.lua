@@ -100,6 +100,12 @@ local en = {
 	RUN_HELP_LINE        = "Click hand → field to take. Confirm to finish.",
 	RUN_INFO_PLACEHOLDER = "Year:----  Season:--  Target:--  Total:--  Hands:--  Rerolls:--  Mult:--  Bank:--",
 	RUN_SCOREBOX_INIT    = "Score: 0\n0Mon × 0Pts\nRoles: --",
+	-- ★ Abandon（ラン放棄）
+	RUN_BTN_ABANDON      = "Give Up Run",
+	ABANDON_TITLE        = "Give up this run?",
+	ABANDON_DESC         = "This will discard your current progress and return to Home. This action cannot be undone.",
+	ABANDON_CONFIRM      = "Yes, give up",
+	ABANDON_CANCEL       = "No",
 
 	-- Result
 	RESULT_FINAL_TITLE = "Congrats!",
@@ -198,6 +204,12 @@ local ja = {
 	RUN_HELP_LINE        = "手札→場札をクリックで取得。Confirmで確定。",
 	RUN_INFO_PLACEHOLDER = "年:----  季節:--  目標:--  合計:--  残ハンド:--  残リロール:--  倍率:--  Bank:--",
 	RUN_SCOREBOX_INIT    = "得点：0\n文0×0点\n役：--",
+	-- ★ Abandon（ラン放棄）
+	RUN_BTN_ABANDON      = "ランをあきらめる",
+	ABANDON_TITLE        = "このランをあきらめますか？",
+	ABANDON_DESC         = "現在の進行状況は破棄され、ホームに戻ります。この操作は取り消せません。",
+	ABANDON_CONFIRM      = "はい、あきらめる",
+	ABANDON_CANCEL       = "いいえ",
 
 	-- Result
 	RESULT_FINAL_TITLE = "クリアおめでとう！",

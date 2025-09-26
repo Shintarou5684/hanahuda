@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-26 08:22:39
+- Generated: 2025-09-26 14:53:19
 - Max lines/file: 300
 
 ## Folder Tree
@@ -111,6 +111,7 @@ hanahuda
 │   │       │   └── ShrineScreen.lua
 │   │       ├── CameraController.client.lua
 │   │       ├── ClientMain.client.lua
+│   │       ├── DevLogViewer.client.lua
 │   │       └── ScreenRouter.lua
 │   ├── config
 │   │   ├── Balance.lua
@@ -809,7 +810,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-26 08:22:39
+- Generated: 2025-09-26 14:53:19
 - Max lines/file: 300
 
 ## Folder Tree
@@ -919,6 +920,7 @@ hanahuda
 │   │       │   └── ShrineScreen.lua
 │   │       ├── CameraController.client.lua
 │   │       ├── ClientMain.client.lua
+│   │       ├── DevLogViewer.client.lua
 │   │       └── ScreenRouter.lua
 │   ├── config
 │   │   ├── Balance.lua
@@ -1105,7 +1107,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 ---
 
 ### 追記ルール（メモ）
-- 先頭が最新。新しい更新は上に追記。
 ... (truncated)
 ```
 
@@ -1404,7 +1405,9 @@ script.Destroying:Connect(disableGuard)
 ### src/client/ui/ClientMain.client.lua
 ```lua
 -- StarterPlayerScripts/UI/ClientMain.client.lua
--- v0.9.6-P1-3 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
+-- v0.9.6-P1-4 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
+-- - ShopOpen: kitoPick前面時は画面切替せず、shopを裏でsetData/updateのみ（レース解消）
+-- - Routerの安全スタブに ensure/active を追加
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -1515,6 +1518,9 @@ do
 	mod.setDeps = (type(mod.setDeps) == "function") and mod.setDeps or function(_) end
 	mod.show    = (type(mod.show)    == "function") and mod.show    or function(_) end
 	mod.call    = (type(mod.call)    == "function") and mod.call    or function() end
+	-- ★ 追加：ensure/active を安全に生やす（bg更新で使用）
+	mod.ensure  = (type(mod.ensure)  == "function") and mod.ensure  or function() end
+	mod.active  = (type(mod.active)  == "function") and mod.active  or function() return nil end
 	-- ★ register を使うので、存在しない場合は安全な no-op を入れておく
 	mod.register = (type(mod.register) == "function") and mod.register or function() end
 	Router = mod
@@ -1586,6 +1592,30 @@ ShopOpen.OnClientEvent:Connect(function(payload)
 	end
 	local nl = LocaleUtil.norm(p.lang)
 	if nl and nl ~= p.lang then p.lang = nl end
+
+	-- ★ 根本対応：kitoPickが前面のときは shop を「裏で」更新のみ行い、画面は切り替えない
+	local active = (type(Router.active)=="function" and Router.active()) or nil
+	if active == "kitoPick" then
+		local okEnsure, shopInst = pcall(function() return Router.ensure("shop") end)
+		if okEnsure and shopInst then
+			if type(shopInst.setData) == "function" then
+				local ok1, err1 = pcall(function() shopInst:setData(p) end)
+				if not ok1 then LOG.warn("ShopOpen(bg): setData failed: %s", tostring(err1)) end
+			end
+			if type(shopInst.update) == "function" then
+				local ok2, err2 = pcall(function() shopInst:update(p) end)
+				if not ok2 then LOG.warn("ShopOpen(bg): update failed: %s", tostring(err2)) end
+			end
+			LOG.info("<ShopOpen> updated in background | lang=%s (kitoPick active)", tostring(p.lang))
+			return
+		end
+		-- ensure に失敗した場合のみフォールバック遷移
+		Router.show("shop", p)
+		LOG.info("<ShopOpen> routed (fallback) | lang=%s", tostring(p.lang))
+		return
+	end
+
+	-- 通常経路：kitoPick 以外なら素直に遷移
 	Router.show("shop", p)
 	LOG.info("<ShopOpen> routed once | lang=%s", tostring(p.lang))
 end)
@@ -2607,13 +2637,9 @@ return M
 
 ### src/client/ui/components/renderers/ShopRenderer.lua
 ```lua
--- StarterPlayerScripts/UI/screens/ShopRenderer.lua
--- v0.9.SIMPLE-9 (Locale-first, no ShopI18n, safety refactor)
---  - 下段 TalismanArea に護符ボードをマウント（初回のみ）
---  - payload.talisman を表示（nilならデフォルト6枠表示：ボード側に委譲）
---  - items を描画前に self:isItemHidden(id) でフィルタ（既存）
---  - 画面固定文言は Locale.t(lang,"SHOP_UI_*") を直接参照
---  - リファクタ: 言語正規化の一本化 / ガード強化 / ログ整備
+-- StarterPlayerScripts/UI/components/renderers/ShopRenderer.lua
+-- v0.9.SIMPLE-10 (diag logging)
+--  - 可視0時のダンプ、通常時の items→vis サマリを INFO で出力
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
@@ -2627,7 +2653,6 @@ local LOG    = Logger.scope("ShopRenderer")
 
 local ShopCells = require(script.Parent.Parent:WaitForChild("ShopCells"))
 
--- TalismanBoard の安全取得（UI/components から辿る）
 local function requireTalismanBoard()
 	local uiRoot = script:FindFirstAncestor("UI")
 	if not uiRoot then return nil end
@@ -2640,6 +2665,8 @@ local function requireTalismanBoard()
 	end
 	return nil
 end
+
+local function _id(it) return tostring(it and it.id or "?") end
 
 local M = {}
 
@@ -2654,7 +2681,7 @@ function M.render(self)
 	--=== Payload 正規化 ===
 	local p       = self._payload or {}
 	local items   = p.items or p.stock or {}
-	local lang    = ShopFormat.normLang(p.lang) or "en"   -- "ja"/"en" 固定
+	local lang    = ShopFormat.normLang(p.lang) or "en"
 	local mon     = tonumber(p.mon or p.totalMon or 0) or 0
 	local rerollCost = tonumber(p.rerollCost or 1) or 1
 
@@ -2663,23 +2690,13 @@ function M.render(self)
 		local TB = requireTalismanBoard()
 		if TB then
 			local title = Locale.t(lang, "SHOP_UI_TALISMAN_BOARD")
-			-- new(parent, { title, widthScale, padScale })
 			local ok, board = pcall(function()
-				return TB.new(nodes.taliArea, {
-					title = title,
-					widthScale = 0.9,
-					padScale   = 0.01,
-				})
+				return TB.new(nodes.taliArea, { title = title, widthScale = 0.9, padScale = 0.01 })
 			end)
 			if ok and board then
 				self._taliBoard = board
-				-- 位置調整
 				local inst = self._taliBoard.getInstance and self._taliBoard:getInstance()
-				if inst then
-					inst.AnchorPoint = Vector2.new(0.5, 0)
-					inst.Position    = UDim2.fromScale(0.5, 0)
-					inst.ZIndex      = 2
-				end
+				if inst then inst.AnchorPoint = Vector2.new(0.5, 0); inst.Position = UDim2.fromScale(0.5, 0); inst.ZIndex = 2 end
 				LOG.info("mount TalismanBoard | lang=%s title=%s", tostring(lang), tostring(title))
 			else
 				LOG.warn("TalismanBoard.new failed: %s", tostring(board))
@@ -2689,25 +2706,8 @@ function M.render(self)
 		end
 	end
 
-	--=== 護符ボード：データ反映（存在すれば） ===
-	do
-		local tb = self._taliBoard
-		if tb then
-			-- setLang は存在しない実装も許容
-			if typeof(tb.setLang) == "function" then
-				local ok = pcall(function() tb:setLang(lang) end)
-				if not ok then LOG.warn("TalismanBoard:setLang failed") end
-			end
-			-- setData：p.talisman が nil でもボード側の defaultData() に委譲
-			if typeof(tb.setData) == "function" then
-				local ok = pcall(function() tb:setData(p.talisman) end)
-				if not ok then LOG.warn("TalismanBoard:setData failed") end
-			end
-		end
-	end
-
 	--=== 一時 SoldOut フィルタ ===
-	local vis = {}
+	local vis, hiddenList = {}, {}
 	for _, it in ipairs(items) do
 		local id = it and it.id
 		local hidden = false
@@ -2718,37 +2718,38 @@ function M.render(self)
 		end
 		if not hidden then
 			table.insert(vis, it)
+		else
+			table.insert(hiddenList, tostring(id))
 		end
 	end
 
-	LOG.debug("render | lang=%s items=%d→%d mon=%d rerollCost=%d",
-		tostring(lang), #items, #vis, mon, rerollCost)
+	local canReroll = (p.canReroll ~= false) and (mon >= rerollCost)
+	LOG.info("render snapshot | items=%d vis=%d hidden=%d mon=%d cost=%d canReroll=%s lang=%s",
+		#items, #vis, #hiddenList, mon, rerollCost, tostring(canReroll), lang)
+
+	if #items > 0 and #vis == 0 then
+		-- 可視0 → 何が隠れているかを列挙（最大10件）
+		local maxDump = math.min(10, #hiddenList)
+		LOG.info("render dump (all hidden) | ids=%s...", table.concat(hiddenList, ", ", 1, maxDump))
+	end
 
 	--=== タイトル・ボタン ===
-	if nodes.title then
-		nodes.title.Text = Locale.t(lang, "SHOP_UI_TITLE")
-	end
+	if nodes.title then nodes.title.Text = Locale.t(lang, "SHOP_UI_TITLE") end
 	if nodes.deckBtn then
 		local txt = self._deckOpen and Locale.t(lang, "SHOP_UI_HIDE_DECK") or Locale.t(lang, "SHOP_UI_VIEW_DECK")
 		nodes.deckBtn.Text = txt
 	end
 	if nodes.rerollBtn then
 		nodes.rerollBtn.Text = Locale.t(lang, "SHOP_UI_REROLL_FMT"):format(rerollCost)
-		local can = (p.canReroll ~= false) and (mon >= rerollCost)
-		nodes.rerollBtn.Active = can
-		nodes.rerollBtn.AutoButtonColor = can
-		-- 視覚的状態（既定を維持。Theme 側で統一する場合はここを薄く）
+		nodes.rerollBtn.Active = canReroll
+		nodes.rerollBtn.AutoButtonColor = canReroll
 		nodes.rerollBtn.TextTransparency = 0
 		nodes.rerollBtn.BackgroundTransparency = 0
 	end
-	if nodes.infoTitle then
-		nodes.infoTitle.Text = Locale.t(lang, "SHOP_UI_INFO_TITLE")
-	end
-	if nodes.closeBtn then
-		nodes.closeBtn.Text = Locale.t(lang, "SHOP_UI_CLOSE_BTN")
-	end
+	if nodes.infoTitle then nodes.infoTitle.Text = Locale.t(lang, "SHOP_UI_INFO_TITLE") end
+	if nodes.closeBtn then nodes.closeBtn.Text = Locale.t(lang, "SHOP_UI_CLOSE_BTN") end
 
-	--=== 右パネル（デッキ／インフォ） ===
+	--=== 右パネル ===
 	do
 		local deckPanel = nodes.deckPanel
 		local infoPanel = nodes.infoPanel
@@ -2771,18 +2772,14 @@ function M.render(self)
 	local scroll = nodes.scroll
 	if not scroll then return end
 	for _, ch in ipairs(scroll:GetChildren()) do
-		if ch:IsA("GuiObject") and ch ~= nodes.grid then
-			ch:Destroy()
-		end
+		if ch:IsA("GuiObject") and ch ~= nodes.grid then ch:Destroy() end
 	end
 
 	-- BUY ハンドラ
 	local function onBuy(it: any)
 		if self._buyBusy then return end
-
 		if isTalismanItem(it) then
-			LOG.info("BUY click (auto place) | id=%s name=%s taliId=%s",
-				tostring(it.id or "?"), tostring(it.name or "?"), tostring(it.talismanId))
+			LOG.info("BUY click (auto place) | id=%s name=%s taliId=%s", tostring(it.id or "?"), tostring(it.name or "?"), tostring(it.talismanId))
 			if typeof(self.autoPlace) == "function" then
 				local ok = pcall(function() self:autoPlace(it.talismanId, it) end)
 				if not ok then LOG.warn("autoPlace failed for talismanId=%s", tostring(it.talismanId)) end
@@ -2791,7 +2788,6 @@ function M.render(self)
 			end
 			return
 		end
-
 		local remotes = self.deps and self.deps.remotes
 		local BuyItem = remotes and remotes.BuyItem
 		if not BuyItem then
@@ -2801,16 +2797,16 @@ function M.render(self)
 		self._buyBusy = true
 		LOG.info("BUY click | id=%s name=%s", tostring(it.id or "?"), tostring(it.name or "?"))
 		pcall(function() BuyItem:FireServer(it.id) end)
-		-- ボタン連打抑止（最短クール）
 		task.delay(0.25, function() self._buyBusy = false end)
 	end
 
-	-- セル配置
-	for _, it in ipairs(vis) do
+	-- セル配置（先頭3件だけ INFO）
+	for i, it in ipairs(vis) do
 		ShopCells.create(scroll, nodes, it, lang, mon, { onBuy = onBuy })
+		if i <= 3 then LOG.info("cell create #%d | id=%s cat=%s price=%s", i, _id(it), tostring(it and it.category or "?"), tostring(it and it.price or "?")) end
 	end
 
-	-- CanvasSize（安全計算）
+	-- CanvasSize
 	task.defer(function()
 		local gridObj = nodes.grid
 		if not (gridObj and gridObj:IsA("UIGridLayout")) then return end
@@ -2829,19 +2825,12 @@ function M.render(self)
 	if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
 		table.insert(s,
 			Locale.t(lang, "SHOP_UI_SUMMARY_CLEARED_FMT")
-				:format(
-					tonumber(p.seasonSum or 0) or 0,
-					tonumber(p.target or 0) or 0,
-					tonumber(p.rewardMon or 0) or 0,
-					tonumber(p.totalMon or mon or 0) or 0
-				)
+				:format(tonumber(p.seasonSum or 0) or 0, tonumber(p.target or 0) or 0, tonumber(p.rewardMon or 0) or 0, tonumber(p.totalMon or mon or 0) or 0)
 		)
 	end
 	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_ITEMS_FMT"):format(#vis))
 	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_MONEY_FMT"):format(mon))
-	if nodes.summary then
-		nodes.summary.Text = table.concat(s, "\n")
-	end
+	if nodes.summary then nodes.summary.Text = table.concat(s, "\n") end
 end
 
 return M
@@ -4532,6 +4521,161 @@ function YakuPanel.mount(parentGui)
 ... (truncated)
 ```
 
+### src/client/ui/DevLogViewer.client.lua
+```lua
+-- StarterPlayerScripts/UI/DevLogViewer.client.lua
+-- In-game log viewer you can copy from (F10 to toggle)
+
+local Players      = game:GetService("Players")
+local LogService   = game:GetService("LogService")
+local CAS          = game:GetService("ContextActionService")
+local RunService   = game:GetService("RunService")
+
+local MAX_LINES = 5000
+
+-- buffer
+local lines = {}
+local function push(msgType, message)
+	local tag = (typeof(msgType) == "EnumItem") and msgType.Name or tostring(msgType)
+	local s = string.format("[%s] %s", tag, tostring(message))
+	lines[#lines+1] = s
+	if #lines > MAX_LINES then
+		table.remove(lines, 1)
+	end
+end
+
+-- seed with existing history (if available)
+pcall(function()
+	for _, e in ipairs(LogService:GetLogHistory()) do
+		push(e.messageType, e.message)
+	end
+end)
+
+-- live feed
+LogService.MessageOut:Connect(function(message, msgType)
+	push(msgType, message)
+end)
+
+-- UI
+local gui = Instance.new("ScreenGui")
+gui.Name = "DevLogViewer"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 9999
+gui.Enabled = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+
+local modal = Instance.new("Frame")
+modal.Name = "Panel"
+modal.AnchorPoint = Vector2.new(0.5, 0.5)
+modal.Position = UDim2.fromScale(0.5, 0.5)
+modal.Size = UDim2.fromScale(0.9, 0.8)
+modal.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+modal.BorderSizePixel = 0
+modal.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = modal
+
+local stroke = Instance.new("UIStroke")
+stroke.Thickness = 1
+stroke.Color = Color3.fromRGB(70, 75, 90)
+stroke.Parent = modal
+
+local header = Instance.new("TextLabel")
+header.BackgroundTransparency = 1
+header.TextXAlignment = Enum.TextXAlignment.Left
+header.Font = Enum.Font.GothamBold
+header.Text = "Developer Log (F10 to close) — Ctrl+A → Ctrl+C to copy"
+header.TextSize = 16
+header.TextColor3 = Color3.fromRGB(240, 240, 240)
+header.Size = UDim2.new(1, -16, 0, 32)
+header.Position = UDim2.new(0, 8, 0, 4)
+header.Parent = modal
+
+local box = Instance.new("TextBox")
+box.Name = "LogBox"
+box.MultiLine = true
+box.ClearTextOnFocus = false
+box.TextEditable = true
+box.RichText = false
+box.TextXAlignment = Enum.TextXAlignment.Left
+box.TextYAlignment = Enum.TextYAlignment.Top
+box.Font = Enum.Font.Code
+box.TextSize = 14
+box.TextColor3 = Color3.fromRGB(225, 225, 225)
+box.BackgroundColor3 = Color3.fromRGB(28, 30, 36)
+box.Size = UDim2.new(1, -16, 1, -72)
+box.Position = UDim2.new(0, 8, 0, 36)
+box.TextWrapped = false
+box.Parent = modal
+
+local refreshBtn = Instance.new("TextButton")
+refreshBtn.Size = UDim2.new(0, 120, 0, 28)
+refreshBtn.Position = UDim2.new(0, 8, 1, -32)
+refreshBtn.Text = "Refresh"
+refreshBtn.Font = Enum.Font.Gotham
+refreshBtn.TextSize = 14
+refreshBtn.TextColor3 = Color3.fromRGB(20, 22, 28)
+refreshBtn.BackgroundColor3 = Color3.fromRGB(180, 190, 210)
+refreshBtn.Parent = modal
+Instance.new("UICorner", refreshBtn)
+
+local selectAllBtn = Instance.new("TextButton")
+selectAllBtn.Size = UDim2.new(0, 120, 0, 28)
+selectAllBtn.Position = UDim2.new(0, 136, 1, -32)
+selectAllBtn.Text = "Select All"
+selectAllBtn.Font = Enum.Font.Gotham
+selectAllBtn.TextSize = 14
+selectAllBtn.TextColor3 = Color3.fromRGB(20, 22, 28)
+selectAllBtn.BackgroundColor3 = Color3.fromRGB(180, 190, 210)
+selectAllBtn.Parent = modal
+Instance.new("UICorner", selectAllBtn)
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 120, 0, 28)
+closeBtn.Position = UDim2.new(1, -128, 1, -32)
+closeBtn.Text = "Close"
+closeBtn.Font = Enum.Font.Gotham
+closeBtn.TextSize = 14
+closeBtn.TextColor3 = Color3.fromRGB(240, 240, 240)
+closeBtn.BackgroundColor3 = Color3.fromRGB(90, 95, 110)
+closeBtn.Parent = modal
+Instance.new("UICorner", closeBtn)
+
+local function fill()
+	box.Text = table.concat(lines, "\n")
+	-- scroll to bottom
+	RunService.Heartbeat:Wait()
+	box.CursorPosition = #box.Text + 1
+	box.SelectionStart = #box.Text + 1
+end
+
+local function toggle()
+	gui.Enabled = not gui.Enabled
+	if gui.Enabled then fill() end
+end
+
+refreshBtn.Activated:Connect(fill)
+closeBtn.Activated:Connect(function() gui.Enabled = false end)
+selectAllBtn.Activated:Connect(function()
+	local txt = box.Text or ""
+	box:CaptureFocus()
+	task.wait()
+	box.SelectionStart = 1
+	box.CursorPosition = #txt + 1
+end)
+
+-- F10 toggle
+CAS:BindAction("DevLogViewerToggle", function(_, state)
+	if state == Enum.UserInputState.Begin then
+		toggle()
+	end
+end, false, Enum.KeyCode.F10)
+```
+
 ### src/client/ui/lib/FormatUtil.lua
 ```lua
 -- StarterPlayerScripts/UI/lib/FormatUtil.lua
@@ -4835,13 +4979,11 @@ return U
 ```lua
 -- StarterPlayerScripts/UI/ScreenRouter.lua
 -- シンプルな画面ルーター：同じ画面への show は再実行しない（ちらつき対策）
--- v0.9.5 (P1-4):
---  - current==name の場合、非表示ループを完全スキップ（ちらつきゼロ）
---  - Enabled/Visible を型ガードして安全化（ScreenGui/GuiObject 両対応）
---  - setData → updateOrShow だけ行う
---  - Logger 導入（print/warn を LOG.* に置換）
---  - register(name, module) を追加（動的登録に対応）
---  - ログ例: LOG.debug("Router.show updated same screen for %s", name)
+-- v0.9.6 (P1-5):
+--  - ★同一画面への show で payload が「空 or langのみ」の場合は setData を呼ばない（状態保護）
+--  - ★payload=nil の場合は {} を作らず、そのまま nil を維持（既存状態を壊さない）
+--  - current==name では setLang だけ即時反映し、update(nil) で安全に再描画
+--  - それ以外の仕様は従来通り（register/ensure/可視制御など）
 
 local Router = {}
 
@@ -4853,7 +4995,7 @@ local _deps      = nil   -- 共有依存（playerGui や remotes など）
 local _instances = {}    -- name -> screen instance
 local _current   = nil   -- 現在の画面名
 
--- Locale（payload.lang 未指定時の補完に使用）
+-- Locale（payload.lang 未指定時の補完やログで使用）
 local RS     = game:GetService("ReplicatedStorage")
 local Config = RS:WaitForChild("Config")
 local Locale = require(Config:WaitForChild("Locale"))
@@ -4912,9 +5054,6 @@ function Router.register(name: string, module)
 	local existed = _map[name] ~= nil
 	_map[name] = module
 	LOG.debug("registered screen '%s'%s", name, existed and " (overwrote)" or "")
-	-- 既に生成済みのインスタンスがある場合は、そのまま維持（安全第一）
-	-- 差し替えが必要なケースは、呼び出し側で Router.ensure を使って再生成するか、
-	-- 旧インスタンスの明示破棄を行ってください。
 	return true
 end
 
@@ -4954,10 +5093,10 @@ local function ensure(name)
 end
 
 --==================================================
--- 内部：payload 正規化（言語の自動注入）
+-- 内部：payload 正規化（※nilのときはnilのまま返す）
 --==================================================
 local function normalizePayload(payload)
-	payload = payload or {}
+	if payload == nil then return nil end
 	if payload.lang == nil then
 		if type(Locale.getGlobal) == "function" then
 			payload.lang = Locale.getGlobal()
@@ -4966,6 +5105,15 @@ local function normalizePayload(payload)
 		end
 	end
 	return payload
+end
+
+-- 「lang 以外の有意なフィールドが存在するか」を判定（汎用）
+local function hasNonLangFields(t)
+	if type(t) ~= "table" then return false end
+	for k, _ in pairs(t) do
+		if k ~= "lang" then return true end
+	end
+	return false
 end
 
 --==================================================
@@ -4985,12 +5133,12 @@ end
 --==================================================
 -- 内部：更新または再描画を呼ぶ
 --==================================================
-local function updateOrShow(inst, payload)
+local function updateOrShow(inst, payloadOrNil)
 	if type(inst.update) == "function" then
-		local ok, err = pcall(function() inst:update(payload) end)
+		local ok, err = pcall(function() inst:update(payloadOrNil) end)
 		if not ok then LOG.warn("update failed: %s", tostring(err)) end
 	elseif type(inst.show) == "function" then
-		local ok, err = pcall(function() inst:show(payload) end)
+		local ok, err = pcall(function() inst:show(payloadOrNil) end)
 		if not ok then LOG.warn("show(as update) failed: %s", tostring(err)) end
 	end
 end
@@ -5012,17 +5160,20 @@ function Router.show(arg, payload)
 		return
 	end
 
-	-- 2) payload を正規化（lang を必ず持たせる）
-	payload = normalizePayload(payload)
-	LOG.debug("Router.show -> %s | lang=%s", name, tostring(payload.lang))
+	-- 2) payload を正規化（※nilのままの場合もある）
+	local rawPayload = payload
+	local p = normalizePayload(payload)
+	-- ログ用の lang ヒント
+	local langHint = (p and p.lang)
+		or (type(Locale.getGlobal) == "function" and Locale.getGlobal())
+		or "en"
+	LOG.debug("Router.show -> %s | lang=%s (payload=%s)", name, tostring(langHint), (p and "table") or "nil")
 
-	-- 3) インスタンス確保（new/create/そのままテーブルの順で対応）
+	-- 3) インスタンス確保
 	local inst
-	local ok, err = pcall(function()
-		inst = ensure(name)
-	end)
-	if not ok or type(inst) ~= "table" then
-		LOG.warn("show: ensure failed for %s | %s", tostring(name), tostring(err))
+	local okEnsure, errEnsure = pcall(function() inst = ensure(name) end)
+	if not okEnsure or type(inst) ~= "table" then
+		LOG.warn("show: ensure failed for %s | %s", tostring(name), tostring(errEnsure))
 		return
 	end
 
@@ -5032,30 +5183,38 @@ function Router.show(arg, payload)
 		inst.gui.Parent = _deps.playerGui
 	end
 
-	-- ★ 4) current==name：ちらつき防止モード（可視状態は触らない）
+	-- ★ 4) current==name：ちらつき防止＆状態保護モード
 	if _current == name then
-		applyLangIfPossible(inst, payload.lang)   -- 言語は即時反映
-		if type(inst.setData) == "function" then  -- データは必ず渡す
-			inst:setData(payload)
+		-- 言語だけは即反映
+		applyLangIfPossible(inst, langHint)
+
+		-- payload が「空 or langのみ」なら setData は呼ばない（既存 state を保護）
+		if p and hasNonLangFields(p) then
+			if type(inst.setData) == "function" then
+				local okSD, errSD = pcall(function() inst:setData(p) end)
+				if not okSD then LOG.warn("setData(same-screen) failed: %s", tostring(errSD)) end
+			end
+			updateOrShow(inst, p)  -- 有意データがあるなら渡す
+		else
+			updateOrShow(inst, nil) -- 有意データがない → 既存状態で再描画
 		end
-		updateOrShow(inst, payload)               -- 差分更新 or 再描画
-		LOG.debug("Router.show updated same screen for %s", name)
+
+		LOG.debug("Router.show updated same screen for %s (protected)", name)
 		return
 	end
 
-	-- 5) 全画面を安全に非表示（nil/型ガード付き）※別画面に切替時のみ
+	-- 5) 全画面を安全に非表示（別画面に切替時のみ）
 	for _, e in pairs(_instances) do
-		if e and e.gui then
-			setGuiActive(e.gui, false)
-		end
+		if e and e.gui then setGuiActive(e.gui, false) end
 	end
 
 	-- 6) 言語は最優先で即時適用
-	applyLangIfPossible(inst, payload.lang)
+	applyLangIfPossible(inst, langHint)
 
-	-- 7) setData を先に渡しておく（show 前提条件）
-	if type(inst.setData) == "function" then
-		inst:setData(payload)
+	-- 7) setData は payload が有意データを持つ場合のみ
+	if p and hasNonLangFields(p) and type(inst.setData) == "function" then
+		local okSD, errSD = pcall(function() inst:setData(p) end)
+		if not okSD then LOG.warn("setData failed for %s | %s", tostring(name), tostring(errSD)) end
 	end
 
 	-- 8) 旧画面 hide（メソッドがあれば呼ぶ）
@@ -5069,14 +5228,12 @@ function Router.show(arg, payload)
 
 	-- 9) 画面表示（メソッドがあれば呼ぶ）
 	if type(inst.show) == "function" then
-		local okShow, errShow = pcall(function() inst:show(payload) end)
+		local okShow, errShow = pcall(function() inst:show(p) end)
 		if not okShow then LOG.warn("show method failed for %s | %s", tostring(name), tostring(errShow)) end
 	end
 
-	-- 10) 最終的に可視化を担保（型ガード）
-	if inst.gui then
-		setGuiActive(inst.gui, true)
-	end
+	-- 10) 最終的に可視化を担保
+	if inst.gui then setGuiActive(inst.gui, true) end
 end
 
 --==================================================
@@ -5097,9 +5254,9 @@ function Router.active()
 	return _current
 end
 
--- 明示的にインスタンスを取得したい場合（必要なら利用）
+-- 明示的にインスタンスを取得したい場合
 function Router.ensure(name)
-	return ensure(name)
+	return (ensure(name))
 end
 
 return Router
@@ -5960,26 +6117,28 @@ return Patch
 ### src/client/ui/screens/RunScreen.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-8
+-- v0.9.7-P2-9
 --  - StageResult の互換受信を強化（{close=true} / (true,data) / data 単体の全対応）
 --  - Home等への遷移後にリザルトが残留しないよう、show() 冒頭で明示的に hide / _resultShown リセット
 --  - 既存機能・UIは維持
 --  - [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
 --  - 監視用ログを追加（[LOG] マーク）
 --  - ★ サーバ確定の talisman をそのまま描画（クライアントで補完/推測しない）
+--  - ★ 追加：ラン放棄（あきらめる）ボタン配線と確認モーダル
 
 local Run = {}
 Run.__index = Run
 
 local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RS                = ReplicatedStorage
 
 -- Logger
-local Logger = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("RunScreen")
 
 -- Modules
-local Config = ReplicatedStorage:WaitForChild("Config")
+local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
 
@@ -6035,6 +6194,19 @@ local function safeGetGlobalLang()
 		end
 	end
 	return nil
+end
+
+--==================================================
+-- 追加：小さな翻訳ヘルパ（フォールバック付き）
+--==================================================
+local function T(lang, key, jaFallback, enFallback)
+	local txt = nil
+	local ok = pcall(function() txt = Locale.t(lang, key) end)
+	if ok and type(txt) == "string" and txt ~= "" and txt ~= key then
+		return txt
+	end
+	if (lang == "ja") then return jaFallback end
+	return enFallback
 end
 
 --==================================================
@@ -6244,21 +6416,6 @@ function Run.new(deps)
 			tostring(tot), tostring(mon), tostring(pts), #roles) -- [LOG]
 	end
 
-	-- 状態更新
-	local function onState(st)
-		self.info.Text = Format.stateLineText(st, self._lang) or ""
-
-		if self.goalText then
-			local g = (typeof(st) == "table") and tonumber(st.goal) or nil
-			local label = (self._lang == "en") and "Goal:" or "目標："
-			self.goalText.Text = g and (label .. tostring(g)) or (label .. "—")
-		end
-
-		if self._yakuPanel then
-			self._yakuPanel:update({
-				lang    = mapLangForPanel(self._lang),
-				matsuri = st and st.matsuri,
-			})
 ... (truncated)
 ```
 
@@ -6341,6 +6498,7 @@ return M
 ```lua
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
 -- UIビルダーは親付けしない契約（親付けは ScreenRouter の責務）
+-- v0.9.7-P1-5: 「あきらめる」ボタンを追加（refs.buttons.giveUp）
 -- v0.9.7-P1-4: Theme完全デフォルト化（色・画像・透過のUI側フォールバック撤去）
 -- v0.9.7-P1-3: Logger導入／言語コードを "ja"/"en" に統一（入力 "jp" は "ja" へ正規化）
 -- v0.9.6-P0-11 以降：親付け除去／その他の挙動は従来どおり
@@ -6461,6 +6619,14 @@ local function applyTexts(tRefs)
 				lbl = (_lang == "en") and "Yaku" or "役一覧"
 			end
 			tRefs.buttons.yaku.Text = lbl
+		end
+		-- ★ 新規：あきらめる
+		if tRefs.buttons.giveUp then
+			local txt = Locale.t(_lang, "RUN_BTN_GIVEUP")
+			if not txt or txt == "" or txt == "RUN_BTN_GIVEUP" then
+				txt = (_lang == "en") and "Give Up" or "あきらめる"
+			end
+			tRefs.buttons.giveUp.Text = txt
 		end
 	end
 
@@ -6630,35 +6796,21 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	controlsPanel.Parent = left
 	controlsPanel.Size = UDim2.fromScale(1, 0)
 	controlsPanel.AutomaticSize = Enum.AutomaticSize.Y
-	controlsPanel.BackgroundTransparency = 1
-	controlsPanel.LayoutOrder = 4
-	controlsPanel.ZIndex = 1
-	makeList(controlsPanel, Enum.FillDirection.Vertical, 8)
-
-	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", BTN_PRIMARY_BG)
-	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", BTN_WARN_BG)
-	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", BTN_WARN_BG)
-
 ... (truncated)
 ```
 
 ### src/client/ui/screens/ShopScreen.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.7-P2-12 ShopScreen（Locale.normalize起点のlang単一源泉 + server-first talisman + 冪等描画）
---  - payload.lang を Locale.normalize で正規化し _lang に保持（'jp'→'ja' を含む）
---  - show/setData/update で _lang を子へ伝播（TalismanBoard 含む）
---  - サーバ確定 talisman を優先反映（差分時のみ）
---  - 同一データの再描画を抑止（talisman シグネチャ比較）
---  - 在庫署名と一時非表示キャッシュの整合を強化（可視0なら強制解除のセーフティ）
+-- v0.9.9-P2-16 ShopScreen（診断ログ強化）
+--  - 可視件数・在庫署名の遷移・リロール可否を INFO で出力
+--  - 他は前版(P2-15)の selfバインド/LOG統一そのまま
 
 local Shop = {}
 Shop.__index = Shop
 
---========= 依存読込 =========
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
-local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
 
 local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
@@ -6669,7 +6821,6 @@ local LOG = (typeof(Logger.scope) == "function" and Logger.scope("ShopScreen"))
 	or (typeof(Logger["for"]) == "function" and Logger["for"]("ShopScreen"))
 	or { debug=function()end, info=function()end, warn=function(...) warn(...) end }
 
--- ui/components/*
 local uiRoot = script.Parent.Parent
 local componentsFolder = uiRoot:WaitForChild("components")
 local ShopUI        = require(componentsFolder:WaitForChild("ShopUI"))
@@ -6678,29 +6829,16 @@ local ShopWires     = require(componentsFolder:WaitForChild("controllers"):WaitF
 local TalismanBoard = require(componentsFolder:WaitForChild("TalismanBoard"))
 
 export type Payload = {
-	items: {any}?,
-	stock: {any}?,
-	mon: number?,
-	totalMon: number?,
-	rerollCost: number?,
-	canReroll: boolean?,
-	seasonSum: number?,
-	target: number?,
-	rewardMon: number?,
-	lang: string?,
-	notice: string?,
-	currentDeck: any?,
-	state: any?,
+	items: {any}?, stock: {any}?,
+	mon: number?, totalMon: number?,
+	rerollCost: number?, canReroll: boolean?,
+	seasonSum: number?, target: number?, rewardMon: number?,
+	lang: string?, notice: string?, currentDeck: any?, state: any?,
 }
 
---==================================================
--- helpers
---==================================================
-
+--================ helpers ================
 local function normalizeLang(lang: string?): string
-	-- Locale.normalize が 'jp'→'ja' を内包
 	local v = Locale.normalize(lang)
-	-- 念のため 'jp' の名残を検知してログ（フォレンジック用）
 	if tostring(lang or ""):lower() == "jp" and v == "ja" then
 		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
 	end
@@ -6714,22 +6852,15 @@ local function countItems(p: Payload?): number
 	return 0
 end
 
--- 在庫構成のシグネチャを生成（順序も反映する軽量版）
 local function stockSignature(items: {any}?): string
 	if typeof(items) ~= "table" then return "<nil>" end
 	local parts = { tostring(#items) }
 	for _, it in ipairs(items) do
-		-- できるだけ安定するキーを優先
 		local id    = (it and it.id) or (it and it.code) or (it and it.sku) or ""
 		local kind  = (it and (it.kind or it.type or it.category)) or ""
 		local price = (it and (it.price or it.cost)) or ""
 		local extra = (it and it.uid) or (it and it.name) or ""
-		parts[#parts+1] = table.concat({
-			tostring(id),
-			tostring(kind),
-			tostring(price),
-			tostring(extra),
-		}, ":")
+		parts[#parts+1] = table.concat({tostring(id), tostring(kind), tostring(price), tostring(extra)}, ":")
 	end
 	return table.concat(parts, "||")
 end
@@ -6749,29 +6880,40 @@ local function cloneSlots6(slots)
 end
 
 local function cloneTalismanData(t)
-	if typeof(t) ~= "table" then
-		return nil
-	end
-	return {
-		maxSlots = tonumber(t.maxSlots or 6) or 6,
-		unlocked = tonumber(t.unlocked or 0) or 0,
-		slots    = cloneSlots6(t.slots),
-	}
+	if typeof(t) ~= "table" then return nil end
+	return { maxSlots=tonumber(t.maxSlots or 6) or 6, unlocked=tonumber(t.unlocked or 0) or 0, slots=cloneSlots6(t.slots) }
 end
 
 local function talismanSignature(t)
 	if typeof(t) ~= "table" then return "<nil>" end
 	local parts = { tostring(tonumber(t.unlocked or 0) or 0) }
 	local s = t.slots or {}
-	for i = 1, 6 do
-		parts[#parts+1] = tostring(s[i] or "")
-	end
+	for i=1,6 do parts[#parts+1] = tostring(s[i] or "") end
 	return table.concat(parts, "|")
 end
 
---==================================================
--- class
---==================================================
+local function taliTitleText(lang: string?): string
+	local l = lang or "ja"
+	local s = Locale.t(l, "SHOP_UI_TALISMAN_BOARD_TITLE")
+	if s == "SHOP_UI_TALISMAN_BOARD_TITLE" then s = Locale.t(l, "SHOP_UI_TALISMAN_BOARD") end
+	return s
+end
+
+local function normalizePayload(p: Payload?): Payload?
+	if not p then return nil end
+	if p.lang then
+		local nl = normalizeLang(p.lang); if nl and nl ~= p.lang then p.lang = nl end
+	end
+	if typeof(p.items) ~= "table" and typeof(p.stock) == "table" then
+		p.items = p.stock
+	end
+	return p
+end
+
+--================ class ==================
+local function _bindSelf(self, fn)
+	return function(_, ...) return fn(self, ...) end
+end
 
 function Shop.new(deps)
 	local self = setmetatable({}, Shop)
@@ -6785,56 +6927,41 @@ function Shop.new(deps)
 	self._bg = nil
 	self._taliBoard = nil
 
-	-- プレビュー/ローカル影/シグネチャ
 	self._preview = nil
 	self._lastPlaced = nil
 	self._localBoard = nil
 	self._taliSig = "<none>"
 
-	-- 一時SoldOut
 	self._hiddenItems = {}   -- [itemId]=true
 	self._stockSig = ""      -- 在庫構成署名
 
-	-- UI生成
 	local gui, nodes = ShopUI.build()
 	self.gui = gui
 	self._nodes = nodes
-
-	-- 背景
 	self:_ensureBg()
 
-	-- 配線＆初期プレースホルダ
 	ShopWires.wireButtons(self)
 	ShopWires.applyInfoPlaceholder(self)
 
-	-- ===== 護符ボード：下段（taliArea）に設置 =====
 	do
-		local parent = nodes.taliArea or gui  -- 念のためフォールバック
+		local parent = nodes.taliArea or gui
 		self._taliBoard = TalismanBoard.new(parent, {
-			title      = Locale.t(self._lang, "SHOP_UI_TALISMAN_BOARD_TITLE"),
-			widthScale = 0.95,   -- 下段にフィット
-			padScale   = 0.01,
+			title      = taliTitleText(self._lang or "ja"),
+			widthScale = 0.95, padScale = 0.01,
 		})
 		local inst = self._taliBoard:getInstance()
-		inst.AnchorPoint = Vector2.new(0.5, 0)     -- 中央寄せ
-		inst.Position    = UDim2.fromScale(0.5, 0) -- 上端中央
-		inst.ZIndex      = 2                       -- 本文よりやや上
+		inst.AnchorPoint = Vector2.new(0.5, 0); inst.Position = UDim2.fromScale(0.5, 0); inst.ZIndex = 2
 	end
-	-- ==============================================
 
-	-- Remotes（S4）
 	self._remotes = RS:WaitForChild("Remotes", 10)
 	if not self._remotes then
 		LOG.warn("[ShopScreen] Remotes folder missing (timeout)")
 	else
 		self._placeRE = self._remotes:WaitForChild("PlaceOnSlot", 10)
-		if not self._placeRE then
-			LOG.warn("[ShopScreen] PlaceOnSlot missing (timeout)")
-		end
+		if not self._placeRE then LOG.warn("[ShopScreen] PlaceOnSlot missing (timeout)") end
 		local ack = self._remotes:FindFirstChild("TalismanPlaced")
 		if ack and ack:IsA("RemoteEvent") then
 			ack.OnClientEvent:Connect(function(data)
-				-- サーバ確定：ローカル影を更新
 				local base = getTalismanFromPayload(self._payload) or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
 				self._localBoard = {
 					maxSlots = base.maxSlots or 6,
@@ -6842,53 +6969,48 @@ function Shop.new(deps)
 					slots    = (data and data.slots) or cloneSlots6(base.slots),
 				}
 				self._taliSig = talismanSignature(self._localBoard)
-				self._preview = nil
-				self._lastPlaced = nil
-				if self._taliBoard then
-					self._taliBoard:setData(self._localBoard)
-				end
-				LOG.debug("ack TalismanPlaced | idx=%s id=%s", tostring(data and data.index), tostring(data and data.id))
+				self._preview = nil; self._lastPlaced = nil
+				if self._taliBoard then self._taliBoard:setData(self._localBoard) end
+				LOG.info("ack TalismanPlaced | idx=%s id=%s sig=%s", tostring(data and data.index), tostring(data and data.id), self._taliSig)
 			end)
 		end
 	end
 
-	self.LOG = LOG
-	LOG.debug("boot")
+	self.show          = _bindSelf(self, Shop.show)
+	self.update        = _bindSelf(self, Shop.update)
+	self.setData       = _bindSelf(self, Shop.setData)
+	self.setLang       = _bindSelf(self, Shop.setLang)
+	self.attachRemotes = _bindSelf(self, Shop.attachRemotes)
+	self.autoPlace     = _bindSelf(self, Shop.autoPlace)
+
+	LOG.info("boot")
 	return self
 end
 
---==================================================
--- public
---==================================================
-
+--============ private utils =============
 function Shop:_snapBoard()
-	return self._localBoard
-		or self._preview
-		or getTalismanFromPayload(self._payload)
-		or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
+	return self._localBoard or self._preview or getTalismanFromPayload(self._payload) or { maxSlots=6, unlocked=0, slots={nil,nil,nil,nil,nil,nil} }
 end
 
 function Shop:_findFirstEmpty()
 	local t = self:_snapBoard()
 	local unlocked = tonumber(t.unlocked or 0) or 0
 	local slots = t.slots or {}
-	for i=1, math.min(unlocked, 6) do
-		if slots[i] == nil then return i end
-	end
+	for i=1, math.min(unlocked, 6) do if slots[i] == nil then return i end end
 	return nil
 end
 
--- 在庫シグネチャ更新 + 一時非表示キャッシュの整合
 function Shop:_refreshStockSignature(payload: Payload?)
 	local items = (payload and (payload.items or payload.stock)) or {}
-	local sig = stockSignature(items)
+	local newSig = stockSignature(items)
+	local oldSig = self._stockSig
 
-	if sig ~= self._stockSig then
-		self._stockSig = sig
-		self._hiddenItems = {}                -- 在庫が変わったら必ず解除
-		self.LOG.debug("[Shop] stock changed -> clear hidden")
+	if newSig ~= oldSig then
+		self._stockSig = newSig
+		self._hiddenItems = {}
+		LOG.info("[stock] changed -> clear hidden | old=%s new=%s count=%d", tostring(oldSig), tostring(newSig), #items)
 	else
-		-- セーフティ：可視件数0なのに在庫>0なら、隠しキャッシュを強制解除
+		-- 現在の hidden 適用後の可視件数
 		local visible = 0
 		for _, it in ipairs(items) do
 			local id = it and it.id
@@ -6896,54 +7018,89 @@ function Shop:_refreshStockSignature(payload: Payload?)
 		end
 		if visible == 0 and #items > 0 then
 			self._hiddenItems = {}
-			self.LOG.warn("[Shop] visible=0 while items=%d; cleared hidden cache (safety)", #items)
+			LOG.warn("[stock] visible=0 while items=%d; forced clear hidden (safety)", #items)
 		end
+		LOG.info("[stock] unchanged | sig=%s items=%d visible=%d hiddenCache#=%d", tostring(newSig), #items, visible, (function() local c=0 for _ in pairs(self._hiddenItems) do c+=1 end return c end)())
 	end
-end
-
-function Shop:isItemHidden(id: any)
-	if id == nil then return false end
-	return self._hiddenItems[tostring(id)] == true
-end
-function Shop:hideItemTemporarily(id: any)
-	if id == nil then return end
-	self._hiddenItems[tostring(id)] = true
-	self:_render()
 end
 
 local function maybeClearPreview(self)
 	if not self._preview or not self._lastPlaced then return end
-	local base = self:_snapBoard()
-	if not base or not base.slots then return end
-	local idx = self._lastPlaced.index
-	local id  = self._lastPlaced.id
+	local base = self:_snapBoard(); if not base or not base.slots then return end
+	local idx = self._lastPlaced.index; local id  = self._lastPlaced.id
 	if idx and id and base.slots[idx] == id then
-		self._preview = nil
-		self._lastPlaced = nil
-		LOG.info("[Shop] preview cleared by server state | idx=%d id=%s", idx, id)
+		self._preview = nil; self._lastPlaced = nil
+		LOG.info("[preview] cleared by server state | idx=%d id=%s", idx, id)
 	end
 end
 
--- サーバ確定 talisman をローカルへ即時反映（重複ならスキップ）
 function Shop:_applyServerTalismanOnce(payload: Payload?)
 	local sv = cloneTalismanData(getTalismanFromPayload(payload))
 	if not sv then return end
 	local sig = talismanSignature(sv)
-	if sig == self._taliSig then
-		-- 同一なら再描画不要
-		return
-	end
-	self._localBoard = sv
-	self._taliSig = sig
-	self._preview = nil
-	self._lastPlaced = nil
-	if self._taliBoard then
-		self._taliBoard:setData(self._localBoard)
-	end
-	LOG.debug("[Shop] server talisman applied | sig=%s", sig)
+	if sig == self._taliSig then return end
+	self._localBoard = sv; self._taliSig = sig; self._preview = nil; self._lastPlaced = nil
+	if self._taliBoard then self._taliBoard:setData(self._localBoard) end
+	LOG.info("[talisman] server applied | sig=%s", sig)
 end
 
+function Shop:_syncTalismanBoard()
+	if not self._taliBoard then return end
+	local lang = self._lang or "ja"
+	pcall(function()
+		if typeof(self._taliBoard.setLang) == "function" then self._taliBoard:setLang(lang) end
+		if typeof(self._taliBoard.setData) == "function" then self._taliBoard:setData(self:_snapBoard()) end
+		local inst = self._taliBoard:getInstance()
+		if inst and inst:FindFirstChild("Title") and inst.Title:IsA("TextLabel") then
+			inst.Title.Text = taliTitleText(lang)
+		end
+	end)
+end
+
+--================ public =================
 function Shop:setData(payload: Payload)
+	payload = normalizePayload(payload)
+	if payload and payload.lang then self._lang = payload.lang end
+	self:_refreshStockSignature(payload)
+	self._payload = payload
+	maybeClearPreview(self)
+	self:_applyServerTalismanOnce(payload)
+
+	LOG.info("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
+	self:_syncTalismanBoard()
+	self:_render()
+end
+
+function Shop:show(payload: Payload?)
+	if payload then
+		payload = normalizePayload(payload)
+		if payload and payload.lang then self._lang = payload.lang end
+		self:_refreshStockSignature(payload)
+		self._payload = payload
+		self:_applyServerTalismanOnce(payload)
+		maybeClearPreview(self)
+	end
+
+	-- UI状態を必ず初期化（戻り遷移含む）
+	self._hiddenItems = {}; self._buyBusy = false; self._rerollBusy = false
+	-- セーフティ：初期化後の在庫整合を再チェック
+	self:_refreshStockSignature(self._payload)
+
+	self.gui.Enabled = true
+	self:_ensureBg(true)
+	LOG.info("show | enabled=true items=%d lang=%s", countItems(self._payload), tostring(self._lang))
+
+	self:_syncTalismanBoard()
+	self:_render()
+	self:_applyRerollButtonState()
+end
+
+function Shop:hide()
+	if self.gui.Enabled then LOG.info("hide | enabled=false") end
+	self.gui.Enabled = false
+end
+
+function Shop:update(payload: Payload?)
 ... (truncated)
 ```
 
@@ -7140,6 +7297,12 @@ local en = {
 	RUN_HELP_LINE        = "Click hand → field to take. Confirm to finish.",
 	RUN_INFO_PLACEHOLDER = "Year:----  Season:--  Target:--  Total:--  Hands:--  Rerolls:--  Mult:--  Bank:--",
 	RUN_SCOREBOX_INIT    = "Score: 0\n0Mon × 0Pts\nRoles: --",
+	-- ★ Abandon（ラン放棄）
+	RUN_BTN_ABANDON      = "Give Up Run",
+	ABANDON_TITLE        = "Give up this run?",
+	ABANDON_DESC         = "This will discard your current progress and return to Home. This action cannot be undone.",
+	ABANDON_CONFIRM      = "Yes, give up",
+	ABANDON_CANCEL       = "No",
 
 	-- Result
 	RESULT_FINAL_TITLE = "Congrats!",
@@ -7238,6 +7401,12 @@ local ja = {
 	RUN_HELP_LINE        = "手札→場札をクリックで取得。Confirmで確定。",
 	RUN_INFO_PLACEHOLDER = "年:----  季節:--  目標:--  合計:--  残ハンド:--  残リロール:--  倍率:--  Bank:--",
 	RUN_SCOREBOX_INIT    = "得点：0\n文0×0点\n役：--",
+	-- ★ Abandon（ラン放棄）
+	RUN_BTN_ABANDON      = "ランをあきらめる",
+	ABANDON_TITLE        = "このランをあきらめますか？",
+	ABANDON_DESC         = "現在の進行状況は破棄され、ホームに戻ります。この操作は取り消せません。",
+	ABANDON_CONFIRM      = "はい、あきらめる",
+	ABANDON_CANCEL       = "いいえ",
 
 	-- Result
 	RESULT_FINAL_TITLE = "クリアおめでとう！",
@@ -7326,18 +7495,6 @@ end
 --=== 共有言語と変更通知 ================================================
 local _current = nil
 local _changed = Instance.new("BindableEvent")
-Locale.changed = _changed.Event  -- :Fire(newLang)
-
-function Locale.setGlobal(lang)
-	local before = _current
-	local normalized = _norm(lang)
-	if not normalized then
-		normalized = detectLang()
-	end
-	_current = normalized
-	L("setGlobal", "set shared language", {in_lang=lang, from=before, to=_current})
-	if _current ~= before then
-		_changed:Fire(_current)
 ... (truncated)
 ```
 
@@ -8607,15 +8764,13 @@ local function onDecide(plr: Player, payload:any)
 
 ### src/server/NavServer.lua
 ```lua
--- v0.9.7 P1-3 Nav 集約：DecideNext を唯一線に（保存廃止 / 次ステージロック可）
--- 追加修正:
---  - ラン終了時に StageResult を強制クローズ通知（残存モーダル対策）
---  - 次回スタートを強制NEWさせるフラグ s._forceNewOnNextStart = true を付与
---  - "home" は “このランを終了” として扱い、保留結果やスナップを全消去
---  - Round.resetRun() は呼ばず state を直接クリア（春スナップ生成を防止）
---  - HomeOpen は hasSave=false を必ず返す（常に New Game になる）
---  - "save" は受け取っても即 "home" に変換（保存ボタン廃止の保険）
---  - 次のステージは開発中ロックをフラグで制御（LOCAL_DEV_NEXT_LOCKED）
+-- ServerScriptService/NavServer.lua
+-- v0.9.7 P1-4  DecideNext 統合 + ラン放棄（abandon）対応
+-- 変更点：
+--  - "abandon" を新設。四季のどのタイミングでも受け付け、即座にランを終了して Home へ戻す。
+--  - ラン終了時は StageResult を強制クローズし、activeRun を消去し、次回は NEW GAME を強制。
+--  - 既存の "home" / "next" の挙動は維持（"home" は従来どおり冬以外は無効）。
+--  - "save" は保険として "home" に変換（保存ボタン廃止の互換）。
 
 local RS  = game:GetService("ReplicatedStorage")
 
@@ -8737,15 +8892,35 @@ function NavServer:handle(plr: Player, op: string)
 		return
 	end
 
-	-- 冬以外では想定外（クライアントから来ても無視）
+	local op0 = string.lower(tostring(op or ""))
+
+	-- =========================
+	-- ★ 新設："abandon" はいつでも有効（季節を問わず即終了）
+	-- =========================
+	if op0 == "abandon" then
+		LOG.info("handle: ABANDON | user=%s season=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.season), tostring(s.phase))
+		endRunAndClean(StateHub, SaveService, plr)
+
+		Remotes.HomeOpen:FireClient(plr, {
+			hasSave = false, -- ★常に New Game
+			bank    = s.bank or 0,
+			year    = s.year or 0,
+			clears  = s.totalClears or 0,
+			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
+		})
+		LOG.info("→ HOME(abandon) | user=%s bank=%d year=%d clears=%d", plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0)
+		return
+	end
+
+	-- 以降は既存どおり：冬以外では "home"/"next" を受け付けない
 	if (s.season or 1) ~= 4 then
-		LOG.debug("DecideNext ignored (not winter) | user=%s op=%s season=%s", tostring(plr and plr.Name or "?"), tostring(op), tostring(s.season))
+		LOG.debug("DecideNext ignored (not winter) | user=%s op=%s season=%s", tostring(plr and plr.Name or "?"), tostring(op0), tostring(s.season))
 		return
 	end
 
 	-- 互換: "save" を送ってきてもすべて "home" として扱う（保存機能は廃止）
-	if op == "save" then
-		op = "home"
+	if op0 == "save" then
+		op0 = "home"
 	end
 
 	-- 共通初期化
@@ -8755,18 +8930,18 @@ function NavServer:handle(plr: Player, op: string)
 	local clears   = tonumber(s.totalClears or 0) or 0
 	local unlocked = (not LOCAL_DEV_NEXT_LOCKED) and (clears >= 3) or false
 
-	if op ~= "home" and not unlocked then
+	if op0 ~= "home" and not unlocked then
 		-- ロック中に "next" を送ってきても HOME へ倒す（改造クライアント対策）
-		op = "home"
+		op0 = "home"
 	end
 
 	LOG.info(
 		"handle | user=%s op=%s unlocked=%s clears=%d",
-		tostring(plr and plr.Name or "?"), tostring(op), tostring(unlocked), clears
+		tostring(plr and plr.Name or "?"), tostring(op0), tostring(unlocked), clears
 	)
 
-	if op == "home" then
-		-- ★ ランを終了（続き無し）→ Home
+	if op0 == "home" then
+		-- ★ ランを終了（続き無し）→ Home（冬のリザルトからの帰還用）
 		endRunAndClean(StateHub, SaveService, plr)
 
 		Remotes.HomeOpen:FireClient(plr, {
@@ -8782,7 +8957,7 @@ function NavServer:handle(plr: Player, op: string)
 		)
 		return
 
-	elseif op == "next" then
+	elseif op0 == "next" then
 		-- 次の年へ（解禁済のみ到達）
 		s.year = (s.year or 0) + 25
 		if SaveService and typeof(SaveService.bumpYear) == "function" then
@@ -8801,7 +8976,7 @@ function NavServer:handle(plr: Player, op: string)
 		return
 	end
 
-	LOG.warn("unknown op | user=%s op=%s", tostring(plr and plr.Name or "?"), tostring(op))
+	LOG.warn("unknown op | user=%s op=%s", tostring(plr and plr.Name or "?"), tostring(op0))
 end
 
 return NavServer

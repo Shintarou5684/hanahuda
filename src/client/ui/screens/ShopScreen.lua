@@ -1,7 +1,8 @@
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.9-P2-16 ShopScreen（診断ログ強化）
+-- v0.9.9-P2-17 ShopScreen（診断ログ強化 + reroll再有効化FIX）
 --  - 可視件数・在庫署名の遷移・リロール可否を INFO で出力
---  - 他は前版(P2-15)の selfバインド/LOG統一そのまま
+--  - setData/update の末尾で rerollBusy を解除し、ボタン状態を再適用
+--  - 他は前版(P2-16)の selfバインド/LOG統一そのまま
 
 local Shop = {}
 Shop.__index = Shop
@@ -266,6 +267,10 @@ function Shop:setData(payload: Payload)
 	LOG.info("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
 	self:_syncTalismanBoard()
 	self:_render()
+
+	-- ★FIX: サーバ応答反映後は busy を解除し、ボタン状態を再適用
+	self._rerollBusy = false
+	self:_applyRerollButtonState()
 end
 
 function Shop:show(payload: Payload?)
@@ -310,6 +315,9 @@ function Shop:update(payload: Payload?)
 	LOG.info("update | items=%d lang=%s", countItems(self._payload), tostring(self._lang))
 	self:_syncTalismanBoard()
 	self:_render()
+
+	-- ★FIX: サーバ応答反映後は busy を解除し、ボタン状態を再適用
+	self._rerollBusy = false
 	self:_applyRerollButtonState()
 end
 

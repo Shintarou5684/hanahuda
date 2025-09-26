@@ -1,24 +1,26 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-8
+-- v0.9.7-P2-9
 --  - StageResult の互換受信を強化（{close=true} / (true,data) / data 単体の全対応）
 --  - Home等への遷移後にリザルトが残留しないよう、show() 冒頭で明示的に hide / _resultShown リセット
 --  - 既存機能・UIは維持
 --  - [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
 --  - 監視用ログを追加（[LOG] マーク）
 --  - ★ サーバ確定の talisman をそのまま描画（クライアントで補完/推測しない）
+--  - ★ 追加：ラン放棄（あきらめる）ボタン配線と確認モーダル
 
 local Run = {}
 Run.__index = Run
 
 local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RS                = ReplicatedStorage
 
 -- Logger
-local Logger = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Logger"))
+local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("RunScreen")
 
 -- Modules
-local Config = ReplicatedStorage:WaitForChild("Config")
+local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
 
@@ -74,6 +76,19 @@ local function safeGetGlobalLang()
 		end
 	end
 	return nil
+end
+
+--==================================================
+-- 追加：小さな翻訳ヘルパ（フォールバック付き）
+--==================================================
+local function T(lang, key, jaFallback, enFallback)
+	local txt = nil
+	local ok = pcall(function() txt = Locale.t(lang, key) end)
+	if ok and type(txt) == "string" and txt ~= "" and txt ~= key then
+		return txt
+	end
+	if (lang == "ja") then return jaFallback end
+	return enFallback
 end
 
 --==================================================
@@ -401,6 +416,117 @@ function Run.new(deps)
 		self._resultModal:setLocked(nextLocked == true, saveLocked == true)
 	end
 
+	--========================
+	-- 追加：GiveUp 確認モーダル
+	--========================
+	function self:_closeGiveUpOverlay()
+		if not self.frame then return end
+		local existed = self.frame:FindFirstChild("GiveUpOverlay")
+		if existed then existed:Destroy() end
+	end
+
+	function self:_showGiveUpConfirm(onYes)
+		self:_closeGiveUpOverlay()
+
+		local overlay = Instance.new("Frame")
+		overlay.Name = "GiveUpOverlay"
+		overlay.Parent = self.frame
+		overlay.Size = UDim2.fromScale(1,1)
+		overlay.BackgroundColor3 = Color3.fromRGB(0,0,0)
+		overlay.BackgroundTransparency = 0.35
+		overlay.ZIndex = 1000
+		overlay.Active = true
+
+		local panel = Instance.new("Frame")
+		panel.Name = "ConfirmPanel"
+		panel.Parent = overlay
+		panel.Size = UDim2.new(0, 380, 0, 180)
+		panel.AnchorPoint = Vector2.new(0.5, 0.5)
+		panel.Position = UDim2.fromScale(0.5, 0.5)
+		panel.BackgroundColor3 =
+			(Theme and Theme.COLORS and Theme.COLORS.PanelBg) or Color3.fromRGB(245,245,245)
+		panel.BorderSizePixel = 0
+		panel.ZIndex = 1001
+		do
+			local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = panel
+			local s = Instance.new("UIStroke");  s.Thickness    = 1;                s.Parent  = panel
+		end
+
+		local title = Instance.new("TextLabel")
+		title.Name = "Title"
+		title.Parent = panel
+		title.Size = UDim2.new(1, -24, 0, 32)
+		title.Position = UDim2.new(0, 12, 0, 12)
+		title.BackgroundTransparency = 1
+		title.Font = Enum.Font.SourceSansBold
+		title.TextScaled = true
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextDefault) or Color3.fromRGB(20,20,20)
+		title.ZIndex = 1002
+		title.Text = T(self._lang, "RUN_GIVEUP_TITLE",
+			"このランをあきらめますか？",
+			"Abandon this run?")
+
+		local body = Instance.new("TextLabel")
+		body.Name = "Body"
+		body.Parent = panel
+		body.Size = UDim2.new(1, -24, 0, 68)
+		body.Position = UDim2.new(0, 12, 0, 52)
+		body.BackgroundTransparency = 1
+		body.Font = Enum.Font.SourceSans
+		body.TextScaled = true
+		body.TextWrapped = true
+		body.TextYAlignment = Enum.TextYAlignment.Top
+		body.TextXAlignment = Enum.TextXAlignment.Left
+		body.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextDefault) or Color3.fromRGB(40,40,40)
+		body.ZIndex = 1002
+		body.Text = T(self._lang, "RUN_GIVEUP_BODY",
+			"途中の記録は削除され、ホームに戻ります。次回はNEW GAMEから開始します。",
+			"Your in-run progress will be deleted. You'll return to Home and start from NEW GAME.")
+
+		local yes = Instance.new("TextButton")
+		yes.Name = "Yes"
+		yes.Parent = panel
+		yes.Size = UDim2.new(0.5, -18, 0, 40)
+		yes.Position = UDim2.new(0, 12, 1, -52)
+		yes.AnchorPoint = Vector2.new(0,1)
+		yes.TextScaled = true
+		yes.Font = Enum.Font.SourceSansBold
+		yes.ZIndex = 1002
+		yes.BackgroundColor3 = (Theme and Theme.COLORS and Theme.COLORS.WarnBtnBg) or Color3.fromRGB(180,50,50)
+		yes.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextOnPrimary) or Color3.fromRGB(255,255,255)
+		yes.Text = T(self._lang, "RUN_CONFIRM_YES", "はい", "YES")
+		do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = yes end
+
+		local no = Instance.new("TextButton")
+		no.Name = "No"
+		no.Parent = panel
+		no.Size = UDim2.new(0.5, -18, 0, 40)
+		no.Position = UDim2.new(1, -12, 1, -52)
+		no.AnchorPoint = Vector2.new(1,1)
+		no.TextScaled = true
+		no.Font = Enum.Font.SourceSansBold
+		no.ZIndex = 1002
+		no.BackgroundColor3 = (Theme and Theme.COLORS and Theme.COLORS.InfoBtnBg) or Color3.fromRGB(60,60,60)
+		no.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextOnPrimary) or Color3.fromRGB(255,255,255)
+		no.Text = T(self._lang, "RUN_CONFIRM_NO", "いいえ", "NO")
+		do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = no end
+
+		local function close()
+			if overlay and overlay.Parent then overlay:Destroy() end
+		end
+
+		yes.MouseButton1Click:Connect(function()
+			yes.Active = false
+			no.Active  = false
+			close()
+			if typeof(onYes) == "function" then
+				onYes()
+			end
+		end)
+		no.MouseButton1Click:Connect(close)
+	end
+
 	-- ボタン（必要最低限）
 	if self.buttons and self.buttons.yaku then
 		self.buttons.yaku.MouseButton1Click:Connect(function()
@@ -426,6 +552,28 @@ function Run.new(deps)
 			if self.deps and self.deps.ReqRerollHand then
 				self.deps.ReqRerollHand:FireServer()
 			end
+		end)
+	end
+	-- ★ 新規：あきらめる
+	if self.buttons and self.buttons.giveUp then
+		self.buttons.giveUp.MouseButton1Click:Connect(function()
+			LOG.info("giveup:clicked -> confirm modal") -- [LOG]
+			self:_showGiveUpConfirm(function()
+				LOG.info("giveup:confirmed -> FireServer('abandon')") -- [LOG]
+				local DecideNext = self.deps and self.deps.DecideNext
+				if DecideNext then
+					DecideNext:FireServer("abandon")
+				else
+					-- フォールバック（依存注入なしでも動く）
+					local rem = RS:FindFirstChild("Remotes")
+					local ev  = rem and rem:FindFirstChild("DecideNext")
+					if ev and ev:IsA("RemoteEvent") then
+						ev:FireServer("abandon")
+					else
+						LOG.warn("giveup: no DecideNext remote found") -- [LOG]
+					end
+				end
+			end)
 		end)
 	end
 
@@ -484,8 +632,9 @@ local function extractTalismanFromPayload(payload: any)
 end
 
 function Run:show(payload)
-	-- ★ 安全網：表示直前にリザルトを必ず閉じる＆フラグをリセット
+	-- ★ 安全網：表示直前にリザルト＆確認オーバーレイを必ず閉じる
 	if self._resultModal then self._resultModal:hide() end
+	self:_closeGiveUpOverlay()
 	self._resultShown = false
 
 	-- payload.lang を尊重（"jp" は "ja" に正規化）
@@ -533,12 +682,14 @@ end
 
 function Run:hide()
 	self.frame.Visible = false
+	self:_closeGiveUpOverlay()
 	LOG.debug("remotes:disconnect (hide)") -- [LOG]
 	self._remotes:disconnect()
 end
 
 function Run:destroy()
 	LOG.debug("destroy:disconnect remotes & langConn, destroy gui") -- [LOG]
+	self:_closeGiveUpOverlay()
 	self._remotes:disconnect()
 	if self._langConn then self._langConn:Disconnect() end
 	if self.gui then self.gui:Destroy() end

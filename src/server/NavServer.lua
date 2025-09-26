@@ -1,12 +1,10 @@
--- v0.9.7 P1-3 Nav 集約：DecideNext を唯一線に（保存廃止 / 次ステージロック可）
--- 追加修正:
---  - ラン終了時に StageResult を強制クローズ通知（残存モーダル対策）
---  - 次回スタートを強制NEWさせるフラグ s._forceNewOnNextStart = true を付与
---  - "home" は “このランを終了” として扱い、保留結果やスナップを全消去
---  - Round.resetRun() は呼ばず state を直接クリア（春スナップ生成を防止）
---  - HomeOpen は hasSave=false を必ず返す（常に New Game になる）
---  - "save" は受け取っても即 "home" に変換（保存ボタン廃止の保険）
---  - 次のステージは開発中ロックをフラグで制御（LOCAL_DEV_NEXT_LOCKED）
+-- ServerScriptService/NavServer.lua
+-- v0.9.7 P1-4  DecideNext 統合 + ラン放棄（abandon）対応
+-- 変更点：
+--  - "abandon" を新設。四季のどのタイミングでも受け付け、即座にランを終了して Home へ戻す。
+--  - ラン終了時は StageResult を強制クローズし、activeRun を消去し、次回は NEW GAME を強制。
+--  - 既存の "home" / "next" の挙動は維持（"home" は従来どおり冬以外は無効）。
+--  - "save" は保険として "home" に変換（保存ボタン廃止の互換）。
 
 local RS  = game:GetService("ReplicatedStorage")
 
@@ -128,15 +126,35 @@ function NavServer:handle(plr: Player, op: string)
 		return
 	end
 
-	-- 冬以外では想定外（クライアントから来ても無視）
+	local op0 = string.lower(tostring(op or ""))
+
+	-- =========================
+	-- ★ 新設："abandon" はいつでも有効（季節を問わず即終了）
+	-- =========================
+	if op0 == "abandon" then
+		LOG.info("handle: ABANDON | user=%s season=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.season), tostring(s.phase))
+		endRunAndClean(StateHub, SaveService, plr)
+
+		Remotes.HomeOpen:FireClient(plr, {
+			hasSave = false, -- ★常に New Game
+			bank    = s.bank or 0,
+			year    = s.year or 0,
+			clears  = s.totalClears or 0,
+			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
+		})
+		LOG.info("→ HOME(abandon) | user=%s bank=%d year=%d clears=%d", plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0)
+		return
+	end
+
+	-- 以降は既存どおり：冬以外では "home"/"next" を受け付けない
 	if (s.season or 1) ~= 4 then
-		LOG.debug("DecideNext ignored (not winter) | user=%s op=%s season=%s", tostring(plr and plr.Name or "?"), tostring(op), tostring(s.season))
+		LOG.debug("DecideNext ignored (not winter) | user=%s op=%s season=%s", tostring(plr and plr.Name or "?"), tostring(op0), tostring(s.season))
 		return
 	end
 
 	-- 互換: "save" を送ってきてもすべて "home" として扱う（保存機能は廃止）
-	if op == "save" then
-		op = "home"
+	if op0 == "save" then
+		op0 = "home"
 	end
 
 	-- 共通初期化
@@ -146,18 +164,18 @@ function NavServer:handle(plr: Player, op: string)
 	local clears   = tonumber(s.totalClears or 0) or 0
 	local unlocked = (not LOCAL_DEV_NEXT_LOCKED) and (clears >= 3) or false
 
-	if op ~= "home" and not unlocked then
+	if op0 ~= "home" and not unlocked then
 		-- ロック中に "next" を送ってきても HOME へ倒す（改造クライアント対策）
-		op = "home"
+		op0 = "home"
 	end
 
 	LOG.info(
 		"handle | user=%s op=%s unlocked=%s clears=%d",
-		tostring(plr and plr.Name or "?"), tostring(op), tostring(unlocked), clears
+		tostring(plr and plr.Name or "?"), tostring(op0), tostring(unlocked), clears
 	)
 
-	if op == "home" then
-		-- ★ ランを終了（続き無し）→ Home
+	if op0 == "home" then
+		-- ★ ランを終了（続き無し）→ Home（冬のリザルトからの帰還用）
 		endRunAndClean(StateHub, SaveService, plr)
 
 		Remotes.HomeOpen:FireClient(plr, {
@@ -173,7 +191,7 @@ function NavServer:handle(plr: Player, op: string)
 		)
 		return
 
-	elseif op == "next" then
+	elseif op0 == "next" then
 		-- 次の年へ（解禁済のみ到達）
 		s.year = (s.year or 0) + 25
 		if SaveService and typeof(SaveService.bumpYear) == "function" then
@@ -192,7 +210,7 @@ function NavServer:handle(plr: Player, op: string)
 		return
 	end
 
-	LOG.warn("unknown op | user=%s op=%s", tostring(plr and plr.Name or "?"), tostring(op))
+	LOG.warn("unknown op | user=%s op=%s", tostring(plr and plr.Name or "?"), tostring(op0))
 end
 
 return NavServer
