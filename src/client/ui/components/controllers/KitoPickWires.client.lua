@@ -2,8 +2,9 @@
 -- 目的: KitoPick の配線（本UI前提。必要なら自動決定も残置）
 -- メモ:
 --  - Balance.KITO_UI_ENABLED が true のときのみ動作
---  - Balance.KITO_UI_AUTO_DECIDE=false で本UIへ委譲（12枚一覧・フィルタ・確定ボタン）
+--  - Balance.KITO_UI_AUTO_DECIDE=false で本UIへ委譲（12枚一覧・グレーアウト・確定ボタン）
 --  - UI側は ReplicatedStorage/ClientSignals の BindableEvent を購読して実装する
+--  - ★ eligibility を尊重：AUTO_DECIDE 時は「選択可能(eligibility.ok)な候補のみ」から選ぶ
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -23,7 +24,6 @@ local LOG      = Logger.scope("KitoPickClient")
 -- 重複接続ガード（Play Solo 再起動や二重require対策）
 -- ─────────────────────────────────────────────────────────────
 if script:GetAttribute("wired") then
-	-- 既に接続済み
 	return
 end
 script:SetAttribute("wired", true)
@@ -63,18 +63,41 @@ local function briefList(list)
 	return tostring(n)
 end
 
--- 「最初の非 targetKind」を優先、全て targetKind なら先頭（自動決定用フォールバック）
-local function chooseUid(payload)
+-- eligible を尊重して UID を選ぶ（AUTO_DECIDE 用）
+-- 1) eligible==true の中から先頭
+-- 2) すべて不可なら nil を返す（＝スキップ送信）
+local function chooseEligibleUid(payload)
 	if type(payload) ~= "table" or type(payload.list) ~= "table" or #payload.list == 0 then
 		return nil
 	end
-	local tk = tostring(payload.targetKind or "bright")
+	local elig = (type(payload.eligibility) == "table") and payload.eligibility or {}
+
+	-- まず eligible==true を探す
 	for _, ent in ipairs(payload.list) do
-		if ent and ent.kind ~= tk then
-			return ent.uid
+		local uid = ent and ent.uid
+		if uid then
+			local e = elig[uid]
+			if type(e) == "table" and e.ok == true then
+				return uid
+			end
 		end
 	end
-	return payload.list[1].uid
+
+	-- すべて不可なら nil
+	return nil
+end
+
+local function countEligible(payload)
+	if type(payload) ~= "table" or type(payload.list) ~= "table" then
+		return 0, 0
+	end
+	local elig = (type(payload.eligibility) == "table") and payload.eligibility or {}
+	local total, ok = #payload.list, 0
+	for _, ent in ipairs(payload.list) do
+		local e = ent and elig[ent.uid]
+		if type(e) == "table" and e.ok == true then ok += 1 end
+	end
+	return ok, total
 end
 
 -- ─────────────────────────────────────────────────────────────
@@ -87,31 +110,56 @@ EvStart.OnClientEvent:Connect(function(payload)
 	end
 
 	local ok = type(payload) == "table" and type(payload.list) == "table"
-	LOG.info("[KitoPickStart] ok=%s size=%s target=%s session=%s",
+	local eff = ok and tostring(payload.effectId or payload.effect or "-") or "-"
+	local okN, totalN = 0, 0
+	if ok then okN, totalN = countEligible(payload) end
+
+	LOG.info("[KitoPickStart] ok=%s size=%s elig=%d/%d target=%s effect=%s session=%s",
 		tostring(ok), ok and briefList(payload.list) or "?",
+		okN, totalN,
 		tostring(payload and payload.targetKind),
+		eff,
 		tostring(payload and payload.sessionId)
 	)
 	if not ok or #payload.list == 0 then return end
 
-	-- 本UIへ委譲: UI 層に payload を流す（12枚一覧・フィルタ・確定ボタン）
+	-- 本UIへ委譲: UI 層に payload を流す（12枚一覧・グレーアウト・確定ボタン）
 	if not AUTO_DECIDE then
 		SigIncoming:Fire(payload)
 		return
 	end
 
-	-- ★フォールバック: 自動決定モード（旧動作）
-	local pickUid = chooseUid(payload)
+	-- ★AUTO_DECIDE: eligible==true の先頭を自動選択。1件も無ければ「スキップ」扱い。
+	local pickUid = chooseEligibleUid(payload)
 	if not pickUid then
-		LOG.warn("[KitoPickDecide] no candidate uid")
+		LOG.warn("[KitoPickDecide] no eligible candidate; sending skip")
+		local okSend, err = pcall(function()
+			EvDecide:FireServer({
+				sessionId  = payload.sessionId,
+				targetKind = payload.targetKind or "bright",
+				noChange   = true, -- サーバ合意済みのスキップフラグ
+			})
+		end)
+		if not okSend then
+			LOG.warn("[KitoPickDecide] skip send failed: %s", tostring(err))
+		else
+			LOG.info("[KitoPickDecide] sent (auto-skip)")
+		end
 		return
 	end
-	EvDecide:FireServer({
-		sessionId  = payload.sessionId,
-		uid        = pickUid,
-		targetKind = payload.targetKind or "bright",
-	})
-	LOG.info("[KitoPickDecide] sent uid=%s (auto)", tostring(pickUid))
+
+	local okSend, err = pcall(function()
+		EvDecide:FireServer({
+			sessionId  = payload.sessionId,
+			uid        = pickUid,
+			targetKind = payload.targetKind or "bright",
+		})
+	end)
+	if not okSend then
+		LOG.warn("[KitoPickDecide] send failed: %s", tostring(err))
+	else
+		LOG.info("[KitoPickDecide] sent uid=%s (auto)", tostring(pickUid))
+	end
 end)
 
 -- ─────────────────────────────────────────────────────────────
@@ -119,7 +167,7 @@ end)
 -- ─────────────────────────────────────────────────────────────
 EvResult.OnClientEvent:Connect(function(res)
 	if type(res) ~= "table" then return end
-	LOG.info("[KitoPickResult] ok=%s msg=%s target=%s",
-		tostring(res.ok), tostring(res.message), tostring(res.targetKind))
+	LOG.info("[KitoPickResult] ok=%s changed=%s msg=%s target=%s",
+		tostring(res.ok), tostring(res.changed), tostring(res.message), tostring(res.targetKind))
 	SigResult:Fire(res)
 end)

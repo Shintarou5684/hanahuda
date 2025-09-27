@@ -1,12 +1,14 @@
 -- ServerScriptService/KitoPickCore.lua
--- v0.9.5 KITO Pick Core (DeckRegistry + UID consistent, EN-only)
+-- v0.9.7 KITO Pick Core (anyK + canApply eligibility, UID-first, EN-only)
 -- Purpose:
---   - Build and send a 12-card candidate pool for the picker UI
+--   - Build and send a K-card candidate pool for the picker UI (always K if available; K = KITO_UI_PICK_COUNT or KITO_POOL_SIZE)
+--   - Attach server-authoritative eligibility (can/cannot apply + reason) per card
 --   - Keep/expire a simple session
 -- Policy:
 --   - UID-first (entries[*].uid is the single source of truth; legacy decks may use code as fallback)
---   - Exclude months that do not have a "bright" card
---   - KITO_SAME_KIND_POLICY: "block" (exclude already-bright) / "allow" (include)
+--   - NO pre-filtering by month/kind here: pool is random (anyK). Eligibility decides gray-out.
+--   - POOL_MODE fallback: Balance.KITO_POOL_MODE = "eligible12" for legacy behavior (optional)
+--   - Server is the only source of truth; client displays what server says
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -15,10 +17,27 @@ local Balance    = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 local Logger     = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG        = Logger.scope("KitoPickCore")
 
--- Deck APIs
-local Shared     = RS:WaitForChild("SharedModules")
-local CardEngine = require(Shared:WaitForChild("CardEngine"))
-local DeckReg    = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+-- Shared deps
+local Shared        = RS:WaitForChild("SharedModules")
+local CardEngine    = require(Shared:WaitForChild("CardEngine"))
+local DeckReg       = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+local DeckSampler   = require(Shared:WaitForChild("DeckSampler"))
+local Effects       = require(Shared:WaitForChild("Deck"):WaitForChild("EffectsRegistry"))
+
+-- 🔧 Optional bootstrap: auto-scan Deck/Effects and register handlers/canApply if available
+local function tryRequire(inst: Instance?)
+	if not inst or not inst:IsA("ModuleScript") then return end
+	local ok, err = pcall(require, inst)
+	if not ok then
+		LOG.warn("[EffectsBootstrap] require failed: %s", tostring(err))
+	end
+end
+do
+	local deckFolder = Shared:FindFirstChild("Deck")
+	if deckFolder then
+		tryRequire(deckFolder:FindFirstChild("EffectsRegisterAll"))
+	end
+end
 
 -- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
@@ -79,43 +98,19 @@ function Core.consume(userId: number)
 end
 
 --─────────────────────────────────────────────────────────────
--- Resolve runId from context
+-- Helpers
 --─────────────────────────────────────────────────────────────
 local function resolveRunId(runCtx:any)
 	if type(runCtx) ~= "table" then return nil end
 	-- direct
 	local direct = runCtx.runId or runCtx.deckRunId or runCtx.id or runCtx.deckRunID or runCtx.runID
 	if direct then return direct end
-	-- nested run
+	-- nested
 	local run = runCtx.run
 	if type(run) == "table" then
 		return run.runId or run.deckRunId or run.id or run.deckRunID or run.runID
 	end
 	return nil
-end
-
---─────────────────────────────────────────────────────────────
--- Helpers: month/image/eligibility
---─────────────────────────────────────────────────────────────
-local function parseMonth(entry:any): number?
-	if type(entry) ~= "table" then return nil end
-	local m = tonumber(entry.month)
-	if m and m>=1 and m<=12 then return m end
-	local s = tostring(entry.code or entry.uid or "")
-	local two = string.match(s, "^(%d%d)")
-	return (two and tonumber(two)) or nil
-end
-
--- Only check for "bright" existence in the month (EN-only)
-local function monthHasBright(month:number): boolean
-	local defs = CardEngine.cardsByMonth[month]
-	if typeof(defs) ~= "table" then return false end
-	for _, def in ipairs(defs) do
-		if tostring(def.kind or "") == "bright" then
-			return true
-		end
-	end
-	return false
 end
 
 local function resolveImage(code:string?)
@@ -126,24 +121,23 @@ local function resolveImage(code:string?)
 	return nil
 end
 
-local function toSummary(entry:any, targetKind:string, sameKindPolicy:string)
+local function parseMonth(entry:any): number?
 	if type(entry) ~= "table" then return nil end
-	local m = parseMonth(entry)
-	if not m or not monthHasBright(m) then return nil end
+	local m = tonumber(entry.month)
+	if m and m>=1 and m<=12 then return m end
+	local s = tostring(entry.code or entry.uid or "")
+	local two = string.match(s, "^(%d%d)")
+	return (two and tonumber(two)) or nil
+end
 
-	local same = tostring(entry.kind or "") == tostring(targetKind or "")
-	if sameKindPolicy == "block" and same then
-		-- already the same kind ("bright") -> exclude from pool
-		return nil
-	end
-
+local function toSummary(entry:any)
+	if type(entry) ~= "table" then return nil end
 	local sum = {
-		uid      = entry.uid or entry.code,   -- UID is the truth; legacy may fallback to code
-		code     = entry.code,                -- for display/image lookup
-		name     = entry.name or entry.code,
-		kind     = entry.kind,
-		month    = m,
-		eligible = true,
+		uid   = entry.uid or entry.code,   -- UID is the truth; fallback to code for very old entries
+		code  = entry.code,
+		name  = entry.name or entry.code,
+		kind  = entry.kind,
+		month = parseMonth(entry),
 	}
 	local img = resolveImage(entry.code)
 	if type(img) == "string" then
@@ -154,21 +148,79 @@ local function toSummary(entry:any, targetKind:string, sameKindPolicy:string)
 	return sum
 end
 
+local function buildUidMap(entries:{any}): {[string]: any}
+	local m = {}
+	for _, e in ipairs(entries) do
+		local uid = e and e.uid
+		if typeof(uid) == "string" and #uid > 0 then
+			m[uid] = e
+		elseif e and e.code then
+			-- legacy fallback
+			m[tostring(e.code)] = e
+		end
+	end
+	return m
+end
+
+-- eligibility per UID using Effects.canApply
+local function computeEligibility(effectId: string, uidMap:{[string]:any}, uids:{string}): ({[string]:{ok:boolean, reason:string?}}, number)
+	local ctx = { DeckStore = true, DeckOps = true, CardEngine = CardEngine } -- minimal stub; Effects.canApply側で不足補完あり
+	local elig = {}
+	local okCount = 0
+	for _, uid in ipairs(uids) do
+		local card = uidMap[uid]
+		local ok, reason = Effects.canApply(effectId, card, ctx)
+		elig[uid] = { ok = ok == true, reason = reason }
+		if ok == true then okCount += 1 end
+	end
+	return elig, okCount
+end
+
+-- pick anyK using DeckSampler with a synthetic state
+local function sampleAnyFromStore(runId:any, store:any, K:number): {string}
+	local state = { runId = runId, deck = store and store.entries or {} }
+	-- DeckSampler internally ensures UIDs via RunDeckUtil.ensureUids(state)
+	return DeckSampler.sampleUids(state, K)
+end
+
+-- legacy mode: pick only eligible candidates up to N
+local function sampleEligible(effectId:string, entries:{any}, N:number): {string}
+	local uids = {}
+	for _, e in ipairs(entries) do
+		local card = e
+		local ok = select(1, Effects.canApply(effectId, card, { CardEngine = CardEngine }))
+		if ok == true then
+			uids[#uids+1] = e.uid or e.code
+		end
+	end
+	-- shuffle uids and take first N
+	local seed = math.floor((os.clock() % 1) * 1e9)
+	local rng  = Random.new(seed)
+	for i = #uids, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		uids[i], uids[j] = uids[j], uids[i]
+	end
+	local out = {}
+	for i=1, math.min(N, #uids) do out[i] = uids[i] end
+	return out
+end
+
 --─────────────────────────────────────────────────────────────
--- Public: build & send 12-card pool (KITO: Rooster/bright)
+-- Public: build & send K-card pool (generic effectId)
 --─────────────────────────────────────────────────────────────
--- effectId: "kito_tori" / targetKind: "bright"
-function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind: string)
+-- effectId: e.g. "kito.tori_brighten", "kito.mi_venom" ...
+-- targetKind param is ignored (kept for compatibility)
+function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind: string?)
 	if Balance.KITO_UI_ENABLED ~= true then
 		LOG.debug("[StartFor] UI disabled; ignored | user=%s", player and player.Name or "?")
 		return false
 	end
-	if tostring(effectId) ~= "kito_tori" then
+	if type(effectId) ~= "string" or #effectId == 0 or not Effects.has(effectId) then
 		LOG.debug("[StartFor] unsupported effect=%s | user=%s", tostring(effectId), player and player.Name or "?")
 		return false
 	end
 
-	-- Resolve runId and ensure entries in DeckRegistry
+	-- Resolve runId and ensure deck entries
 	local runId = resolveRunId(runCtx)
 	if not runId then
 		local hasRun = (type(runCtx)=="table" and type(runCtx.run)=="table")
@@ -182,33 +234,38 @@ function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind:
 		return false
 	end
 
-	-- EN-only target kind
-	local tgtKind = "bright"
-	local policy  = tostring(Balance.KITO_SAME_KIND_POLICY or "block") -- "block"|"allow"
-	local pickN   = tonumber(Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12) or 12
+	-- K は UI_PICK_COUNT 優先（未設定なら POOL_SIZE）
+	local pickN = tonumber(Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12) or 12
+	local mode  = tostring(Balance.KITO_POOL_MODE or "any12_disable_ineligible") -- "any12_disable_ineligible" | "eligible12"
 
-	-- Build pool (UID-first)
-	local pool = {}
-	for _, e in ipairs(store.entries) do
-		local s = toSummary(e, tgtKind, policy)
-		if s then table.insert(pool, s) end
+	-- Build pool (UID list)
+	local uids
+	if mode == "eligible12" then
+		uids = sampleEligible(effectId, store.entries, pickN)
+	else
+		-- ✅ anyK: UI_PICK_COUNT を確実に反映
+		uids = sampleAnyFromStore(runId, store, pickN)
 	end
-	if #pool == 0 then
-		LOG.info("[StartFor] no candidates; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
+	if #uids == 0 then
+		LOG.info("[StartFor] empty pool; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
 		return false
 	end
 
-	-- Shuffle and take first N (independent RNG)
-	local seed = math.floor((os.clock() % 1) * 1e9)
-	local rng  = Random.new(seed)
-	for i = #pool, 2, -1 do
-		local j = rng:NextInteger(1, i)
-		pool[i], pool[j] = pool[j], pool[i]
-	end
+	-- To summaries for UI (code/kind/month/image)
+	local uidMap = buildUidMap(store.entries)
 	local list = {}
-	for i = 1, math.min(#pool, pickN) do
-		list[#list+1] = pool[i]
+	for _, uid in ipairs(uids) do
+		local e = uidMap[uid]
+		local s = e and toSummary(e)
+		if s then list[#list+1] = s end
 	end
+	if #list == 0 then
+		LOG.info("[StartFor] no summaries; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
+		return false
+	end
+
+	-- Eligibility per UID（server-authoritative）
+	local eligibility, okCount = computeEligibility(effectId, uidMap, uids)
 
 	-- Session
 	local sess = {
@@ -218,36 +275,33 @@ function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind:
 		expiresAt = now() + ttlSec(),
 		runId     = runId,
 		effectId  = effectId,
-		uids      = (function()
-			local t = {}
-			for _, s in ipairs(list) do t[#t+1] = s.uid end
-			return t
-		end)(),
+		uids      = uids,
 	}
 	put(player.UserId, sess)
 
-	-- Client payload (EN-only)
+	-- Client payload（list + poolUids + eligibility）
+	-- list: [{uid,code,name,kind,month,image?/imageId?}]
+	-- eligibility: { [uid] = { ok:boolean, reason?:string } }
 	local payload = {
-		sessionId  = sess.id,
-		version    = sess.version,
-		expiresAt  = sess.expiresAt,
-		effectId   = effectId,
-		targetKind = tgtKind,
-		list       = list,    -- {uid,code?,name,kind,month,image?/imageId?,eligible}
-		effect     = ("Select one target (goal: %s)"):format("Bright"),
+		sessionId   = sess.id,
+		version     = sess.version,
+		expiresAt   = sess.expiresAt,
+		effectId    = effectId,
+		list        = list,
+		poolUids    = uids,
+		eligibility = eligibility,
+		effect      = "Select one target", -- simple EN label; UI側でi18n可
 	}
 	EvStart:FireClient(player, payload)
 
 	-- Log summary
-	local same, other = 0, 0
-	for _, s in ipairs(list) do
-		if tostring(s.kind or "") == tgtKind then same += 1 else other += 1 end
-	end
-	LOG.info("[StartFor] user=%s sid=%s size=%d tgt=%s same=%d other=%d head5=[%s]",
+	local gray = #uids - okCount
+	LOG.info("[StartFor] user=%s sid=%s size=%d ok=%d gray=%d head5=[%s] mode=%s",
 		player and player.Name or "?",
 		tostring(sess.id),
-		#list, tgtKind, same, other,
-		headList(sess.uids, 5)
+		#uids, okCount, gray,
+		headList(sess.uids, 5),
+		mode
 	)
 
 	return true

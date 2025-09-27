@@ -1,9 +1,5 @@
 -- ServerScriptService/KitoPickServer.lua
--- v0.9.10 KITO Pick Server (+diag logs, safe reopen with state, no reroll)
--- 変更点:
---   - reopenShopSnapshot: ShopService の想定シグネチャに合わせ state を第2引数へ
---   - open/openFor の複数シグネチャを順に試すフォールバック実装
---   - それ以外は前版踏襲（効果適用→pushState→在庫を維持したままOPEN再送）
+-- v0.9.15 KITO Pick Server (server canApply + safe monDelta→mon + robust reopen + notice(+N文) + msg/bankDelta normalize)
 
 local RS  = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
@@ -18,6 +14,7 @@ local Shared       = RS:WaitForChild("SharedModules")
 local KitoCore     = require(SSS:WaitForChild("KitoPickCore"))
 local DeckRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
 local StateHub     = require(Shared:WaitForChild("StateHub"))
+local CardEngine   = require(Shared:WaitForChild("CardEngine"))
 
 -- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
@@ -25,34 +22,30 @@ local EvDecide = Remotes:WaitForChild("KitoPickDecide")
 local EvCancel = Remotes:FindFirstChild("KitoPickCancel")
 local EvResult = Remotes:FindFirstChild("KitoPickResult") -- 任意/トースト用
 
--- ─────────────────────────────────────────────────────────────
--- Utility: safe require
--- ─────────────────────────────────────────────────────────────
+-- ─ Utility: safe require
 local function tryRequire(inst: Instance?)
 	if not inst or not inst:IsA("ModuleScript") then return nil end
-	local ok, mod = pcall(function() return require(inst) end)
-	if ok then return mod end
-	LOG.warn("[KitoPickServer] require failed: %s", tostring(mod))
+	local ok, modOrErr = pcall(function() return require(inst) end)
+	if ok then return modOrErr end
+	LOG.warn("[KitoPickServer] require failed for %s: %s", inst:GetFullName(), tostring(modOrErr))
 	return nil
 end
 
--- ─────────────────────────────────────────────────────────────
--- EffectsRegistry 読み込み（正しい配置を優先）
--- ─────────────────────────────────────────────────────────────
+-- EffectsRegistry
 local EffectsRegistry =
 	tryRequire(Shared:FindFirstChild("Deck") and Shared.Deck:FindFirstChild("EffectsRegistry"))
 	or tryRequire(Shared:FindFirstChild("EffectsRegistry"))
 	or tryRequire(SSS:FindFirstChild("EffectsRegistry"))
 
+local EffectsBootstrap = tryRequire(Shared:FindFirstChild("Deck") and Shared.Deck:FindFirstChild("EffectsRegisterAll"))
+
 if EffectsRegistry then
-	LOG.info("[KitoPickServer] EffectsRegistry wired (module loaded)")
+	LOG.info("[KitoPickServer] EffectsRegistry wired")
 else
-	LOG.warn("[KitoPickServer] EffectsRegistry not found; brighten effect will be unavailable (server continues)")
+	LOG.warn("[KitoPickServer] EffectsRegistry not found; KITO effects unavailable")
 end
 
--- ─────────────────────────────────────────────────────────────
--- ShopService 解決（非ブロッキング探索）
--- ─────────────────────────────────────────────────────────────
+-- ShopService 解決（複数シグネチャに対応）
 local function resolveShopService()
 	local inst =
 		SSS:FindFirstChild("ShopService")
@@ -65,159 +58,84 @@ local function resolveShopService()
 	if mod then
 		LOG.info("[KitoPickServer] ShopService wired from %s", inst:GetFullName())
 	else
-		LOG.warn("[KitoPickServer] ShopService not found (no ModuleScript found); reopen will be skipped")
+		LOG.warn("[KitoPickServer] ShopService not found; reopen will be skipped")
 	end
 	return mod
 end
-
 local ShopService = resolveShopService()
 
--- ─────────────────────────────────────────────────────────────
--- runId 解決（KitoPickCore と同一規則）
--- ─────────────────────────────────────────────────────────────
+-- runId 解決
 local function resolveRunId(ctx:any)
 	if type(ctx) ~= "table" then return nil end
-	if ctx.runId then return ctx.runId end
-	if ctx.deckRunId then return ctx.deckRunId end
-	if ctx.id then return ctx.id end
-	if ctx.runID then return ctx.runID end
-	if ctx.deckRunID then return ctx.deckRunID end
-	local run = ctx.run
-	if type(run) == "table" then
-		return run.runId or run.deckRunId or run.id or run.runID or run.deckRunID
-	end
-	return nil
+	return ctx.runId or ctx.deckRunId or ctx.id or ctx.runID or ctx.deckRunID
+		or (type(ctx.run)=="table" and (ctx.run.runId or ctx.run.deckRunId or ctx.run.id or ctx.run.runID or ctx.run.deckRunID))
 end
 
--- 効果結果のゆるい解釈
-local function interpretApplyResult(r1, r2)
-	if type(r1) == "boolean" then
-		return r1, nil, r2
-	elseif type(r1) == "table" then
-		local ok = (r1.ok == nil) and true or (r1.ok ~= false)
-		return ok, r1.changed, r1.message or r1.meta or r1.reason or r2
-	else
-		return (r1 ~= nil), nil, r2
-	end
-end
-
--- ─────────────────────────────────────────────────────────────
--- 効果適用（IDフォールバック）
--- ─────────────────────────────────────────────────────────────
-local PRIMARY_ID   = "kito.tori_brighten"
-local FALLBACK_ID  = "Tori_Brighten"
-
-local function applyBrighten(runId:string?, payload:any)
-	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
-		return false, nil, "effects-registry-missing", nil
-	end
-	if not runId or runId == "" then
-		return false, nil, "runId-missing", nil
-	end
-
-	-- primary
-	LOG.debug("[Decide] call apply order=(runId,effectId,payload) id=%s run=%s", PRIMARY_ID, tostring(runId))
-	local okCall, r1, r2 = pcall(function()
-		return EffectsRegistry.apply(runId, PRIMARY_ID, payload)
-	end)
-	if not okCall then
-		LOG.warn("[Decide] apply threw (primary %s): %s", PRIMARY_ID, tostring(r1))
-	else
-		local success, changed, message = interpretApplyResult(r1, r2)
-		LOG.debug("[Decide] apply(primary) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
-			typeof(r1), typeof(r2), tostring(success), tostring(changed), tostring(message))
-		if success then return true, changed, message, PRIMARY_ID end
-	end
-
-	-- fallback
-	LOG.debug("[Decide] retry apply with fallback id=%s run=%s", FALLBACK_ID, tostring(runId))
-	local okCall2, r3, r4 = pcall(function()
-		return EffectsRegistry.apply(runId, FALLBACK_ID, payload)
-	end)
-	if not okCall2 then
-		LOG.warn("[Decide] apply threw (fallback %s): %s", FALLBACK_ID, tostring(r3))
-		return false, nil, tostring(r3), FALLBACK_ID
-	end
-	local success2, changed2, message2 = interpretApplyResult(r3, r4)
-	LOG.debug("[Decide] apply(fallback) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
-		typeof(r3), typeof(r4), tostring(success2), tostring(changed2), tostring(message2))
-	return success2, changed2, message2, FALLBACK_ID
-end
-
--- ─────────────────────────────────────────────────────────────
--- ショップを「在庫維持で開き直す」
---   - ShopService の実装差に合わせて複数シグネチャを順に試す
--- ─────────────────────────────────────────────────────────────
+-- ショップ再オープン（在庫維持）
 local function reopenShopSnapshot(plr: Player, opts:any?)
 	if not ShopService then
 		LOG.warn("[ReopenShop] ShopService missing; skip")
 		return false, "no-shopservice"
 	end
-
-	local state = StateHub.get(plr) or {}
-	local notice = opts and opts.notice or "変換が完了しました"
-	local preserve = true
-
+	local state    = StateHub.get(plr) or {}
+	local notice   = opts and opts.notice or "変換が完了しました"
+	local preserve = (opts and opts.preserve) ~= false
 	local tried = {}
-
 	local function tryCall(desc, f)
 		local t0 = os.clock()
 		local ok, err = pcall(f)
 		table.insert(tried, { desc = desc, ok = ok, err = ok and "" or tostring(err), ms = (os.clock()-t0)*1000 })
 		return ok, err
 	end
-
-	-- 優先1: openFor(plr, state, {notice=..., preserve=true})
 	if type(ShopService.openFor) == "function" then
-		local ok = select(1, tryCall("openFor(plr, state, opts)", function()
+		if select(1, tryCall("openFor(plr,state,opts)", function()
 			return ShopService.openFor(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok then
-			LOG.info("[ReopenShop] via openFor(plr,state,opts) in %.2fms", tried[#tried].ms)
-			return true
-		end
-		-- フォールバック: openFor(plr, { state=..., notice=..., preserve=true })
-		local ok2 = select(1, tryCall("openFor(plr, {state=...,notice=...})", function()
+		end)) then LOG.info("[ReopenShop] via openFor(plr,state,opts) in %.2fms", tried[#tried].ms); return true end
+		if select(1, tryCall("openFor(plr,{state,...})", function()
 			return ShopService.openFor(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok2 then
-			LOG.info("[ReopenShop] via openFor(plr,{state,...}) in %.2fms", tried[#tried].ms)
-			return true
-		end
+		end)) then LOG.info("[ReopenShop] via openFor(plr,{state,...}) in %.2fms", tried[#tried].ms); return true end
 	end
-
-	-- 優先2: open(plr, state, {notice=..., preserve=true})
 	if type(ShopService.open) == "function" then
-		local ok3 = select(1, tryCall("open(plr, state, opts)", function()
+		if select(1, tryCall("open(plr,state,opts)", function()
 			return ShopService.open(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok3 then
-			LOG.info("[ReopenShop] via open(plr,state,opts) in %.2fms", tried[#tried].ms)
-			return true
-		end
-		-- フォールバック: open(plr, { state=..., notice=..., preserve=true })
-		local ok4 = select(1, tryCall("open(plr, {state=...,notice=...})", function()
+		end)) then LOG.info("[ReopenShop] via open(plr,state,opts) in %.2fms", tried[#tried].ms); return true end
+		if select(1, tryCall("open(plr,{state,...})", function()
 			return ShopService.open(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok4 then
-			LOG.info("[ReopenShop] via open(plr,{state,...}) in %.2fms", tried[#tried].ms)
-			return true
-		end
+		end)) then LOG.info("[ReopenShop] via open(plr,{state,...}) in %.2fms", tried[#tried].ms); return true end
 	end
-
-	-- すべて失敗：詳細をまとめて WARN
-	for _, t in ipairs(tried) do
-		if not t.ok then
-			LOG.warn("[ReopenShop] tried %s → failed: %s (%.2fms)", t.desc, t.err, t.ms)
-		end
-	end
+	for _, t in ipairs(tried) do if not t.ok then LOG.warn("[ReopenShop] tried %s → failed: %s (%.2fms)", t.desc, t.err, t.ms) end end
 	return false, "no-matching-signature"
 end
 
--- ─────────────────────────────────────────────────────────────
--- Decide（確定）
--- payload: { sessionId:string, uid:string, noChange?:boolean }
--- ─────────────────────────────────────────────────────────────
+--─────────────────────────────────────────────────────────────
+-- ★ monDelta を安全に適用（所持文）
+--   1) StateHub.applyMonDelta / addMon があれば優先
+--   2) 無ければ state.mon を直接加算（フォールバック）
+--─────────────────────────────────────────────────────────────
+local function applyMonDelta(plr: Player, delta:number?): (boolean, string?)
+	if type(delta) ~= "number" or delta == 0 then return false, "no-delta" end
+
+	for _, fnName in ipairs({ "applyMonDelta", "addMon" }) do
+		if type(StateHub[fnName]) == "function" then
+			local ok, err = pcall(function() StateHub[fnName](plr, delta) end)
+			if ok then return true, nil end
+			LOG.warn("[monDelta] %s failed: %s", fnName, tostring(err))
+		end
+	end
+
+	local ok, err = pcall(function()
+		local s = StateHub.get(plr) or {}
+		s.mon = (type(s.mon) == "number" and s.mon or 0) + delta
+	end)
+	if not ok then
+		return false, tostring(err)
+	end
+	return true, nil
+end
+
+--─────────────────────────────────────────────────────────────
+-- Decide
+--─────────────────────────────────────────────────────────────
 local PRIMARY_NOTICE_SKIP = "選択をスキップしました"
 local PRIMARY_NOTICE_DONE = "変換が完了しました"
 
@@ -228,152 +146,170 @@ local function onDecide(plr: Player, payload:any)
 	local sidRecv  = payload and payload.sessionId
 	local noChange = (payload and payload.noChange) == true
 
-	-- 受信要約ログ
 	LOG.info("[Decide] recv u=%s sid=%s uid=%s noChange=%s",
 		plr and plr.Name or "?", tostring(sidRecv), tostring(uid), tostring(noChange))
 
-	-- 1) セッション消費（1回限り）
+	-- 1) セッション消費
 	local sess = KitoCore.consume(plr.UserId)
 	if not sess or (sidRecv and sess.id ~= sidRecv) then
-		LOG.info("[Decide] invalid session | u=%s gotSid=%s holdSid=%s",
-			plr and plr.Name or "?", tostring(sidRecv), sess and tostring(sess.id) or "-")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="session" }) end
 		return
 	end
-	LOG.debug("[Decide] session ok sid=%s ttl=%s run?=%s",
-		tostring(sess.id), tostring(sess.expiresAt), tostring(sess.runId or "-"))
 
 	-- 2) TTL
-	local now = os.time()
-	if type(sess.expiresAt) == "number" and now > (sess.expiresAt or 0) then
-		LOG.info("[Decide] expired | u=%s sid=%s now=%d exp=%d",
-			plr and plr.Name or "?", tostring(sess.id), now, sess.expiresAt or -1)
+	if type(sess.expiresAt) == "number" and os.time() > (sess.expiresAt or 0) then
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="expired" }) end
 		return
 	end
 
-	-- 3) 候補内チェック（noChange ならスキップ可）
+	-- 3) 候補内チェック
 	local okUid = false
 	if type(uid) == "string" and type(sess.uids) == "table" then
 		for _, u in ipairs(sess.uids) do if u == uid then okUid = true; break end end
 	end
 	if (not okUid) and (not noChange) then
-		LOG.info("[Decide] uid not in session | u=%s sid=%s uid=%s", plr and plr.Name or "?", tostring(sess.id), tostring(uid))
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="uid" }) end
 		return
 	end
 
-	-- 4) state/runId/DeckRegistry 準備
+	-- 4) state/runId
 	local s = StateHub.get(plr)
 	if not s then
-		LOG.warn("[Decide] state missing | u=%s", plr and plr.Name or "?")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="state" }) end
 		return
 	end
 	local runId = resolveRunId(s) or resolveRunId(s.run)
-	DeckRegistry.ensureFromContext(s) -- 必要時のみ snap→registry 反映
-	LOG.debug("[Decide] runId=%s", tostring(runId))
-
-	-- runId 未解決なら明確に終了
+	DeckRegistry.ensureFromContext(s)
 	if not runId or runId == "" then
-		LOG.warn("[Decide] runId missing | u=%s", plr and plr.Name or "?")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="run" }) end
 		return
 	end
 
-	-- 5) noChange: 変換せず終了 → ショップ開き直し
+	-- 5) noChange
 	if noChange == true then
-		LOG.info("[Decide] noChange | u=%s sid=%s", plr and plr.Name or "?", tostring(sess.id))
 		reopenShopSnapshot(plr, { notice = PRIMARY_NOTICE_SKIP })
 		if EvResult then EvResult:FireClient(plr, { ok=true, changed=false, uid=nil }) end
 		return
 	end
 
-	-- 6) 効果適用（UIDファースト + 後方互換 codes 同値）
+	-- 6) 効果ID（セッション値を使用／最低限の互換マップ）
 	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
-		LOG.warn("[Decide] EffectsRegistry unavailable; cannot apply brighten | u=%s", plr and plr.Name or "?")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effects" }) end
 		return
 	end
-
-	local function isUidLike(sv:any)
-		local s = (type(sv) == "string") and sv or nil
-		return s and (string.find(s, "#%d+$") ~= nil) or false
+	local effectId = tostring(sess.effectId or "")
+	if effectId == "" then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effects" }) end
+		return
 	end
-	if payload and type(payload.codes) == "table" and #payload.codes > 0 then
-		for i, c in ipairs(payload.codes) do
-			if isUidLike(c) then
-				LOG.warn("[Decide] payload.codes[%d] looks like UID (%s). legacy fallback may miss.", i, tostring(c))
-				break
+	if effectId == "kito_tori" then effectId = "kito.tori_brighten" end
+
+	-- 7) サーバ canApply 再確認
+	local cardForUid
+	do
+		local store = DeckRegistry.read(runId)
+		if type(store) == "table" and type(store.entries) == "table" then
+			for _, e in ipairs(store.entries) do
+				if e and (e.uid == uid or e.code == uid) then cardForUid = e; break end
 			end
 		end
 	end
-
-	local applyPayload = {
-		plr        = plr,
-		runId      = runId,
-		uids       = (uid and { tostring(uid) } or nil),
-		codes      = (uid and { tostring(uid) } or nil), -- 後方互換のため現状維持
-		preferKind = "bright",
-		tag        = "eff:kito_tori_bright",
-		now        = os.time(),
-		lang       = s.lang or "ja",
-	}
-	LOG.info("[Decide] apply start run=%s uid=%s uids#=%s codes#=%s",
-		tostring(runId), tostring(uid),
-		tostring(applyPayload.uids and #applyPayload.uids or 0),
-		tostring(applyPayload.codes and #applyPayload.codes or 0)
-	)
-
-	local success, changed, message, usedId = applyBrighten(runId, applyPayload)
-
-	if not success then
-		LOG.info("[Decide] effect failed | id=%s msg=%s", tostring(usedId or PRIMARY_ID), tostring(message))
-		if EvResult then
-			local res = { ok=false, reason="effect", message=tostring(message), id=tostring(usedId or PRIMARY_ID) }
-			EvResult:FireClient(plr, res)
-			LOG.debug("[Result->C] %s", game.HttpService and game.HttpService:JSONEncode(res) or "sent")
+	if not cardForUid then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="uid" }) end
+		return
+	end
+	if type(EffectsRegistry.canApply) == "function" then
+		local canOk, canReason = EffectsRegistry.canApply(effectId, cardForUid, { CardEngine = CardEngine })
+		if not canOk then
+			if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(canReason or "not-eligible") }) end
+			return
 		end
+	end
+
+	-- 8) 効果適用
+	local applyPayload = {
+		plr      = plr,
+		runId    = runId,
+		uid      = uid,
+		uids     = (uid and { tostring(uid) } or nil),
+		poolUids = sess.uids,
+		now      = os.time(),
+		lang     = s.lang or "ja",
+	}
+	if effectId == "kito.tori_brighten" or effectId == "Tori_Brighten" then
+		applyPayload.preferKind = "bright"
+		applyPayload.tag        = "eff:kito_tori_bright"
+	end
+
+	local okCall, res = pcall(function()
+		return EffectsRegistry.apply(runId, effectId, applyPayload)
+	end)
+	if not okCall then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(res), id=effectId }) end
 		return
 	end
 
-	-- 7) 状態同期
+	-- 9) 正規化（messageは文字列のみ採用／bankDeltaは数値化）
+	local ok       = (type(res) == "table") and (res.ok ~= false) or (res ~= nil)
+	local changed  = (type(res) == "table") and (res.changed ~= 0 and res.changed ~= false) or true
+	local msgStr   = ""
+	if type(res) == "table" then
+		if type(res.message) == "string" then
+			msgStr = res.message
+		elseif type(res.reason) == "string" then
+			msgStr = res.reason
+		end
+	end
+	local bankDeltaRaw = (type(res) == "table" and type(res.meta) == "table") and res.meta.bankDelta or nil
+	local bankDelta = tonumber(bankDeltaRaw)
+
+	if not ok then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(msgStr or ""), id=effectId }) end
+		return
+	end
+
+	-- 10) bankDelta（= 所持文の増分）を mon に適用
+	if bankDelta and bankDelta ~= 0 then
+		local mOk, mErr = applyMonDelta(plr, bankDelta)
+		LOG.info("[Decide] monDelta %+d applied=%s err=%s", bankDelta, tostring(mOk), mOk and "" or tostring(mErr))
+	end
+
+	-- 11) 状態同期
 	local okPush, errPush = pcall(function() StateHub.pushState(plr) end)
 	LOG.info("[Decide] pushState ok=%s err=%s", tostring(okPush), okPush and "" or tostring(errPush))
 
-	-- 8) 在庫を「リロールせず」再送（OPEN）
-	reopenShopSnapshot(plr, { notice = (message and tostring(message) ~= "" and tostring(message)) or PRIMARY_NOTICE_DONE })
+	-- 12) Shop 再表示（在庫維持）— notice を（+N 文）付きで
+	local base = (msgStr ~= "" and msgStr) or PRIMARY_NOTICE_DONE
+	local finalNotice = (bankDelta and bankDelta ~= 0)
+		and string.format("%s（+%d 文）", base, bankDelta)
+		or base
+	reopenShopSnapshot(plr, { notice = finalNotice, preserve = true })
 
-	-- 9) 結果通知
+	-- 13) 結果通知
 	if EvResult then
-		local res = {
+		local resOut = {
 			ok      = true,
-			changed = (changed == nil) and true or (changed ~= 0 and changed ~= false),
+			changed = changed,
 			uid     = tostring(uid),
-			message = tostring(message or ""),
-			id      = tostring(usedId or PRIMARY_ID),
+			message = msgStr,
+			id      = effectId,
 		}
-		EvResult:FireClient(plr, res)
-		LOG.debug("[Result->C] %s", game.HttpService and game.HttpService:JSONEncode(res) or "sent")
+		if bankDelta then resOut.bankDelta = bankDelta end
+		EvResult:FireClient(plr, resOut)
 	end
 
-	LOG.info("[Decide] OK | u=%s run=%s uid=%s id=%s msg=%s",
-		plr and plr.Name or "?", tostring(runId), tostring(uid), tostring(usedId or PRIMARY_ID), tostring(message or ""))
+	LOG.info("[Decide] OK | u=%s run=%s uid=%s eff=%s msg=%s",
+		plr and plr.Name or "?", tostring(runId), tostring(uid), tostring(effectId), tostring(msgStr or ""))
 end
 
--- ─────────────────────────────────────────────────────────────
 -- Cancel（任意）
--- ─────────────────────────────────────────────────────────────
 local function onCancel(plr: Player, _payload:any)
-	KitoCore.consume(plr.UserId) -- セッションを無言破棄
-	LOG.debug("[Cancel] u=%s", plr and plr.Name or "?")
-	reopenShopSnapshot(plr, { notice = "取消しました" })
+	KitoCore.consume(plr.UserId)
+	reopenShopSnapshot(plr, { notice = "取消しました", preserve = true })
 	if EvResult then EvResult:FireClient(plr, { ok=true, changed=false, cancel=true }) end
 end
 
--- ─────────────────────────────────────────────────────────────
 -- Wiring
--- ─────────────────────────────────────────────────────────────
 local function wire()
 	if EvDecide then EvDecide.OnServerEvent:Connect(onDecide) end
 	if EvCancel then EvCancel.OnServerEvent:Connect(onCancel) end

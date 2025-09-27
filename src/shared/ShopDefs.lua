@@ -44,6 +44,12 @@ ShopDefs.POOLS = {
 			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
 			descEN = "Convert one non-bright in run config to Bright (or queue +1 for next season).",
 		},
+		-- ★ 追加：巳（Venom）
+		{
+			id   = "kito_mi", name = "巳：1枚をカス札に変換", category = "kito", price = 2, effect = "kito_mi",
+			descJP = "ラン構成の対象札をカス札に変換（適用時に少額の文を即時加算）。",
+			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
+		},
 	},
 
 	-- 祭事

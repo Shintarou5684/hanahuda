@@ -1,13 +1,12 @@
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Tori_Brighten.lua
 -- Rooster (KITO): convert one target card to "bright" (UID-first)
 --  - Effect IDs: "kito.tori_brighten" (primary), "Tori_Brighten" (legacy alias)
---  - Prioritize payload.uids / payload.poolUids (UID uniquely identifies one card)
+--  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "bright", do nothing (meta returned)
---  - ★ Diagnostic logs added (scope: Effects.kito.tori_brighten)
-
+--  - Diagnostic logs (scope: Effects.kito.tori_brighten)
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -21,12 +20,7 @@ return function(Effects)
 		if ok and Logger and type(Logger.scope) == "function" then
 			LOG = Logger.scope("Effects.kito.tori_brighten")
 		else
-			-- silent no-op logger
-			LOG = {
-				info  = function(...) end,
-				debug = function(...) end,
-				warn  = function(...) warn(string.format(...)) end,
-			}
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
 		end
 	end
 
@@ -34,17 +28,19 @@ return function(Effects)
 	-- Shared handler for both effect IDs
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
-		local payload    = ctx.payload or {}
-		local uids       = (typeof(payload.uids)       == "table" and payload.uids)       or nil
-		local poolUids   = (typeof(payload.poolUids)   == "table" and payload.poolUids)   or nil
-		local codes      = (typeof(payload.codes)      == "table" and payload.codes)      or nil -- legacy compat
-		local poolCodes  = (typeof(payload.poolCodes)  == "table" and payload.poolCodes)  or nil -- legacy compat
-		local tagMark    = tostring(payload.tag or "eff:kito_tori_bright")
-		local pref       = tostring(payload.preferKind or "bright"):lower()
-		local preferKind = (pref == "bright") and "bright" or "bright" -- force EN-only "bright"
-		local runId      = ctx.runId
+		local payload     = ctx.payload or {}
+		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
+		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
 
-		local rng = ctx.rng or Random.new()
+		local tagMark     = tostring(payload.tag or "eff:kito_tori_bright")
+		local pref        = tostring(payload.preferKind or "bright"):lower()
+		local preferKind  = (pref == "bright") and "bright" or "bright" -- normalize to EN "bright"
+
+		local runId       = ctx.runId
+		local rng         = ctx.rng or Random.new()
 
 		-- quick payload summary for logs
 		local function head5(list)
@@ -54,12 +50,10 @@ return function(Effects)
 			return table.concat(out, ",")
 		end
 
-		-- 依存注入の存在可否も一度だけ観測
 		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
 			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
-
-		LOG.info("[begin] run=%s prefer=%s tag=%s | uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
-			tostring(runId), preferKind, tagMark,
+		LOG.info("[begin] run=%s prefer=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), preferKind, tagMark, tostring(uidScalar),
 			tostring(uids and #uids or 0), head5(uids),
 			tostring(poolUids and #poolUids or 0), head5(poolUids),
 			tostring(codes and #codes or 0), head5(codes),
@@ -76,7 +70,8 @@ return function(Effects)
 			return s
 		end
 
-		local uidSet      = listToSet(uids)
+		local uidSet = listToSet(uids) or {}
+		if uidScalar then uidSet[uidScalar] = true end
 		local poolUidSet  = listToSet(poolUids)
 		local codeSet     = listToSet(codes)
 		local poolCodeSet = listToSet(poolCodes)
@@ -184,29 +179,26 @@ return function(Effects)
 			return { v = 3, entries = out }
 		end
 
-		-- Target selection order: UID → Code → pool(UID/Code) → all
-		-- In all cases, restrict to months that contain "bright".
+		-- Target selection order: UID → Code → pool(UID/Code) → any eligible month
 		local function pickTarget(store)
 			local entries = (store and store.entries) or {}
-			-- 0) direct UID
-			if uidSet then
+			-- 0) direct UID(s)
+			if uidSet and next(uidSet) ~= nil then
 				local list = {}
 				for _, e in ipairs(entries) do
-					if e and e.uid and uidSet[e.uid] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then list[#list+1] = e end
+					if e and e.uid and uidSet[e.uid] and monthHasBright(monthFromCard(e)) then
+						list[#list+1] = e
 					end
 				end
 				LOG.debug("[pick] direct-uid candidates=%d", #list)
 				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-uid" end
 			end
-			-- 1) direct code
+			-- 1) direct code(s)
 			if codeSet then
 				local list = {}
 				for _, e in ipairs(entries) do
-					if e and e.code and codeSet[e.code] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then list[#list+1] = e end
+					if e and e.code and codeSet[e.code] and monthHasBright(monthFromCard(e)) then
+						list[#list+1] = e
 					end
 				end
 				LOG.debug("[pick] direct-code candidates=%d", #list)
@@ -216,9 +208,8 @@ return function(Effects)
 			if poolUidSet then
 				local cand = {}
 				for _, e in ipairs(entries) do
-					if e and e.uid and poolUidSet[e.uid] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then cand[#cand+1] = e end
+					if e and e.uid and poolUidSet[e.uid] and monthHasBright(monthFromCard(e)) then
+						cand[#cand+1] = e
 					end
 				end
 				LOG.debug("[pick] pool-uid candidates=%d", #cand)
@@ -228,9 +219,8 @@ return function(Effects)
 			if poolCodeSet then
 				local cand = {}
 				for _, e in ipairs(entries) do
-					if e and e.code and poolCodeSet[e.code] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then cand[#cand+1] = e end
+					if e and e.code and poolCodeSet[e.code] and monthHasBright(monthFromCard(e)) then
+						cand[#cand+1] = e
 					end
 				end
 				LOG.debug("[pick] pool-code candidates=%d", #cand)
@@ -239,8 +229,7 @@ return function(Effects)
 			-- 4) any entry whose month has "bright"
 			local all = {}
 			for _, e in ipairs(entries) do
-				local m = monthFromCard(e)
-				if monthHasBright(m) then all[#all+1] = e end
+				if monthHasBright(monthFromCard(e)) then all[#all+1] = e end
 			end
 			LOG.debug("[pick] any-bright-month candidates=%d", #all)
 			if #all > 0 then return all[rng:NextInteger(1, #all)], "any-bright-month" end
@@ -264,6 +253,7 @@ return function(Effects)
 
 			LOG.debug("[target] via=%s %s", tostring(reason), cardStr(target))
 
+			-- If already tagged, skip (idempotent)
 			if alreadyTagged(target) then
 				LOG.info("[result] already-applied uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
 				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = target.uid, targetCode = target.code, pickReason = reason }
@@ -296,8 +286,15 @@ return function(Effects)
 			end
 
 			local dt = (os.clock() - t0) * 1000
-			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms", tostring(target.uid), tostring(target.code), tostring(reason), dt)
-			return store, { ok = true, changed = 1, targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms",
+				tostring(target.uid), tostring(target.code), tostring(reason), dt)
+			return store, {
+				ok       = true,
+				changed  = 1,
+				targetUid  = target.uid,
+				targetCode = target.code,
+				pickReason = reason,
+			}
 		end)
 	end
 

@@ -1,7 +1,10 @@
 -- src/client/ui/screens/KitoPickView.lua
 -- 目的: KitoPick の12枚一覧UI・効果説明＋カード画像＆情報表示・確定／スキップ
 -- 仕様: KitoPickWires の ClientSignals を購読し、シグナル受信時に Router 経由で表示
--- 方針: 「選択可否の真実はサーバ」。各候補の entry.eligible を厳守して UI でブロックする。
+-- 方針:
+--   - 「選択可否の真実はサーバ」。payload.eligibility を唯一の正として
+--     各候補に eligible / reason をマージし、不適格はグレーアウト＆クリック不可。
+--   - 送信前にもクライアント側で eligible を再確認（多重タップ/競合のガード）。
 -- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
 
 local Players    = game:GetService("Players")
@@ -40,11 +43,13 @@ local ui         -- ScreenGui
 local refs = {}  -- 参照置き場（ScreenGui にフィールドは生やさない）
 
 local current = {
-	sessionId   = nil,
-	targetKind  = "bright",
-	list        = {},
-	selectedUid = nil,
-	busy        = false,   -- 決定/スキップの多重送信防止
+	sessionId    = nil,
+	effectId     = nil,
+	targetKind   = "bright",
+	list         = {},     -- [{ uid, code, name, kind, month, image?/imageId?, eligible?, reason? }]
+	eligibility  = {},     -- server map { [uid] = { ok, reason } }（情報保持のみ）
+	selectedUid  = nil,
+	busy         = false,  -- 決定/スキップの多重送信防止
 }
 
 -- 表示用ラベルマップ
@@ -270,8 +275,22 @@ local function setCardSelected(btn: Instance, sel: boolean)
 	end
 end
 
+-- 理由の日本語化（簡易）
+local function reasonToText(reason: string?): string?
+	local map = {
+		["already-applied"]   = "既に適用済みです",
+		["already-bright"]    = "すでに光札です",
+		["already-chaff"]     = "すでにカス札です",
+		["month-has-no-bright"] = "この月に光札はありません",
+		["not-eligible"]      = "対象外です",
+		["same-target"]       = "同一カードは選べません",
+		["no-check"]          = "対象外（サーバ判定なし）",
+	}
+	return map[tostring(reason or "")] or nil
+end
+
 -- 「対象外」オーバーレイ（eligible=false 用）
-local function makeIneligibleOverlay(parent)
+local function makeIneligibleOverlay(parent, reason)
 	local mask = Instance.new("Frame")
 	mask.Name = "IneligibleMask"
 	mask.BackgroundColor3 = Color3.new(0,0,0)
@@ -283,13 +302,27 @@ local function makeIneligibleOverlay(parent)
 
 	local tag = Instance.new("TextLabel")
 	tag.BackgroundTransparency = 1
-	tag.Size = UDim2.fromScale(1,1)
+	tag.Size = UDim2.fromScale(1,0)
+	tag.Position = UDim2.fromScale(0,0.45)
 	tag.Text = "対象外"
 	tag.Font = Enum.Font.GothamBold
 	tag.TextSize = 18
 	tag.TextColor3 = Color3.fromRGB(230,230,240)
 	tag.ZIndex = 6
 	tag.Parent = mask
+
+	if reason and reason ~= "" then
+		local sub = Instance.new("TextLabel")
+		sub.BackgroundTransparency = 1
+		sub.Size = UDim2.fromScale(1,0)
+		sub.Position = UDim2.fromScale(0,0.65)
+		sub.Text = reasonToText(reason) or tostring(reason)
+		sub.Font = Enum.Font.Gotham
+		sub.TextSize = 14
+		sub.TextColor3 = Color3.fromRGB(220,220,230)
+		sub.ZIndex = 6
+		sub.Parent = mask
+	end
 end
 
 -- カードボタン作成（画像＋情報）
@@ -327,6 +360,7 @@ local function makeCard(entry)
 	else
 		img.BackgroundTransparency = 0
 		img.BackgroundColor3 = Color3.fromRGB(55,57,69)
+		img.Image = ""
 	end
 
 	-- 名称
@@ -360,9 +394,10 @@ local function makeCard(entry)
 	-- ★ サーバの真実: eligible を尊重
 	local canPick = (entry.eligible ~= false)
 	card:SetAttribute("canPick", canPick)
+	card:SetAttribute("reason", entry.reason or "")
 	if not canPick then
 		card.AutoButtonColor = false
-		makeIneligibleOverlay(card)
+		makeIneligibleOverlay(card, entry.reason)
 	end
 
 	return card
@@ -402,15 +437,16 @@ local function rebuildList()
 
 			-- ★ eligible=false はクリック無効（通知のみ）
 			if b:GetAttribute("canPick") == false then
+				local reason = b:GetAttribute("reason")
 				local ok, err = pcall(function()
 					StarterGui:SetCore("SendNotification", {
 						Title = "KITO",
-						Text = "対象外のカードです（同種は選べません）",
+						Text = (reasonToText(reason) or "対象外のカードです"),
 						Duration = 2,
 					})
 				end)
 				if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
-				LOG.debug("click blocked (ineligible) uid=%s", tostring(ent.uid))
+				LOG.debug("click blocked (ineligible) uid=%s reason=%s", tostring(ent.uid), tostring(reason))
 				return
 			end
 
@@ -446,6 +482,21 @@ local function rebuildList()
 	)
 end
 
+-- 効果説明の決定
+local function buildEffectText(payload)
+	if type(payload.effect) == "string" and payload.effect ~= "" then
+		return payload.effect
+	end
+	if type(payload.message) == "string" and payload.message ~= "" then
+		return payload.message
+	end
+	if type(payload.note) == "string" and payload.note ~= "" then
+		return payload.note
+	end
+	local tgtJp = kindToJp(current.targetKind)
+	return ("対象を選んでください（目標: %s）"):format(tgtJp)
+end
+
 -- 新規 payload 表示
 local function openPayload(payload)
 	local g = ensureGui()
@@ -454,19 +505,30 @@ local function openPayload(payload)
 		g.Parent = LP.PlayerGui
 	end
 
-	current.sessionId   = payload.sessionId
-	current.targetKind  = tostring(payload.targetKind or "bright")
-	current.list        = payload.list or {}
-	current.selectedUid = nil
-	current.busy        = false
-
-	-- 効果説明テキスト（優先度: effect > message > note > デフォルト）
-	local desc = payload.effect or payload.message or payload.note
-	if not desc then
-		local tgtJp = kindToJp(current.targetKind)
-		desc = ("対象を選んでください（目標: %s）"):format(tgtJp)
+	-- サーバの eligibility を list にマージ（唯一の正）
+	local eligibility = payload.eligibility or {}
+	local enriched = {}
+	for _, ent in ipairs(payload.list or {}) do
+		local uid = tostring(ent.uid or ent.code or "")
+		local eg = eligibility[uid]
+		local ok  = (type(eg)=="table" and eg.ok == true) or false
+		local rsn = (type(eg)=="table" and eg.reason) or nil
+		local copy = table.clone(ent)
+		copy.eligible = ok
+		copy.reason   = rsn
+		enriched[#enriched+1] = copy
 	end
-	refs.effect.Text = tostring(desc)
+
+	current.sessionId    = payload.sessionId
+	current.effectId     = payload.effectId
+	current.targetKind   = tostring(payload.targetKind or "bright")
+	current.list         = enriched
+	current.eligibility  = eligibility
+	current.selectedUid  = nil
+	current.busy         = false
+
+	-- 効果説明テキスト
+	refs.effect.Text = buildEffectText(payload)
 	relayoutByEffectHeight()
 
 	refs.pickInfo.Text = "Select 1 card"
@@ -477,9 +539,10 @@ local function openPayload(payload)
 
 	g.Enabled = true -- ★ここで可視化
 
-	LOG.info("[open] sid=%s tgt=%s list=%d router=%s",
-		tostring(current.sessionId), tostring(current.targetKind),
-		#(current.list or {}), ScreenRouter and "on" or "off"
+	LOG.info("[open] sid=%s eff=%s tgt=%s list=%d router=%s",
+		tostring(current.sessionId), tostring(current.effectId or "-"),
+		tostring(current.targetKind), #(current.list or {}),
+		ScreenRouter and "on" or "off"
 	)
 end
 
@@ -491,12 +554,14 @@ local function sendDecide()
 		return
 	end
 
-	-- ★ 念のため「送信前」にも eligible を二重チェック（サーバと完全同期）
+	-- ★ 送信前の二重チェック（サーバ同期）
 	for _, e in ipairs(current.list or {}) do
 		if e.uid == current.selectedUid and e.eligible == false then
 			local ok, err = pcall(function()
 				StarterGui:SetCore("SendNotification", {
-					Title="KITO", Text="対象外のカードです（同種は選べません）", Duration=2,
+					Title="KITO",
+					Text= reasonToText(e.reason) or "対象外のカードです",
+					Duration=2,
 				})
 			end)
 			if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
@@ -566,59 +631,55 @@ local function onResult(res)
 		LOG.warn("[result] ScreenRouter not available; cannot route to 'shop'")
 	end
 
--- 通知は最後に（本文フォールバック付き）
-local function _nonEmpty(s) return type(s)=="string" and s ~= "" end
-local function _reasonToText(reason)
-  local map = {
-    session        = "セッションが無効です。もう一度お試しください。",
-    expired        = "選択の有効期限が切れました。もう一度お試しください。",
-    uid            = "対象外のカードです（同種は選べません）。",
-    state          = "状態を取得できませんでした。同期してください。",
-    run            = "ラン情報が見つかりませんでした。",
-    effects        = "効果モジュールが利用できません。",
-    ["no-shopservice"] = "屋台画面を再表示できませんでした。",
-    effect         = nil, -- effect は res.message を優先（無ければ最後の既定文言へ）
-  }
-  return map[tostring(reason or "")] or nil
-end
+	-- 通知（本文フォールバック付き）
+	local function _nonEmpty(s) return type(s)=="string" and s ~= "" end
+	local function _reasonToText(reason)
+		local map = {
+			session           = "セッションが無効です。もう一度お試しください。",
+			expired           = "選択の有効期限が切れました。もう一度お試しください。",
+			uid               = "対象外のカードです（同種は選べません）。",
+			state             = "状態を取得できませんでした。同期してください。",
+			run               = "ラン情報が見つかりませんでした。",
+			effects           = "効果モジュールが利用できません。",
+			["no-shopservice"]= "屋台画面を再表示できませんでした。",
+			effect            = nil, -- effect は res.message を優先（無ければ最後の既定文言へ）
+		}
+		return map[tostring(reason or "")] or nil
+	end
 
-local title, body
-if res.cancel then
-  -- キャンセル
-  title = "KITO"
-  body  = "取消しました"
-elseif res.ok then
-  -- 成功（メッセージ優先→変更あり/なしでフォールバック）
-  title = "KITO"
-  if _nonEmpty(res.message) then
-    body = res.message
-  else
-    body = (res.changed ~= false) and "変換が完了しました" or "選択をスキップしました"
-  end
-else
-  -- 失敗（message優先→reason→既定文言）
-  title = "KITO (failed)"
-  body  = _nonEmpty(res.message)
-            and res.message
-            or (_reasonToText(res.reason) or ("処理に失敗しました" ..
-                 (res.reason and ("（"..tostring(res.reason).."）") or "")))
-end
+	local title, body
+	if res.cancel then
+		title = "KITO"
+		body  = "取消しました"
+	elseif res.ok then
+		title = "KITO"
+		if _nonEmpty(res.message) then
+			body = res.message
+		else
+			body = (res.changed ~= false) and "変換が完了しました" or "選択をスキップしました"
+		end
+	else
+		title = "KITO (failed)"
+		body  = _nonEmpty(res.message)
+			and res.message
+			or (_reasonToText(res.reason) or ("処理に失敗しました" ..
+				(res.reason and ("（"..tostring(res.reason).."）") or "")))
+	end
 
-local ok, err = pcall(function()
-  StarterGui:SetCore("SendNotification", {
-    Title    = title,
-    Text     = body,
-    Duration = 3,
-  })
-end)
-if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
+	local ok, err = pcall(function()
+		StarterGui:SetCore("SendNotification", {
+			Title    = title,
+			Text     = body,
+			Duration = 3,
+		})
+	end)
+	if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
 
-LOG.info("[result] ok=%s changed=%s uid=%s id=%s msg=%s",
-  tostring(res.ok), tostring(res.changed), tostring(res.uid),
-  tostring(res.id), tostring(res.message or "")
-)
-LOG.debug("[toast] title=%s text=%s reason=%s", tostring(title), tostring(body), tostring(res.reason))
-
+	LOG.info("[result] ok=%s changed=%s uid=%s id=%s msg=%s",
+		tostring(res.ok), tostring(res.changed), tostring(res.uid),
+		tostring(res.id), tostring(res.message or "")
+	)
+	LOG.debug("[toast] title=%s text=%s reason=%s", tostring(title), tostring(body), tostring(res.reason))
 end
 
 -- ボタン配線

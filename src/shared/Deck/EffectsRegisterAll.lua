@@ -2,7 +2,7 @@
 -- Deck/Effects 以下の ModuleScript を自動スキャンして EffectsRegistry に一括登録する
 --
 -- サポートするモジュールの返り値（3通りすべて対応）:
---   1) ビルダー関数: function(Effects) -> ()           -- ← NEW: Effects.register(...) を内部で呼ぶ
+--   1) ビルダー関数: function(Effects) -> ()           -- ← 推奨: builder内で Effects.register(...) などを呼ぶ
 --   2) ハンドラ関数: function(ctx) -> ...              -- 旧来: 直接適用される関数
 --   3) 設定テーブル: { id|name, apply|run|exec|call }  -- 旧来: idと関数をテーブルで返す
 --
@@ -10,8 +10,9 @@
 --   テーブル返り値: payload.id > payload.name > module._id > ModuleScript.Name
 --   関数返り値(ハンドラ扱い): module._id > ModuleScript.Name
 --
--- ビルダー関数を検出した場合は、Effects.register をプロキシして捕捉し、内部で実レジストリへ中継登録する。
--- これにより、モジュール内で "kito.xxx" のような命名規約を自律的に採用可能。
+-- 追加: canApply 登録の標準化
+--   - Effects.registerCanApply(id, fn) をビルダーからも呼べるようプロキシを提供
+--   - 本ファイルでも酉/巳の canApply を中央登録する（UIグレーアウト/サーバ最終判定の唯一の正）
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -31,8 +32,12 @@ local function getLogger()
 end
 local LOG = getLogger()
 
+local Shared     = RS:WaitForChild("SharedModules")
 local DeckFolder = script.Parent
-local Registry = require(DeckFolder:WaitForChild("EffectsRegistry"))
+local Registry   = require(DeckFolder:WaitForChild("EffectsRegistry"))
+
+-- 依存（canApply用）
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
 
 --====================
 -- 内部 util
@@ -74,9 +79,9 @@ local function pickId(modInst: Instance, payload:any)
 	return modInst.Name
 end
 
--- Effects.register をプロキシして捕捉し、本体 Registry に中継
+-- Effects.register / registerCanApply をプロキシして捕捉し、本体 Registry に中継
 local function buildEffectsProxy(modInst: Instance)
-	local captured = {}  -- { {id=id, fn=fn}, ... }
+	local captured = {}  -- { {id=id, fn=fn}, ... } ※register だけ捕捉（canApply は捕捉しなくてもOK）
 	local Effects = {}
 
 	function Effects.register(id: string, fn: any)
@@ -92,6 +97,19 @@ local function buildEffectsProxy(modInst: Instance)
 		LOG.info("registered: id=%s from=%s", tostring(id), modInst:GetFullName())
 	end
 
+	-- ★ canApply のプロキシ（ビルダーがここから登録できる）
+	function Effects.registerCanApply(id: string, fn: any)
+		local ok, err = pcall(function()
+			Registry.registerCanApply(id, fn)
+		end)
+		if not ok then
+			LOG.warn("registerCanApply failed via builder: id=%s mod=%s | err=%s",
+				tostring(id), modInst:GetFullName(), tostring(err))
+			return
+		end
+		LOG.info("registered canApply: id=%s from=%s", tostring(id), modInst:GetFullName())
+	end
+
 	-- 任意: ビルダーがログを使いたい場合
 	function Effects.log(msg: string, ...)
 		LOG.debug("[effects:%s] "..tostring(msg), modInst.Name, ...)
@@ -103,7 +121,7 @@ end
 local function registerAsBuilder(modInst: Instance, builderFn: any): boolean
 	local Effects, captured = buildEffectsProxy(modInst)
 	local ok, err = pcall(function()
-		-- ビルダーは副作用として Effects.register を呼ぶ想定
+		-- ビルダーは副作用として Effects.register / registerCanApply を呼ぶ想定
 		builderFn(Effects)
 	end)
 	if not ok then
@@ -201,6 +219,98 @@ local function scanAndRegister(root: Instance)
 end
 
 --====================
+-- canApply（酉/巳）の中央登録
+--====================
+local function hasTag(card:any, mark:string): boolean
+	if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+	for _, t in ipairs(card.tags) do
+		if t == mark then return true end
+	end
+	return false
+end
+
+local function monthHasBright(month:number?): boolean
+	if not month or not CardEngine or not CardEngine.cardsByMonth then return false end
+	local defs = CardEngine.cardsByMonth[month]
+	if typeof(defs) ~= "table" then return false end
+	for _, def in ipairs(defs) do
+		if tostring(def.kind or "") == "bright" then
+			return true
+		end
+	end
+	return false
+end
+
+local function parseMonthFromCard(card:any): number?
+	if typeof(card) ~= "table" then return nil end
+	if card.month ~= nil then
+		local m = tonumber(card.month)
+		if typeof(m) == "number" then return m end
+	end
+	local code = tostring(card.code or "")
+	if #code >= 2 then
+		local mm = tonumber(string.sub(code, 1, 2))
+		if typeof(mm) == "number" then return mm end
+	end
+	return nil
+end
+
+local function registerBuiltinCanApply()
+	-- 酉（Brighten）
+	local ToriIdPrimary = "kito.tori_brighten"
+	local ToriIdLegacy  = "Tori_Brighten"
+	local toriTag       = "eff:kito_tori_bright"
+
+	local function toriCan(card:any, _ctx:any)
+		if typeof(card) ~= "table" then return false, "not-eligible" end
+		if tostring(card.kind or "") == "bright" then
+			return false, "already-bright"
+		end
+		if hasTag(card, toriTag) then
+			return false, "already-applied"
+		end
+		local m = parseMonthFromCard(card)
+		if not monthHasBright(m) then
+			return false, "month-has-no-bright"
+		end
+		return true, nil
+	end
+
+	-- 巳（Venom）
+	local MiIdPrimary = "kito.mi_venom"
+	local miTag       = "eff:kito_mi_venom"
+
+	local function miCan(card:any, _ctx:any)
+		if typeof(card) ~= "table" then return false, "not-eligible" end
+		if tostring(card.kind or "") == "chaff" then
+			return false, "already-chaff"
+		end
+		if hasTag(card, miTag) then
+			return false, "already-applied"
+		end
+		return true, nil
+	end
+
+	-- 登録（存在チェックは EffectsRegistry 側で持つためそのまま上書きOK）
+	local ok1, err1 = pcall(function()
+		Registry.registerCanApply(ToriIdPrimary, toriCan)
+		Registry.registerCanApply(ToriIdLegacy,  toriCan) -- 旧別名
+	end)
+	if not ok1 then
+		LOG.warn("registerCanApply(tori) failed: %s", tostring(err1))
+	end
+
+	local ok2, err2 = pcall(function()
+		Registry.registerCanApply(MiIdPrimary, miCan)
+	end)
+	if not ok2 then
+		LOG.warn("registerCanApply(mi) failed: %s", tostring(err2))
+	end
+
+	LOG.info("builtin canApply registered: tori + mi")
+end
+
+--====================
 -- エントリ
 --====================
 -- 規約: Deck/Effects 以下をスキャン（無ければ何もせず成功扱い）
@@ -211,6 +321,9 @@ if effectsRoot then
 else
 	LOG.warn("Deck/Effects not found under %s (no effects registered)", DeckFolder:GetFullName())
 end
+
+-- canApply 中央登録を最後に実行
+registerBuiltinCanApply()
 
 LOG.info("EffectsRegistry initialized: %d module(s) registered", total)
 

@@ -9,6 +9,7 @@
 --  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 --  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（state.run.talisman をそのまま搭載）
 --               ※補完/推測は一切しない（真実は TalismanService/StateHub が管理）
+--  - ★ KITO（酉/巳 など）を UI 経路に統一（正規effectIdへ正規化して KitoPickCore へ移譲）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -108,6 +109,23 @@ local function ensureRunId(state:any): string
     state.run.id = id
   end
   return id
+end
+
+--========================
+-- KITO: ID 正規化 & ラベル
+--========================
+local function toCanonicalEffectId(eid: string?): string
+	if type(eid) ~= "string" or eid == "" then return "" end
+	if eid == "kito_tori" or eid == "Tori_Brighten" then return "kito.tori_brighten" end
+	if eid == "kito_mi"   or eid == "Mi_Venom"      then return "kito.mi_venom"      end
+	return eid
+end
+
+local function kitoLabel(eid: string?): string
+	local id = toCanonicalEffectId(eid)
+	if id == "kito.tori_brighten" then return "酉" end
+	if id == "kito.mi_venom"      then return "巳" end
+	return "KITO"
 end
 
 --========================
@@ -345,24 +363,37 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			tostring(found.effect or found.id)
 		)
 
-		-- ★ UI 分岐：フラグONかつ酉は「効果適用せず、候補提示（Coreへ移譲）」に切替
-		if Balance.KITO_UI_ENABLED == true and (found.effect == "kito_tori" or found.id == "kito_tori") then
-			-- 在庫を減らして保存（購入は完了）
-			if s.shop and s.shop.stock and foundIndex then
-				table.remove(s.shop.stock, foundIndex)
-			end
-			if Service._pushState then Service._pushState(plr) end
-			snapShop(plr, s)
+-- ★ UI 分岐：KITO は「選択が必要なもの（酉/巳）」のみ KitoPick に送る
+if Balance.KITO_UI_ENABLED == true and (found.category == "kito") then
+  local canonical = toCanonicalEffectId(found.effect or found.id)
+  local isSelectType = (canonical == "kito.tori_brighten") or (canonical == "kito.mi_venom")
 
-			-- ★ 移譲：セッション作成・保持・FireClient を KitoPickCore に任せる
-			local runId = ensureRunId(s)
-			local started = KitoPickCore.startFor(plr, { runId = runId }, "kito_tori", "bright")
-			local uiMsg = started and "酉：対象を選んでください（候補を表示中…）" or "酉：選択候補が用意できませんでした"
+  if isSelectType then
+    -- 在庫を減らして保存（購入は完了）
+    if s.shop and s.shop.stock and foundIndex then
+      table.remove(s.shop.stock, foundIndex)
+    end
+    if Service._pushState then Service._pushState(plr) end
+    snapShop(plr, s)
 
-			LOG.info("[BUY][RES] ok=true msg=%s matsuri(after)=%s", uiMsg, matsuriJSON(s))
-			openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, uiMsg) })
-			return
-		end
+    ensureRunId(s)
+    local started = false
+    if canonical ~= "" then
+      started = KitoPickCore.startFor(plr, s, canonical)
+    else
+      LOG.warn("[BUY][WARN] KITO item without effect id: %s", tostring(found.id))
+    end
+
+    local prefix = kitoLabel(canonical)
+    local uiMsg = started and (prefix.."：対象を選んでください（候補を表示中…）")
+                        or  (prefix.."：選択候補が用意できませんでした")
+
+    LOG.info("[BUY][RES] ok=true msg=%s matsuri(after)=%s", uiMsg, matsuriJSON(s))
+    openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, uiMsg) })
+    return
+  end
+  -- ※ 選択不要（丑/寅など）はこの if を抜けて従来 apply フローへ
+end
 		-- ★ 分岐ここまで（UI OFF なら従来どおり効果適用へ）
 
 		local effOk, effMsg = true, ""

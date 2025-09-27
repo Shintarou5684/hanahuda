@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-26 14:53:19
+- Generated: 2025-09-27 12:03:00
 - Max lines/file: 300
 
 ## Folder Tree
@@ -139,6 +139,7 @@ hanahuda
 │       ├── Deck
 │       │   ├── Effects
 │       │   │   ├── kito
+│       │   │   │   ├── Mi_Venom.lua
 │       │   │   │   └── Tori_Brighten.lua
 │       │   │   ├── omamori
 │       │   │   └── spectral
@@ -810,7 +811,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-26 14:53:19
+- Generated: 2025-09-27 12:03:00
 - Max lines/file: 300
 
 ## Folder Tree
@@ -948,6 +949,7 @@ hanahuda
 │       ├── Deck
 │       │   ├── Effects
 │       │   │   ├── kito
+│       │   │   │   ├── Mi_Venom.lua
 │       │   │   │   └── Tori_Brighten.lua
 │       │   │   ├── omamori
 │       │   │   └── spectral
@@ -1106,7 +1108,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 
 ---
 
-### 追記ルール（メモ）
 ... (truncated)
 ```
 
@@ -1975,8 +1976,9 @@ function M.create(parent: Instance, code: string, a: any?, b: any?, c: any?, d: 
 -- 目的: KitoPick の配線（本UI前提。必要なら自動決定も残置）
 -- メモ:
 --  - Balance.KITO_UI_ENABLED が true のときのみ動作
---  - Balance.KITO_UI_AUTO_DECIDE=false で本UIへ委譲（12枚一覧・フィルタ・確定ボタン）
+--  - Balance.KITO_UI_AUTO_DECIDE=false で本UIへ委譲（12枚一覧・グレーアウト・確定ボタン）
 --  - UI側は ReplicatedStorage/ClientSignals の BindableEvent を購読して実装する
+--  - ★ eligibility を尊重：AUTO_DECIDE 時は「選択可能(eligibility.ok)な候補のみ」から選ぶ
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -1996,7 +1998,6 @@ local LOG      = Logger.scope("KitoPickClient")
 -- 重複接続ガード（Play Solo 再起動や二重require対策）
 -- ─────────────────────────────────────────────────────────────
 if script:GetAttribute("wired") then
-	-- 既に接続済み
 	return
 end
 script:SetAttribute("wired", true)
@@ -2036,18 +2037,41 @@ local function briefList(list)
 	return tostring(n)
 end
 
--- 「最初の非 targetKind」を優先、全て targetKind なら先頭（自動決定用フォールバック）
-local function chooseUid(payload)
+-- eligible を尊重して UID を選ぶ（AUTO_DECIDE 用）
+-- 1) eligible==true の中から先頭
+-- 2) すべて不可なら nil を返す（＝スキップ送信）
+local function chooseEligibleUid(payload)
 	if type(payload) ~= "table" or type(payload.list) ~= "table" or #payload.list == 0 then
 		return nil
 	end
-	local tk = tostring(payload.targetKind or "bright")
+	local elig = (type(payload.eligibility) == "table") and payload.eligibility or {}
+
+	-- まず eligible==true を探す
 	for _, ent in ipairs(payload.list) do
-		if ent and ent.kind ~= tk then
-			return ent.uid
+		local uid = ent and ent.uid
+		if uid then
+			local e = elig[uid]
+			if type(e) == "table" and e.ok == true then
+				return uid
+			end
 		end
 	end
-	return payload.list[1].uid
+
+	-- すべて不可なら nil
+	return nil
+end
+
+local function countEligible(payload)
+	if type(payload) ~= "table" or type(payload.list) ~= "table" then
+		return 0, 0
+	end
+	local elig = (type(payload.eligibility) == "table") and payload.eligibility or {}
+	local total, ok = #payload.list, 0
+	for _, ent in ipairs(payload.list) do
+		local e = ent and elig[ent.uid]
+		if type(e) == "table" and e.ok == true then ok += 1 end
+	end
+	return ok, total
 end
 
 -- ─────────────────────────────────────────────────────────────
@@ -2060,31 +2084,56 @@ EvStart.OnClientEvent:Connect(function(payload)
 	end
 
 	local ok = type(payload) == "table" and type(payload.list) == "table"
-	LOG.info("[KitoPickStart] ok=%s size=%s target=%s session=%s",
+	local eff = ok and tostring(payload.effectId or payload.effect or "-") or "-"
+	local okN, totalN = 0, 0
+	if ok then okN, totalN = countEligible(payload) end
+
+	LOG.info("[KitoPickStart] ok=%s size=%s elig=%d/%d target=%s effect=%s session=%s",
 		tostring(ok), ok and briefList(payload.list) or "?",
+		okN, totalN,
 		tostring(payload and payload.targetKind),
+		eff,
 		tostring(payload and payload.sessionId)
 	)
 	if not ok or #payload.list == 0 then return end
 
-	-- 本UIへ委譲: UI 層に payload を流す（12枚一覧・フィルタ・確定ボタン）
+	-- 本UIへ委譲: UI 層に payload を流す（12枚一覧・グレーアウト・確定ボタン）
 	if not AUTO_DECIDE then
 		SigIncoming:Fire(payload)
 		return
 	end
 
-	-- ★フォールバック: 自動決定モード（旧動作）
-	local pickUid = chooseUid(payload)
+	-- ★AUTO_DECIDE: eligible==true の先頭を自動選択。1件も無ければ「スキップ」扱い。
+	local pickUid = chooseEligibleUid(payload)
 	if not pickUid then
-		LOG.warn("[KitoPickDecide] no candidate uid")
+		LOG.warn("[KitoPickDecide] no eligible candidate; sending skip")
+		local okSend, err = pcall(function()
+			EvDecide:FireServer({
+				sessionId  = payload.sessionId,
+				targetKind = payload.targetKind or "bright",
+				noChange   = true, -- サーバ合意済みのスキップフラグ
+			})
+		end)
+		if not okSend then
+			LOG.warn("[KitoPickDecide] skip send failed: %s", tostring(err))
+		else
+			LOG.info("[KitoPickDecide] sent (auto-skip)")
+		end
 		return
 	end
-	EvDecide:FireServer({
-		sessionId  = payload.sessionId,
-		uid        = pickUid,
-		targetKind = payload.targetKind or "bright",
-	})
-	LOG.info("[KitoPickDecide] sent uid=%s (auto)", tostring(pickUid))
+
+	local okSend, err = pcall(function()
+		EvDecide:FireServer({
+			sessionId  = payload.sessionId,
+			uid        = pickUid,
+			targetKind = payload.targetKind or "bright",
+		})
+	end)
+	if not okSend then
+		LOG.warn("[KitoPickDecide] send failed: %s", tostring(err))
+	else
+		LOG.info("[KitoPickDecide] sent uid=%s (auto)", tostring(pickUid))
+	end
 end)
 
 -- ─────────────────────────────────────────────────────────────
@@ -2092,8 +2141,8 @@ end)
 -- ─────────────────────────────────────────────────────────────
 EvResult.OnClientEvent:Connect(function(res)
 	if type(res) ~= "table" then return end
-	LOG.info("[KitoPickResult] ok=%s msg=%s target=%s",
-		tostring(res.ok), tostring(res.message), tostring(res.targetKind))
+	LOG.info("[KitoPickResult] ok=%s changed=%s msg=%s target=%s",
+		tostring(res.ok), tostring(res.changed), tostring(res.message), tostring(res.targetKind))
 	SigResult:Fire(res)
 end)
 ```
@@ -5572,7 +5621,10 @@ function Home.new(deps)
 -- src/client/ui/screens/KitoPickView.lua
 -- 目的: KitoPick の12枚一覧UI・効果説明＋カード画像＆情報表示・確定／スキップ
 -- 仕様: KitoPickWires の ClientSignals を購読し、シグナル受信時に Router 経由で表示
--- 方針: 「選択可否の真実はサーバ」。各候補の entry.eligible を厳守して UI でブロックする。
+-- 方針:
+--   - 「選択可否の真実はサーバ」。payload.eligibility を唯一の正として
+--     各候補に eligible / reason をマージし、不適格はグレーアウト＆クリック不可。
+--   - 送信前にもクライアント側で eligible を再確認（多重タップ/競合のガード）。
 -- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
 
 local Players    = game:GetService("Players")
@@ -5611,11 +5663,13 @@ local ui         -- ScreenGui
 local refs = {}  -- 参照置き場（ScreenGui にフィールドは生やさない）
 
 local current = {
-	sessionId   = nil,
-	targetKind  = "bright",
-	list        = {},
-	selectedUid = nil,
-	busy        = false,   -- 決定/スキップの多重送信防止
+	sessionId    = nil,
+	effectId     = nil,
+	targetKind   = "bright",
+	list         = {},     -- [{ uid, code, name, kind, month, image?/imageId?, eligible?, reason? }]
+	eligibility  = {},     -- server map { [uid] = { ok, reason } }（情報保持のみ）
+	selectedUid  = nil,
+	busy         = false,  -- 決定/スキップの多重送信防止
 }
 
 -- 表示用ラベルマップ
@@ -5841,8 +5895,22 @@ local function setCardSelected(btn: Instance, sel: boolean)
 	end
 end
 
+-- 理由の日本語化（簡易）
+local function reasonToText(reason: string?): string?
+	local map = {
+		["already-applied"]   = "既に適用済みです",
+		["already-bright"]    = "すでに光札です",
+		["already-chaff"]     = "すでにカス札です",
+		["month-has-no-bright"] = "この月に光札はありません",
+		["not-eligible"]      = "対象外です",
+		["same-target"]       = "同一カードは選べません",
+		["no-check"]          = "対象外（サーバ判定なし）",
+	}
+	return map[tostring(reason or "")] or nil
+end
+
 -- 「対象外」オーバーレイ（eligible=false 用）
-local function makeIneligibleOverlay(parent)
+local function makeIneligibleOverlay(parent, reason)
 	local mask = Instance.new("Frame")
 	mask.Name = "IneligibleMask"
 	mask.BackgroundColor3 = Color3.new(0,0,0)
@@ -5850,25 +5918,6 @@ local function makeIneligibleOverlay(parent)
 	mask.BorderSizePixel = 0
 	mask.Size = UDim2.fromScale(1,1)
 	mask.ZIndex = 5
-	mask.Parent = parent
-
-	local tag = Instance.new("TextLabel")
-	tag.BackgroundTransparency = 1
-	tag.Size = UDim2.fromScale(1,1)
-	tag.Text = "対象外"
-	tag.Font = Enum.Font.GothamBold
-	tag.TextSize = 18
-	tag.TextColor3 = Color3.fromRGB(230,230,240)
-	tag.ZIndex = 6
-	tag.Parent = mask
-end
-
--- カードボタン作成（画像＋情報）
-local function makeCard(entry)
-	local card = Instance.new("TextButton")
-	card.Name                   = entry.uid
-	card.AutoButtonColor        = true
-	card.BackgroundColor3       = Color3.fromRGB(40,42,54)
 ... (truncated)
 ```
 
@@ -6802,9 +6851,10 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 ### src/client/ui/screens/ShopScreen.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/ShopScreen.lua
--- v0.9.9-P2-16 ShopScreen（診断ログ強化）
+-- v0.9.9-P2-17 ShopScreen（診断ログ強化 + reroll再有効化FIX）
 --  - 可視件数・在庫署名の遷移・リロール可否を INFO で出力
---  - 他は前版(P2-15)の selfバインド/LOG統一そのまま
+--  - setData/update の末尾で rerollBusy を解除し、ボタン状態を再適用
+--  - 他は前版(P2-16)の selfバインド/LOG統一そのまま
 
 local Shop = {}
 Shop.__index = Shop
@@ -7069,6 +7119,10 @@ function Shop:setData(payload: Payload)
 	LOG.info("setData | items=%d lang=%s", countItems(payload), tostring(self._lang))
 	self:_syncTalismanBoard()
 	self:_render()
+
+	-- ★FIX: サーバ応答反映後は busy を解除し、ボタン状態を再適用
+	self._rerollBusy = false
+	self:_applyRerollButtonState()
 end
 
 function Shop:show(payload: Payload?)
@@ -7096,11 +7150,6 @@ function Shop:show(payload: Payload?)
 end
 
 function Shop:hide()
-	if self.gui.Enabled then LOG.info("hide | enabled=false") end
-	self.gui.Enabled = false
-end
-
-function Shop:update(payload: Payload?)
 ... (truncated)
 ```
 
@@ -7149,6 +7198,11 @@ local Balance = {}
 Balance.KITO_POOL_SIZE      = 12  -- サンプル提示枚数（UIなし時も内部で使用）
 Balance.KITO_POOL_TTL_SEC   = 45  -- セッション有効秒数（開始→決定の猶予）
 
+-- ▼ プール生成モード（Core用）
+--   "any12_disable_ineligible" : ランダム12枚提示 → サーバの canApply で不適格をグレーアウト（新仕様）
+--   "eligible12"               : 旧互換。適格なものだけから最大N枚を提示（フィルタ済み）
+Balance.KITO_POOL_MODE      = "any12_disable_ineligible"
+
 -- ▼ UI導入のトグル
 --   false: サーバ自動選択（旧挙動／内部で即確定）
 --   true : UIでプレイヤーが選択（Shop購入後に候補を提示）
@@ -7164,6 +7218,15 @@ Balance.KITO_AUTO_PICK_COUNT = 1
 
 -- ▼ UI時に提示する枚数（未指定なら KITO_POOL_SIZE を使用）
 Balance.KITO_UI_PICK_COUNT   = Balance.KITO_POOL_SIZE
+
+-- ▼ 効果バランス（巳：Venom）
+--   Venom 適用時に即時付与する文（所持金）の増分
+Balance.KITO_VENOM_CASH      = 5
+
+-- ▼ 互換ノブ（旧Coreが参照していた場合のために残置）
+--   "block": すでに同種（例: bright）ならプール除外 / "allow": 含める
+--   新Core（any12 モード）では使用しないが、他所で参照されても破綻しないよう既定を置く
+Balance.KITO_SAME_KIND_POLICY = "block"  -- legacy / compatibility
 
 return Balance
 ```
@@ -8200,14 +8263,16 @@ Players.PlayerAdded:Connect(function(plr)
 ### src/server/KitoPickCore.lua
 ```lua
 -- ServerScriptService/KitoPickCore.lua
--- v0.9.5 KITO Pick Core (DeckRegistry + UID consistent, EN-only)
+-- v0.9.7 KITO Pick Core (anyK + canApply eligibility, UID-first, EN-only)
 -- Purpose:
---   - Build and send a 12-card candidate pool for the picker UI
+--   - Build and send a K-card candidate pool for the picker UI (always K if available; K = KITO_UI_PICK_COUNT or KITO_POOL_SIZE)
+--   - Attach server-authoritative eligibility (can/cannot apply + reason) per card
 --   - Keep/expire a simple session
 -- Policy:
 --   - UID-first (entries[*].uid is the single source of truth; legacy decks may use code as fallback)
---   - Exclude months that do not have a "bright" card
---   - KITO_SAME_KIND_POLICY: "block" (exclude already-bright) / "allow" (include)
+--   - NO pre-filtering by month/kind here: pool is random (anyK). Eligibility decides gray-out.
+--   - POOL_MODE fallback: Balance.KITO_POOL_MODE = "eligible12" for legacy behavior (optional)
+--   - Server is the only source of truth; client displays what server says
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -8216,10 +8281,27 @@ local Balance    = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 local Logger     = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG        = Logger.scope("KitoPickCore")
 
--- Deck APIs
-local Shared     = RS:WaitForChild("SharedModules")
-local CardEngine = require(Shared:WaitForChild("CardEngine"))
-local DeckReg    = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+-- Shared deps
+local Shared        = RS:WaitForChild("SharedModules")
+local CardEngine    = require(Shared:WaitForChild("CardEngine"))
+local DeckReg       = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
+local DeckSampler   = require(Shared:WaitForChild("DeckSampler"))
+local Effects       = require(Shared:WaitForChild("Deck"):WaitForChild("EffectsRegistry"))
+
+-- 🔧 Optional bootstrap: auto-scan Deck/Effects and register handlers/canApply if available
+local function tryRequire(inst: Instance?)
+	if not inst or not inst:IsA("ModuleScript") then return end
+	local ok, err = pcall(require, inst)
+	if not ok then
+		LOG.warn("[EffectsBootstrap] require failed: %s", tostring(err))
+	end
+end
+do
+	local deckFolder = Shared:FindFirstChild("Deck")
+	if deckFolder then
+		tryRequire(deckFolder:FindFirstChild("EffectsRegisterAll"))
+	end
+end
 
 -- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
@@ -8280,43 +8362,19 @@ function Core.consume(userId: number)
 end
 
 --─────────────────────────────────────────────────────────────
--- Resolve runId from context
+-- Helpers
 --─────────────────────────────────────────────────────────────
 local function resolveRunId(runCtx:any)
 	if type(runCtx) ~= "table" then return nil end
 	-- direct
 	local direct = runCtx.runId or runCtx.deckRunId or runCtx.id or runCtx.deckRunID or runCtx.runID
 	if direct then return direct end
-	-- nested run
+	-- nested
 	local run = runCtx.run
 	if type(run) == "table" then
 		return run.runId or run.deckRunId or run.id or run.deckRunID or run.runID
 	end
 	return nil
-end
-
---─────────────────────────────────────────────────────────────
--- Helpers: month/image/eligibility
---─────────────────────────────────────────────────────────────
-local function parseMonth(entry:any): number?
-	if type(entry) ~= "table" then return nil end
-	local m = tonumber(entry.month)
-	if m and m>=1 and m<=12 then return m end
-	local s = tostring(entry.code or entry.uid or "")
-	local two = string.match(s, "^(%d%d)")
-	return (two and tonumber(two)) or nil
-end
-
--- Only check for "bright" existence in the month (EN-only)
-local function monthHasBright(month:number): boolean
-	local defs = CardEngine.cardsByMonth[month]
-	if typeof(defs) ~= "table" then return false end
-	for _, def in ipairs(defs) do
-		if tostring(def.kind or "") == "bright" then
-			return true
-		end
-	end
-	return false
 end
 
 local function resolveImage(code:string?)
@@ -8327,24 +8385,23 @@ local function resolveImage(code:string?)
 	return nil
 end
 
-local function toSummary(entry:any, targetKind:string, sameKindPolicy:string)
+local function parseMonth(entry:any): number?
 	if type(entry) ~= "table" then return nil end
-	local m = parseMonth(entry)
-	if not m or not monthHasBright(m) then return nil end
+	local m = tonumber(entry.month)
+	if m and m>=1 and m<=12 then return m end
+	local s = tostring(entry.code or entry.uid or "")
+	local two = string.match(s, "^(%d%d)")
+	return (two and tonumber(two)) or nil
+end
 
-	local same = tostring(entry.kind or "") == tostring(targetKind or "")
-	if sameKindPolicy == "block" and same then
-		-- already the same kind ("bright") -> exclude from pool
-		return nil
-	end
-
+local function toSummary(entry:any)
+	if type(entry) ~= "table" then return nil end
 	local sum = {
-		uid      = entry.uid or entry.code,   -- UID is the truth; legacy may fallback to code
-		code     = entry.code,                -- for display/image lookup
-		name     = entry.name or entry.code,
-		kind     = entry.kind,
-		month    = m,
-		eligible = true,
+		uid   = entry.uid or entry.code,   -- UID is the truth; fallback to code for very old entries
+		code  = entry.code,
+		name  = entry.name or entry.code,
+		kind  = entry.kind,
+		month = parseMonth(entry),
 	}
 	local img = resolveImage(entry.code)
 	if type(img) == "string" then
@@ -8355,21 +8412,79 @@ local function toSummary(entry:any, targetKind:string, sameKindPolicy:string)
 	return sum
 end
 
+local function buildUidMap(entries:{any}): {[string]: any}
+	local m = {}
+	for _, e in ipairs(entries) do
+		local uid = e and e.uid
+		if typeof(uid) == "string" and #uid > 0 then
+			m[uid] = e
+		elseif e and e.code then
+			-- legacy fallback
+			m[tostring(e.code)] = e
+		end
+	end
+	return m
+end
+
+-- eligibility per UID using Effects.canApply
+local function computeEligibility(effectId: string, uidMap:{[string]:any}, uids:{string}): ({[string]:{ok:boolean, reason:string?}}, number)
+	local ctx = { DeckStore = true, DeckOps = true, CardEngine = CardEngine } -- minimal stub; Effects.canApply側で不足補完あり
+	local elig = {}
+	local okCount = 0
+	for _, uid in ipairs(uids) do
+		local card = uidMap[uid]
+		local ok, reason = Effects.canApply(effectId, card, ctx)
+		elig[uid] = { ok = ok == true, reason = reason }
+		if ok == true then okCount += 1 end
+	end
+	return elig, okCount
+end
+
+-- pick anyK using DeckSampler with a synthetic state
+local function sampleAnyFromStore(runId:any, store:any, K:number): {string}
+	local state = { runId = runId, deck = store and store.entries or {} }
+	-- DeckSampler internally ensures UIDs via RunDeckUtil.ensureUids(state)
+	return DeckSampler.sampleUids(state, K)
+end
+
+-- legacy mode: pick only eligible candidates up to N
+local function sampleEligible(effectId:string, entries:{any}, N:number): {string}
+	local uids = {}
+	for _, e in ipairs(entries) do
+		local card = e
+		local ok = select(1, Effects.canApply(effectId, card, { CardEngine = CardEngine }))
+		if ok == true then
+			uids[#uids+1] = e.uid or e.code
+		end
+	end
+	-- shuffle uids and take first N
+	local seed = math.floor((os.clock() % 1) * 1e9)
+	local rng  = Random.new(seed)
+	for i = #uids, 2, -1 do
+		local j = rng:NextInteger(1, i)
+		uids[i], uids[j] = uids[j], uids[i]
+	end
+	local out = {}
+	for i=1, math.min(N, #uids) do out[i] = uids[i] end
+	return out
+end
+
 --─────────────────────────────────────────────────────────────
--- Public: build & send 12-card pool (KITO: Rooster/bright)
+-- Public: build & send K-card pool (generic effectId)
 --─────────────────────────────────────────────────────────────
--- effectId: "kito_tori" / targetKind: "bright"
-function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind: string)
+-- effectId: e.g. "kito.tori_brighten", "kito.mi_venom" ...
+-- targetKind param is ignored (kept for compatibility)
+function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind: string?)
 	if Balance.KITO_UI_ENABLED ~= true then
 		LOG.debug("[StartFor] UI disabled; ignored | user=%s", player and player.Name or "?")
 		return false
 	end
-	if tostring(effectId) ~= "kito_tori" then
+	if type(effectId) ~= "string" or #effectId == 0 or not Effects.has(effectId) then
 		LOG.debug("[StartFor] unsupported effect=%s | user=%s", tostring(effectId), player and player.Name or "?")
 		return false
 	end
 
-	-- Resolve runId and ensure entries in DeckRegistry
+	-- Resolve runId and ensure deck entries
 	local runId = resolveRunId(runCtx)
 	if not runId then
 		local hasRun = (type(runCtx)=="table" and type(runCtx.run)=="table")
@@ -8383,33 +8498,38 @@ function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind:
 		return false
 	end
 
-	-- EN-only target kind
-	local tgtKind = "bright"
-	local policy  = tostring(Balance.KITO_SAME_KIND_POLICY or "block") -- "block"|"allow"
-	local pickN   = tonumber(Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12) or 12
+	-- K は UI_PICK_COUNT 優先（未設定なら POOL_SIZE）
+	local pickN = tonumber(Balance.KITO_UI_PICK_COUNT or Balance.KITO_POOL_SIZE or 12) or 12
+	local mode  = tostring(Balance.KITO_POOL_MODE or "any12_disable_ineligible") -- "any12_disable_ineligible" | "eligible12"
 
-	-- Build pool (UID-first)
-	local pool = {}
-	for _, e in ipairs(store.entries) do
-		local s = toSummary(e, tgtKind, policy)
-		if s then table.insert(pool, s) end
+	-- Build pool (UID list)
+	local uids
+	if mode == "eligible12" then
+		uids = sampleEligible(effectId, store.entries, pickN)
+	else
+		-- ✅ anyK: UI_PICK_COUNT を確実に反映
+		uids = sampleAnyFromStore(runId, store, pickN)
 	end
-	if #pool == 0 then
-		LOG.info("[StartFor] no candidates; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
+	if #uids == 0 then
+		LOG.info("[StartFor] empty pool; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
 		return false
 	end
 
-	-- Shuffle and take first N (independent RNG)
-	local seed = math.floor((os.clock() % 1) * 1e9)
-	local rng  = Random.new(seed)
-	for i = #pool, 2, -1 do
-		local j = rng:NextInteger(1, i)
-		pool[i], pool[j] = pool[j], pool[i]
-	end
+	-- To summaries for UI (code/kind/month/image)
+	local uidMap = buildUidMap(store.entries)
 	local list = {}
-	for i = 1, math.min(#pool, pickN) do
-		list[#list+1] = pool[i]
+	for _, uid in ipairs(uids) do
+		local e = uidMap[uid]
+		local s = e and toSummary(e)
+		if s then list[#list+1] = s end
 	end
+	if #list == 0 then
+		LOG.info("[StartFor] no summaries; aborted | user=%s run=%s", player and player.Name or "?", tostring(runId))
+		return false
+	end
+
+	-- Eligibility per UID（server-authoritative）
+	local eligibility, okCount = computeEligibility(effectId, uidMap, uids)
 
 	-- Session
 	local sess = {
@@ -8419,52 +8539,40 @@ function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind:
 		expiresAt = now() + ttlSec(),
 		runId     = runId,
 		effectId  = effectId,
-		uids      = (function()
-			local t = {}
-			for _, s in ipairs(list) do t[#t+1] = s.uid end
-			return t
-		end)(),
+		uids      = uids,
 	}
 	put(player.UserId, sess)
 
-	-- Client payload (EN-only)
+	-- Client payload（list + poolUids + eligibility）
+	-- list: [{uid,code,name,kind,month,image?/imageId?}]
+	-- eligibility: { [uid] = { ok:boolean, reason?:string } }
 	local payload = {
-		sessionId  = sess.id,
-		version    = sess.version,
-		expiresAt  = sess.expiresAt,
-		effectId   = effectId,
-		targetKind = tgtKind,
-		list       = list,    -- {uid,code?,name,kind,month,image?/imageId?,eligible}
-		effect     = ("Select one target (goal: %s)"):format("Bright"),
+		sessionId   = sess.id,
+		version     = sess.version,
+		expiresAt   = sess.expiresAt,
+		effectId    = effectId,
+		list        = list,
+		poolUids    = uids,
+		eligibility = eligibility,
+		effect      = "Select one target", -- simple EN label; UI側でi18n可
 	}
 	EvStart:FireClient(player, payload)
 
 	-- Log summary
-	local same, other = 0, 0
-	for _, s in ipairs(list) do
-		if tostring(s.kind or "") == tgtKind then same += 1 else other += 1 end
-	end
-	LOG.info("[StartFor] user=%s sid=%s size=%d tgt=%s same=%d other=%d head5=[%s]",
+	local gray = #uids - okCount
+	LOG.info("[StartFor] user=%s sid=%s size=%d ok=%d gray=%d head5=[%s] mode=%s",
 		player and player.Name or "?",
-		tostring(sess.id),
-		#list, tgtKind, same, other,
-		headList(sess.uids, 5)
-	)
-
-	return true
-end
-
-return Core
+... (truncated)
 ```
 
 ### src/server/KitoPickServer.server.lua
 ```lua
 -- ServerScriptService/KitoPickServer.lua
--- v0.9.10 KITO Pick Server (+diag logs, safe reopen with state, no reroll)
--- 変更点:
---   - reopenShopSnapshot: ShopService の想定シグネチャに合わせ state を第2引数へ
---   - open/openFor の複数シグネチャを順に試すフォールバック実装
---   - それ以外は前版踏襲（効果適用→pushState→在庫を維持したままOPEN再送）
+-- v0.9.13 KITO Pick Server (server canApply + safe bankDelta→bank + robust reopen)
+-- 変更:
+--  - bankDelta は bank に適用（StateHub.applyBankDelta / addBank を最優先）
+--  - フォールバックも bank を優先し、mon へは落とさない
+--  - ログ強化
 
 local RS  = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
@@ -8479,6 +8587,7 @@ local Shared       = RS:WaitForChild("SharedModules")
 local KitoCore     = require(SSS:WaitForChild("KitoPickCore"))
 local DeckRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("DeckRegistry"))
 local StateHub     = require(Shared:WaitForChild("StateHub"))
+local CardEngine   = require(Shared:WaitForChild("CardEngine"))
 
 -- Remotes
 local Remotes  = RS:WaitForChild("Remotes")
@@ -8486,34 +8595,30 @@ local EvDecide = Remotes:WaitForChild("KitoPickDecide")
 local EvCancel = Remotes:FindFirstChild("KitoPickCancel")
 local EvResult = Remotes:FindFirstChild("KitoPickResult") -- 任意/トースト用
 
--- ─────────────────────────────────────────────────────────────
--- Utility: safe require
--- ─────────────────────────────────────────────────────────────
+-- ─ Utility: safe require
 local function tryRequire(inst: Instance?)
 	if not inst or not inst:IsA("ModuleScript") then return nil end
-	local ok, mod = pcall(function() return require(inst) end)
-	if ok then return mod end
-	LOG.warn("[KitoPickServer] require failed: %s", tostring(mod))
+	local ok, modOrErr = pcall(function() return require(inst) end)
+	if ok then return modOrErr end
+	LOG.warn("[KitoPickServer] require failed for %s: %s", inst:GetFullName(), tostring(modOrErr))
 	return nil
 end
 
--- ─────────────────────────────────────────────────────────────
--- EffectsRegistry 読み込み（正しい配置を優先）
--- ─────────────────────────────────────────────────────────────
+-- EffectsRegistry
 local EffectsRegistry =
 	tryRequire(Shared:FindFirstChild("Deck") and Shared.Deck:FindFirstChild("EffectsRegistry"))
 	or tryRequire(Shared:FindFirstChild("EffectsRegistry"))
 	or tryRequire(SSS:FindFirstChild("EffectsRegistry"))
 
+local EffectsBootstrap = tryRequire(Shared:FindFirstChild("Deck") and Shared.Deck:FindFirstChild("EffectsRegisterAll"))
+
 if EffectsRegistry then
-	LOG.info("[KitoPickServer] EffectsRegistry wired (module loaded)")
+	LOG.info("[KitoPickServer] EffectsRegistry wired")
 else
-	LOG.warn("[KitoPickServer] EffectsRegistry not found; brighten effect will be unavailable (server continues)")
+	LOG.warn("[KitoPickServer] EffectsRegistry not found; KITO effects unavailable")
 end
 
--- ─────────────────────────────────────────────────────────────
--- ShopService 解決（非ブロッキング探索）
--- ─────────────────────────────────────────────────────────────
+-- ShopService 解決（複数シグネチャに対応）
 local function resolveShopService()
 	local inst =
 		SSS:FindFirstChild("ShopService")
@@ -8526,159 +8631,86 @@ local function resolveShopService()
 	if mod then
 		LOG.info("[KitoPickServer] ShopService wired from %s", inst:GetFullName())
 	else
-		LOG.warn("[KitoPickServer] ShopService not found (no ModuleScript found); reopen will be skipped")
+		LOG.warn("[KitoPickServer] ShopService not found; reopen will be skipped")
 	end
 	return mod
 end
-
 local ShopService = resolveShopService()
 
--- ─────────────────────────────────────────────────────────────
--- runId 解決（KitoPickCore と同一規則）
--- ─────────────────────────────────────────────────────────────
+-- runId 解決
 local function resolveRunId(ctx:any)
 	if type(ctx) ~= "table" then return nil end
-	if ctx.runId then return ctx.runId end
-	if ctx.deckRunId then return ctx.deckRunId end
-	if ctx.id then return ctx.id end
-	if ctx.runID then return ctx.runID end
-	if ctx.deckRunID then return ctx.deckRunID end
-	local run = ctx.run
-	if type(run) == "table" then
-		return run.runId or run.deckRunId or run.id or run.runID or run.deckRunID
-	end
-	return nil
+	return ctx.runId or ctx.deckRunId or ctx.id or ctx.runID or ctx.deckRunID
+		or (type(ctx.run)=="table" and (ctx.run.runId or ctx.run.deckRunId or ctx.run.id or ctx.run.runID or ctx.run.deckRunID))
 end
 
--- 効果結果のゆるい解釈
-local function interpretApplyResult(r1, r2)
-	if type(r1) == "boolean" then
-		return r1, nil, r2
-	elseif type(r1) == "table" then
-		local ok = (r1.ok == nil) and true or (r1.ok ~= false)
-		return ok, r1.changed, r1.message or r1.meta or r1.reason or r2
-	else
-		return (r1 ~= nil), nil, r2
-	end
-end
-
--- ─────────────────────────────────────────────────────────────
--- 効果適用（IDフォールバック）
--- ─────────────────────────────────────────────────────────────
-local PRIMARY_ID   = "kito.tori_brighten"
-local FALLBACK_ID  = "Tori_Brighten"
-
-local function applyBrighten(runId:string?, payload:any)
-	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
-		return false, nil, "effects-registry-missing", nil
-	end
-	if not runId or runId == "" then
-		return false, nil, "runId-missing", nil
-	end
-
-	-- primary
-	LOG.debug("[Decide] call apply order=(runId,effectId,payload) id=%s run=%s", PRIMARY_ID, tostring(runId))
-	local okCall, r1, r2 = pcall(function()
-		return EffectsRegistry.apply(runId, PRIMARY_ID, payload)
-	end)
-	if not okCall then
-		LOG.warn("[Decide] apply threw (primary %s): %s", PRIMARY_ID, tostring(r1))
-	else
-		local success, changed, message = interpretApplyResult(r1, r2)
-		LOG.debug("[Decide] apply(primary) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
-			typeof(r1), typeof(r2), tostring(success), tostring(changed), tostring(message))
-		if success then return true, changed, message, PRIMARY_ID end
-	end
-
-	-- fallback
-	LOG.debug("[Decide] retry apply with fallback id=%s run=%s", FALLBACK_ID, tostring(runId))
-	local okCall2, r3, r4 = pcall(function()
-		return EffectsRegistry.apply(runId, FALLBACK_ID, payload)
-	end)
-	if not okCall2 then
-		LOG.warn("[Decide] apply threw (fallback %s): %s", FALLBACK_ID, tostring(r3))
-		return false, nil, tostring(r3), FALLBACK_ID
-	end
-	local success2, changed2, message2 = interpretApplyResult(r3, r4)
-	LOG.debug("[Decide] apply(fallback) types r1=%s r2=%s → ok=%s ch=%s msg=%s",
-		typeof(r3), typeof(r4), tostring(success2), tostring(changed2), tostring(message2))
-	return success2, changed2, message2, FALLBACK_ID
-end
-
--- ─────────────────────────────────────────────────────────────
--- ショップを「在庫維持で開き直す」
---   - ShopService の実装差に合わせて複数シグネチャを順に試す
--- ─────────────────────────────────────────────────────────────
+-- ショップ再オープン（在庫維持）
 local function reopenShopSnapshot(plr: Player, opts:any?)
 	if not ShopService then
 		LOG.warn("[ReopenShop] ShopService missing; skip")
 		return false, "no-shopservice"
 	end
-
-	local state = StateHub.get(plr) or {}
-	local notice = opts and opts.notice or "変換が完了しました"
+	local state    = StateHub.get(plr) or {}
+	local notice   = opts and opts.notice or "変換が完了しました"
 	local preserve = true
-
 	local tried = {}
-
 	local function tryCall(desc, f)
 		local t0 = os.clock()
 		local ok, err = pcall(f)
 		table.insert(tried, { desc = desc, ok = ok, err = ok and "" or tostring(err), ms = (os.clock()-t0)*1000 })
 		return ok, err
 	end
-
-	-- 優先1: openFor(plr, state, {notice=..., preserve=true})
 	if type(ShopService.openFor) == "function" then
-		local ok = select(1, tryCall("openFor(plr, state, opts)", function()
+		if select(1, tryCall("openFor(plr,state,opts)", function()
 			return ShopService.openFor(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok then
-			LOG.info("[ReopenShop] via openFor(plr,state,opts) in %.2fms", tried[#tried].ms)
-			return true
-		end
-		-- フォールバック: openFor(plr, { state=..., notice=..., preserve=true })
-		local ok2 = select(1, tryCall("openFor(plr, {state=...,notice=...})", function()
+		end)) then LOG.info("[ReopenShop] via openFor(plr,state,opts) in %.2fms", tried[#tried].ms); return true end
+		if select(1, tryCall("openFor(plr,{state,...})", function()
 			return ShopService.openFor(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok2 then
-			LOG.info("[ReopenShop] via openFor(plr,{state,...}) in %.2fms", tried[#tried].ms)
-			return true
-		end
+		end)) then LOG.info("[ReopenShop] via openFor(plr,{state,...}) in %.2fms", tried[#tried].ms); return true end
 	end
-
-	-- 優先2: open(plr, state, {notice=..., preserve=true})
 	if type(ShopService.open) == "function" then
-		local ok3 = select(1, tryCall("open(plr, state, opts)", function()
+		if select(1, tryCall("open(plr,state,opts)", function()
 			return ShopService.open(plr, state, { notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok3 then
-			LOG.info("[ReopenShop] via open(plr,state,opts) in %.2fms", tried[#tried].ms)
-			return true
-		end
-		-- フォールバック: open(plr, { state=..., notice=..., preserve=true })
-		local ok4 = select(1, tryCall("open(plr, {state=...,notice=...})", function()
+		end)) then LOG.info("[ReopenShop] via open(plr,state,opts) in %.2fms", tried[#tried].ms); return true end
+		if select(1, tryCall("open(plr,{state,...})", function()
 			return ShopService.open(plr, { state = state, notice = notice, preserve = preserve, reason = "kito_pick_done" })
-		end))
-		if ok4 then
-			LOG.info("[ReopenShop] via open(plr,{state,...}) in %.2fms", tried[#tried].ms)
-			return true
-		end
+		end)) then LOG.info("[ReopenShop] via open(plr,{state,...}) in %.2fms", tried[#tried].ms); return true end
 	end
-
-	-- すべて失敗：詳細をまとめて WARN
-	for _, t in ipairs(tried) do
-		if not t.ok then
-			LOG.warn("[ReopenShop] tried %s → failed: %s (%.2fms)", t.desc, t.err, t.ms)
-		end
-	end
+	for _, t in ipairs(tried) do if not t.ok then LOG.warn("[ReopenShop] tried %s → failed: %s (%.2fms)", t.desc, t.err, t.ms) end end
 	return false, "no-matching-signature"
 end
 
--- ─────────────────────────────────────────────────────────────
--- Decide（確定）
--- payload: { sessionId:string, uid:string, noChange?:boolean }
--- ─────────────────────────────────────────────────────────────
+--─────────────────────────────────────────────────────────────
+-- ★ bankDelta を安全に適用（bank 最優先）
+--   1) StateHub.applyBankDelta / addBank を優先
+--   2) 無ければ state.bank を直接加算（フォールバック）
+--─────────────────────────────────────────────────────────────
+local function applyBankDelta(plr: Player, delta:number?): (boolean, string?)
+	if type(delta) ~= "number" or delta == 0 then return false, "no-delta" end
+
+	-- 1) 既存API
+	for _, fnName in ipairs({ "applyBankDelta", "addBank" }) do
+		if type(StateHub[fnName]) == "function" then
+			local ok, err = pcall(function() StateHub[fnName](plr, delta) end)
+			if ok then return true, nil end
+			LOG.warn("[bankDelta] %s failed: %s", fnName, tostring(err))
+		end
+	end
+
+	-- 2) フォールバック: state.bank に直接加算
+	local ok, err = pcall(function()
+		local s = StateHub.get(plr) or {}
+		s.bank = (type(s.bank) == "number" and s.bank or 0) + delta
+	end)
+	if not ok then
+		return false, tostring(err)
+	end
+	return true, nil
+end
+
+--─────────────────────────────────────────────────────────────
+-- Decide
+--─────────────────────────────────────────────────────────────
 local PRIMARY_NOTICE_SKIP = "選択をスキップしました"
 local PRIMARY_NOTICE_DONE = "変換が完了しました"
 
@@ -8689,76 +8721,152 @@ local function onDecide(plr: Player, payload:any)
 	local sidRecv  = payload and payload.sessionId
 	local noChange = (payload and payload.noChange) == true
 
-	-- 受信要約ログ
 	LOG.info("[Decide] recv u=%s sid=%s uid=%s noChange=%s",
 		plr and plr.Name or "?", tostring(sidRecv), tostring(uid), tostring(noChange))
 
-	-- 1) セッション消費（1回限り）
+	-- 1) セッション消費
 	local sess = KitoCore.consume(plr.UserId)
 	if not sess or (sidRecv and sess.id ~= sidRecv) then
-		LOG.info("[Decide] invalid session | u=%s gotSid=%s holdSid=%s",
-			plr and plr.Name or "?", tostring(sidRecv), sess and tostring(sess.id) or "-")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="session" }) end
 		return
 	end
-	LOG.debug("[Decide] session ok sid=%s ttl=%s run?=%s",
-		tostring(sess.id), tostring(sess.expiresAt), tostring(sess.runId or "-"))
 
 	-- 2) TTL
-	local now = os.time()
-	if type(sess.expiresAt) == "number" and now > (sess.expiresAt or 0) then
-		LOG.info("[Decide] expired | u=%s sid=%s now=%d exp=%d",
-			plr and plr.Name or "?", tostring(sess.id), now, sess.expiresAt or -1)
+	if type(sess.expiresAt) == "number" and os.time() > (sess.expiresAt or 0) then
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="expired" }) end
 		return
 	end
 
-	-- 3) 候補内チェック（noChange ならスキップ可）
+	-- 3) 候補内チェック
 	local okUid = false
 	if type(uid) == "string" and type(sess.uids) == "table" then
 		for _, u in ipairs(sess.uids) do if u == uid then okUid = true; break end end
 	end
 	if (not okUid) and (not noChange) then
-		LOG.info("[Decide] uid not in session | u=%s sid=%s uid=%s", plr and plr.Name or "?", tostring(sess.id), tostring(uid))
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="uid" }) end
 		return
 	end
 
-	-- 4) state/runId/DeckRegistry 準備
+	-- 4) state/runId
 	local s = StateHub.get(plr)
 	if not s then
-		LOG.warn("[Decide] state missing | u=%s", plr and plr.Name or "?")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="state" }) end
 		return
 	end
 	local runId = resolveRunId(s) or resolveRunId(s.run)
-	DeckRegistry.ensureFromContext(s) -- 必要時のみ snap→registry 反映
-	LOG.debug("[Decide] runId=%s", tostring(runId))
-
-	-- runId 未解決なら明確に終了
+	DeckRegistry.ensureFromContext(s)
 	if not runId or runId == "" then
-		LOG.warn("[Decide] runId missing | u=%s", plr and plr.Name or "?")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="run" }) end
 		return
 	end
 
-	-- 5) noChange: 変換せず終了 → ショップ開き直し
+	-- 5) noChange
 	if noChange == true then
-		LOG.info("[Decide] noChange | u=%s sid=%s", plr and plr.Name or "?", tostring(sess.id))
 		reopenShopSnapshot(plr, { notice = PRIMARY_NOTICE_SKIP })
 		if EvResult then EvResult:FireClient(plr, { ok=true, changed=false, uid=nil }) end
 		return
 	end
 
-	-- 6) 効果適用（UIDファースト + 後方互換 codes 同値）
+	-- 6) 効果ID（セッション値を使用／最低限の互換マップ）
 	if not EffectsRegistry or type(EffectsRegistry.apply) ~= "function" then
-		LOG.warn("[Decide] EffectsRegistry unavailable; cannot apply brighten | u=%s", plr and plr.Name or "?")
 		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effects" }) end
 		return
 	end
+	local effectId = tostring(sess.effectId or "")
+	if effectId == "" then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effects" }) end
+		return
+	end
+	if effectId == "kito_tori" then effectId = "kito.tori_brighten" end
 
-	local function isUidLike(sv:any)
-		local s = (type(sv) == "string") and sv or nil
+	-- 7) サーバ canApply 再確認
+	local cardForUid
+	do
+		local store = DeckRegistry.read(runId)
+		if type(store) == "table" and type(store.entries) == "table" then
+			for _, e in ipairs(store.entries) do
+				if e and (e.uid == uid or e.code == uid) then cardForUid = e; break end
+			end
+		end
+	end
+	if not cardForUid then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="uid" }) end
+		return
+	end
+	if type(EffectsRegistry.canApply) == "function" then
+		local canOk, canReason = EffectsRegistry.canApply(effectId, cardForUid, { CardEngine = CardEngine })
+		if not canOk then
+			if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(canReason or "not-eligible") }) end
+			return
+		end
+	end
+
+	-- 8) 効果適用
+	local applyPayload = {
+		plr      = plr,
+		runId    = runId,
+		uid      = uid,
+		uids     = (uid and { tostring(uid) } or nil),
+		poolUids = sess.uids,
+		now      = os.time(),
+		lang     = s.lang or "ja",
+	}
+	if effectId == "kito.tori_brighten" or effectId == "Tori_Brighten" then
+		applyPayload.preferKind = "bright"
+		applyPayload.tag        = "eff:kito_tori_bright"
+	end
+
+	local okCall, res = pcall(function()
+		return EffectsRegistry.apply(runId, effectId, applyPayload)
+	end)
+	if not okCall then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(res), id=effectId }) end
+		return
+	end
+
+	-- 9) 正規化
+	local ok      = (type(res) == "table") and (res.ok ~= false) or (res ~= nil)
+	local changed = (type(res) == "table") and (res.changed ~= 0 and res.changed ~= false) or true
+	local message = (type(res) == "table") and (res.message or res.meta or res.reason) or nil
+	local bankDelta = (type(res) == "table" and type(res.meta) == "table") and res.meta.bankDelta or nil
+
+	if not ok then
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(message or ""), id=effectId }) end
+		return
+	end
+
+	-- 10) bankDelta の適用（bank に適用）
+	if type(bankDelta) == "number" and bankDelta ~= 0 then
+		local bOk, bErr = applyBankDelta(plr, bankDelta)
+		LOG.info("[Decide] bankDelta %+d applied=%s err=%s", bankDelta, tostring(bOk), bOk and "" or tostring(bErr))
+	end
+
+	-- 11) 状態同期
+	local okPush, errPush = pcall(function() StateHub.pushState(plr) end)
+	LOG.info("[Decide] pushState ok=%s err=%s", tostring(okPush), okPush and "" or tostring(errPush))
+
+	-- 12) Shop 再表示（在庫維持）
+	reopenShopSnapshot(plr, { notice = (message and tostring(message) ~= "" and tostring(message)) or PRIMARY_NOTICE_DONE })
+
+	-- 13) 結果通知
+	if EvResult then
+		local resOut = {
+			ok      = true,
+			changed = changed,
+			uid     = tostring(uid),
+			message = (type(message) == "string") and message or "",
+			id      = effectId,
+		}
+		if type(bankDelta) == "number" then resOut.bankDelta = bankDelta end
+		EvResult:FireClient(plr, resOut)
+	end
+
+	LOG.info("[Decide] OK | u=%s run=%s uid=%s eff=%s msg=%s",
+		plr and plr.Name or "?", tostring(runId), tostring(uid), tostring(effectId), tostring(message or ""))
+end
+
+-- Cancel（任意）
+local function onCancel(plr: Player, _payload:any)
 ... (truncated)
 ```
 
@@ -9410,21 +9518,20 @@ return M
 ### src/server/ShopEffects/Kito.lua
 ```lua
 -- src/server/ShopEffects/Kito.lua
--- v0.9.9 Kito（祈祷）: UIDファースト / 酉は EffectsRegistry に委譲
+-- v0.9.10 Kito（祈祷）: UIDファースト / 酉・巳は EffectsRegistry に委譲 / UI分岐を厳格化
 --  - 丑/寅：サーバ状態のみ変更（従来通り）
---  - 酉   ：デッキ変更は Deck/Effects（"kito.tori_brighten"）で実施
+--  - 酉   ：デッキ変更は Deck/Effects（"kito.tori_brighten"）で実施（UIあり）
+--  - 巳   ：デッキ変更は Deck/Effects（"kito.mi_venom"）で実施（UIあり）
 -- I/F:
 --   Kito.apply(effectId, state, ctx) -> (ok:boolean, message:string)
 --     state: ランタイム状態テーブル（mon/bonus/kito など）
 --     ctx:   {
---       runId:any,
---       -- ★UIDファースト：
---       uids?:{string},        -- UIで選んだ1枚（推奨：1件）
---       poolUids?:{string},    -- 12枚提示の候補（未選択時の補助）
---       -- 後方互換（コード系・なくてもOK）：
---       codes?:{string}, poolCodes?:{string},
---       preferKind?: "hikari"|"bright",
---       player?: Player        -- UIモード（提示）に必要
+--       runId?: any,            -- ★必要（未指定でも state から解決を試みる）
+--       uids?: {string},        -- UIで選んだ1枚（推奨：1件）
+--       poolUids?: {string},    -- 12枚提示の候補（未選択時の補助）
+--       codes?: {string}, poolCodes?: {string}, -- 後方互換（無ければUIDでOK）
+--       preferKind?: "hikari"|"bright",         -- 酉のみ使用
+--       player?: Player         -- UIモード（提示）に必要
 --     }
 
 local RS   = game:GetService("ReplicatedStorage")
@@ -9433,9 +9540,9 @@ local SSS  = game:GetService("ServerScriptService")
 local Shared  = RS:WaitForChild("SharedModules")
 local Config  = RS:WaitForChild("Config")
 
--- 酉（デッキ変更）窓口
+-- デッキ変更系の窓口
 local EffectsRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("EffectsRegistry"))
--- UIモード切替
+-- UI切替
 local Balance        = require(Config:WaitForChild("Balance"))
 
 -- 12枚提示→選択→確定（UIモード時のみ）
@@ -9450,9 +9557,10 @@ end
 local Kito = {}
 
 Kito.ID = {
-	USHI = "kito_ushi",   -- 所持文2倍
-	TORA = "kito_tora",   -- 取り札+1
-	TORI = "kito_tori",   -- 光札に変換（Effects "kito.tori_brighten"）
+	USHI = "kito_ushi",        -- 所持文2倍
+	TORA = "kito_tora",        -- 取り札+1
+	TORI = "kito_tori",        -- 1枚を光札に（Effects "kito.tori_brighten"）
+	MI   = "kito_mi",          -- 1枚をカス札に（Effects "kito.mi_venom"）
 }
 
 local DEFAULTS = { CAP_MON = 999999 }
@@ -9469,16 +9577,43 @@ local function ensureKito(state)
 	return state.kito
 end
 
+--=== utils =========================================================
 local function isArray(t)
 	if typeof(t) ~= "table" then return false end
 	for i = 1, #t do if t[i] == nil then return false end end
 	return true
 end
 
+local function isNonEmptyArray(t)
+	return isArray(t) and #t > 0
+end
+
+local function normalizeArrayOrNil(t)
+	if isNonEmptyArray(t) then return t end
+	return nil
+end
+
 -- Effects側の正は "hikari"（"bright" を受けても内部で扱えるが、ここでは正規化）
 local function normPreferKind(s: string?)
 	if s == "bright" then return "hikari" end
 	return "hikari"
+end
+
+local function resolveRunIdFrom(anyTable)
+	if type(anyTable) ~= "table" then return nil end
+	-- direct
+	local direct = anyTable.runId or anyTable.deckRunId or anyTable.id or anyTable.deckRunID or anyTable.runID
+	if direct ~= nil then return direct end
+	-- nested
+	local run = anyTable.run
+	if type(run) == "table" then
+		return run.runId or run.deckRunId or run.id or run.deckRunID or run.runID
+	end
+	return nil
+end
+
+local function resolveRunId(state, ctx)
+	return resolveRunIdFrom(ctx) or resolveRunIdFrom(state)
 end
 
 --========================
@@ -9504,72 +9639,72 @@ local function effect_tora(state, _ctx)
 end
 
 --========================
--- 酉：デッキ変更は EffectsRegistry に委譲（UIDファースト）
+-- 共通：UIモードか直適用かを判定して適用（Effects ID を確実に使用）
 --========================
-local function effect_tori(state, ctx)
-	-- === 前提 ===
-	local runId = ctx and ctx.runId
+local function apply_via_effects(effectModuleId:string, labelJP:string, state, ctx, preferKind:string?)
+	-- ★ runId を state/ctx から厳密解決
+	local runId = resolveRunId(state, ctx)
 	if runId == nil then
-		return false, "酉：runId が未指定です"
+		return false, (labelJP .. "：runId が未指定です")
 	end
 
-	local preferKind = normPreferKind(ctx and ctx.preferKind)
+	-- UIモード：配列が「非空」のときだけ「指定あり」とみなす
+	local uids       = normalizeArrayOrNil(ctx and ctx.uids)
+	local poolUids   = normalizeArrayOrNil(ctx and ctx.poolUids)
+	local codes      = normalizeArrayOrNil(ctx and ctx.codes)
+	local poolCodes  = normalizeArrayOrNil(ctx and ctx.poolCodes)
 
-	-- === UIモード（12枚提示） ===
-	-- UIが有効かつ、UID/Codeいずれも指定が無いときは提示へ
 	if Balance.KITO_UI_ENABLED == true then
-		local hasUids      = ctx and isArray(ctx.uids)
-		local hasPoolUids  = ctx and isArray(ctx.poolUids)
-		local hasCodes     = ctx and isArray(ctx.codes)
-		local hasPoolCodes = ctx and isArray(ctx.poolCodes)
-		if not hasUids and not hasPoolUids and not hasCodes and not hasPoolCodes then
+		local hasAnyInput = (uids ~= nil) or (poolUids ~= nil) or (codes ~= nil) or (poolCodes ~= nil)
+		if not hasAnyInput then
 			local player = (ctx and ctx.player) or (state and state.player)
 			if not player then
-				return false, "酉：UIモードですが player が不明です（ctx.player を渡してください）"
+				return false, (labelJP .. "：UIモードですが player が不明です（ctx.player を渡してください）")
 			end
-			lazyGetKitoPickCore().startFor(player, { runId = runId }, "kito_tori", preferKind)
-			return true, "酉：候補を表示しました。対象を選んでください。"
+			-- Effects ID を渡す（Shop ID ではない）
+			lazyGetKitoPickCore().startFor(player, { runId = runId }, effectModuleId, preferKind)
+			return true, (labelJP .. "：候補を表示しました。対象を選んでください。")
 		end
 	end
 
-	-- === 直接適用（UIDファースト／後方互換で codes 系も許容） ===
-	if ctx and ctx.uids and not isArray(ctx.uids) then
-		return false, "酉：uids は配列で指定してください"
-	end
-	if ctx and ctx.poolUids and not isArray(ctx.poolUids) then
-		return false, "酉：poolUids は配列で指定してください"
-	end
-	if ctx and ctx.codes and not isArray(ctx.codes) then
-		return false, "酉：codes は配列で指定してください"
-	end
-	if ctx and ctx.poolCodes and not isArray(ctx.poolCodes) then
-		return false, "酉：poolCodes は配列で指定してください"
-	end
-
-	-- Effects への入力は UID を主、codes は保険としてフォールバック
+	-- 直適用（空配列は nil 済み）
 	local payload = {
-		uids       = ctx and ctx.uids or nil,        -- 推奨：UIで選んだ1枚（UID）
-		poolUids   = ctx and ctx.poolUids or nil,    -- 12候補のUID
-		-- 互換（無ければUIDに委ねる）
-		codes      = ctx and ctx.codes or nil,
-		poolCodes  = ctx and ctx.poolCodes or nil,
-		preferKind = preferKind,                     -- "hikari" 固定運用
-		tag        = "eff:kito_tori_bright",         -- 再適用抑止タグ
+		uids       = uids,
+		poolUids   = poolUids,
+		codes      = codes,
+		poolCodes  = poolCodes,
+		preferKind = preferKind,
+		-- 再適用抑止などのタグは effect 側で適宜解釈
+		tag        = "eff:" .. tostring(effectModuleId),
 	}
-
-	-- 正式IDで適用（EffectsRegistry 側は runId 先行のシグネチャ）
-	local res = EffectsRegistry.apply(runId, "kito.tori_brighten", payload)
+	local res = EffectsRegistry.apply(runId, effectModuleId, payload)
 	if not res or res.ok ~= true then
 		local reason = (res and (res.error or res.message)) or "unknown"
-		return false, ("酉：失敗（%s）"):format(tostring(reason))
+		return false, (labelJP .. "：失敗（" .. tostring(reason) .. "）")
 	end
 
 	local changed = tonumber(res.changed or 0) or 0
 	if changed > 0 then
-		return true, "酉：1枚を光札に変換（成功）"
+		return true, (labelJP .. "：1枚を変換（成功）")
 	else
-		return true, ("酉：変換対象なし（%s）"):format(tostring(res.meta or "no-eligible-target"))
+		return true, (labelJP .. "：変換対象なし（" .. tostring(res.meta or "no-eligible-target") .. "）")
 	end
+end
+
+--========================
+-- 酉：デッキ変更（Effects "kito.tori_brighten"）
+--========================
+local function effect_tori(state, ctx)
+	local preferKind = normPreferKind(ctx and ctx.preferKind)
+	return apply_via_effects("kito.tori_brighten", "酉", state, ctx, preferKind)
+end
+
+--========================
+-- 巳：デッキ変更（Effects "kito.mi_venom"）
+--========================
+local function effect_mi(state, ctx)
+	-- 巳は preferKind 不要
+	return apply_via_effects("kito.mi_venom", "巳", state, ctx, nil)
 end
 
 --========================
@@ -9578,7 +9713,8 @@ end
 local DISPATCH = {
 	[Kito.ID.USHI] = effect_ushi,
 	[Kito.ID.TORA] = effect_tora,
-	[Kito.ID.TORI] = effect_tori, -- 酉は EffectsRegistry を叩く（UIモード時はKitoPickへ委譲）
+	[Kito.ID.TORI] = effect_tori, -- 酉：EffectsRegistry を叩く（UIモード時はKitoPickへ）
+	[Kito.ID.MI]   = effect_mi,   -- 巳：EffectsRegistry を叩く（UIモード時はKitoPickへ）
 }
 
 function Kito.apply(effectId, state, ctx)
@@ -11306,18 +11442,294 @@ end
 return M
 ```
 
+### src/shared/Deck/Effects/kito/Mi_Venom.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/Mi_Venom.lua
+-- "巳（Venom）"：対象札をカス化し、所持文を即時加算する
+--  - Effect ID: "kito.mi_venom"（必要なら別名を追加可能）
+--  - 対象選択: payload.uid / payload.uids / payload.poolUids（UID優先）
+--  - 既タグ "eff:kito_mi_venom" または kind=="chaff" は no-op
+--  - DeckStore は不変扱い。置換は transact 内で UID-first（無ければ code）で行う
+--  - 変更があった場合のみ res.meta.bankDelta = Balance.KITO_VENOM_CASH を返す
+--  - ★ Diagnostic logs（scope: Effects.kito.mi_venom）
+
+return function(Effects)
+	--─────────────────────────────────────────────────────
+	-- Imports / Logger
+	--─────────────────────────────────────────────────────
+	local RS = game:GetService("ReplicatedStorage")
+	local Shared = RS:WaitForChild("SharedModules")
+
+	local Balance = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(Shared:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.mi_venom")
+		else
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+		end
+	end
+
+	--─────────────────────────────────────────────────────
+	-- Handler
+	--─────────────────────────────────────────────────────
+	local function handler(ctx)
+		local payload   = ctx.payload or {}
+		local runId     = ctx.runId
+		local rng       = ctx.rng or Random.new()
+
+		local tagMark   = "eff:kito_mi_venom"
+		local cashDelta = tonumber(Balance.KITO_VENOM_CASH or 5) or 5
+
+		-- 受け取り（UID優先）
+		local uid       = (typeof(payload.uid) == "string" and payload.uid) or nil
+		local uids      = (typeof(payload.uids) == "table" and payload.uids) or nil
+		local poolUids  = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes     = (typeof(payload.codes) == "table" and payload.codes) or nil -- 互換
+
+		-- ログヘッダ
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+		LOG.info("[begin] run=%s uid=%s | uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s]",
+			tostring(runId), tostring(uid),
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes)
+		)
+
+		-- 小道具
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+		local uidSet     = listToSet(uids)
+		local poolUidSet = listToSet(poolUids)
+		local codeSet    = listToSet(codes)
+
+		local function alreadyTagged(card)
+			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+			for _, t in ipairs(card.tags) do if t == tagMark then return true end end
+			return false
+		end
+
+		local function cardStr(c:any)
+			if typeof(c) ~= "table" then return "<nil>" end
+			return string.format("{uid=%s code=%s kind=%s month=%s idx=%s tags=%s}",
+				tostring(c.uid), tostring(c.code), tostring(c.kind),
+				tostring(c.month), tostring(c.idx),
+				(function()
+					if typeof(c.tags) ~= "table" then return "[]" end
+					local t = {}
+					for i,v in ipairs(c.tags) do t[i] = tostring(v) end
+					return "["..table.concat(t, ",").."]"
+				end)()
+			)
+		end
+
+		-- UID で1件置換
+		local function replaceOneByUid(store, uidX, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.uid == uidX then
+					local c = table.clone(newEntry or {})
+					-- UIDは維持し、空欄は旧値で補完
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByUid] uid=%s -> %s", tostring(uidX), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByUid] uid=%s not found (no-op)", tostring(uidX))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- code で1件置換（レガシー）
+		local function replaceOneByCode(store, codeX, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.code == codeX then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid    -- 可能ならUID維持
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByCode] code=%s -> %s", tostring(codeX), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByCode] code=%s not found (no-op)", tostring(codeX))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- ターゲット選択（優先度: payload.uid → uids セット → poolUids セット → codes セット）
+		local function pickTarget(store)
+			local entries = (store and store.entries) or {}
+			if #entries == 0 then return nil, "empty-store" end
+
+			-- 0) direct uid
+			if uid and uid ~= "" then
+				for _, e in ipairs(entries) do
+					if e and e.uid == uid then
+						return e, "direct-uid"
+					end
+				end
+			end
+
+			-- 1) uids set
+			if uidSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and uidSet[e.uid] then
+						cand[#cand+1] = e
+					end
+				end
+				if #cand > 0 then
+					return cand[rng:NextInteger(1, #cand)], "uids"
+				end
+			end
+
+			-- 2) poolUids set
+			if poolUidSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and poolUidSet[e.uid] then
+						cand[#cand+1] = e
+					end
+				end
+				if #cand > 0 then
+					return cand[rng:NextInteger(1, #cand)], "poolUids"
+				end
+			end
+
+			-- 3) codes set（レガシー）
+			if codeSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and codeSet[e.code] then
+						cand[#cand+1] = e
+					end
+				end
+				if #cand > 0 then
+					return cand[rng:NextInteger(1, #cand)], "codes"
+				end
+			end
+
+			-- 4) 何も指定が無ければ no-op
+			return nil, "no-candidate"
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Main（DeckStore.transact）
+		--─────────────────────────────────────────────────────
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+
+		return ctx.DeckStore.transact(runId, function(store)
+			local storeSize = (store and store.entries and #store.entries) or 0
+			LOG.debug("[store] size=%s", tostring(storeSize))
+
+			local target, via = pickTarget(store)
+			if not target then
+				LOG.info("[result] no-target (via=%s)", tostring(via))
+				return store, { ok = true, changed = 0, meta = "no-target", pickReason = via }
+			end
+
+			LOG.debug("[target] via=%s %s", tostring(via), cardStr(target))
+
+			-- 既タグ or 既カス → no-op
+			if alreadyTagged(target) then
+				LOG.info("[result] already-applied uid=%s code=%s", tostring(target.uid), tostring(target.code))
+				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = target.uid, targetCode = target.code }
+			end
+			if tostring(target.kind or "") == "chaff" then
+				LOG.info("[result] already-chaff uid=%s code=%s", tostring(target.uid), tostring(target.code))
+				return store, { ok = true, changed = 0, meta = "already-chaff", targetUid = target.uid, targetCode = target.code }
+			end
+
+			-- 変換: chaff 化 → タグ付け
+			local beforeKind, beforeCode = target.kind, target.code
+			local next1 = ctx.DeckOps.convertKind(target, "chaff")
+			local afterKind, afterCode = next1.kind, next1.code
+			LOG.debug("[convert] code:%s→%s kind:%s→%s", tostring(beforeCode), tostring(afterCode), tostring(beforeKind), tostring(afterKind))
+
+			local next2 = ctx.DeckOps.attachTag(next1, tagMark)
+			if not next2.uid then next2.uid = target.uid end
+			LOG.debug("[tagged] %s", cardStr(next2))
+
+			-- 置換（UID優先）
+			if target.uid and target.uid ~= "" then
+				store = replaceOneByUid(store, target.uid, next2)
+			else
+				store = replaceOneByCode(store, target.code, next2)
+			end
+
+			local dt = (os.clock() - t0) * 1000
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s bank:+%d in %.2fms",
+				tostring(target.uid), tostring(target.code), tostring(via), cashDelta, dt)
+
+			return store, {
+				ok      = true,
+				changed = 1,
+				meta    = { bankDelta = cashDelta },
+				targetUid  = target.uid,
+				targetCode = target.code,
+				pickReason = via,
+			}
+		end)
+	end
+
+	-- 登録
+	Effects.register("kito.mi_venom", handler)
+	-- （必要なら）レガシー別名を追加：
+	-- Effects.register("Mi_Venom", handler)
+end
+```
+
 ### src/shared/Deck/Effects/kito/Tori_Brighten.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Tori_Brighten.lua
 -- Rooster (KITO): convert one target card to "bright" (UID-first)
 --  - Effect IDs: "kito.tori_brighten" (primary), "Tori_Brighten" (legacy alias)
---  - Prioritize payload.uids / payload.poolUids (UID uniquely identifies one card)
+--  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "bright", do nothing (meta returned)
---  - ★ Diagnostic logs added (scope: Effects.kito.tori_brighten)
-
+--  - Diagnostic logs (scope: Effects.kito.tori_brighten)
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -11331,12 +11743,7 @@ return function(Effects)
 		if ok and Logger and type(Logger.scope) == "function" then
 			LOG = Logger.scope("Effects.kito.tori_brighten")
 		else
-			-- silent no-op logger
-			LOG = {
-				info  = function(...) end,
-				debug = function(...) end,
-				warn  = function(...) warn(string.format(...)) end,
-			}
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
 		end
 	end
 
@@ -11344,17 +11751,19 @@ return function(Effects)
 	-- Shared handler for both effect IDs
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
-		local payload    = ctx.payload or {}
-		local uids       = (typeof(payload.uids)       == "table" and payload.uids)       or nil
-		local poolUids   = (typeof(payload.poolUids)   == "table" and payload.poolUids)   or nil
-		local codes      = (typeof(payload.codes)      == "table" and payload.codes)      or nil -- legacy compat
-		local poolCodes  = (typeof(payload.poolCodes)  == "table" and payload.poolCodes)  or nil -- legacy compat
-		local tagMark    = tostring(payload.tag or "eff:kito_tori_bright")
-		local pref       = tostring(payload.preferKind or "bright"):lower()
-		local preferKind = (pref == "bright") and "bright" or "bright" -- force EN-only "bright"
-		local runId      = ctx.runId
+		local payload     = ctx.payload or {}
+		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
+		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
 
-		local rng = ctx.rng or Random.new()
+		local tagMark     = tostring(payload.tag or "eff:kito_tori_bright")
+		local pref        = tostring(payload.preferKind or "bright"):lower()
+		local preferKind  = (pref == "bright") and "bright" or "bright" -- normalize to EN "bright"
+
+		local runId       = ctx.runId
+		local rng         = ctx.rng or Random.new()
 
 		-- quick payload summary for logs
 		local function head5(list)
@@ -11364,12 +11773,10 @@ return function(Effects)
 			return table.concat(out, ",")
 		end
 
-		-- 依存注入の存在可否も一度だけ観測
 		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
 			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
-
-		LOG.info("[begin] run=%s prefer=%s tag=%s | uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
-			tostring(runId), preferKind, tagMark,
+		LOG.info("[begin] run=%s prefer=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), preferKind, tagMark, tostring(uidScalar),
 			tostring(uids and #uids or 0), head5(uids),
 			tostring(poolUids and #poolUids or 0), head5(poolUids),
 			tostring(codes and #codes or 0), head5(codes),
@@ -11386,7 +11793,8 @@ return function(Effects)
 			return s
 		end
 
-		local uidSet      = listToSet(uids)
+		local uidSet = listToSet(uids) or {}
+		if uidScalar then uidSet[uidScalar] = true end
 		local poolUidSet  = listToSet(poolUids)
 		local codeSet     = listToSet(codes)
 		local poolCodeSet = listToSet(poolCodes)
@@ -11494,29 +11902,26 @@ return function(Effects)
 			return { v = 3, entries = out }
 		end
 
-		-- Target selection order: UID → Code → pool(UID/Code) → all
-		-- In all cases, restrict to months that contain "bright".
+		-- Target selection order: UID → Code → pool(UID/Code) → any eligible month
 		local function pickTarget(store)
 			local entries = (store and store.entries) or {}
-			-- 0) direct UID
-			if uidSet then
+			-- 0) direct UID(s)
+			if uidSet and next(uidSet) ~= nil then
 				local list = {}
 				for _, e in ipairs(entries) do
-					if e and e.uid and uidSet[e.uid] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then list[#list+1] = e end
+					if e and e.uid and uidSet[e.uid] and monthHasBright(monthFromCard(e)) then
+						list[#list+1] = e
 					end
 				end
 				LOG.debug("[pick] direct-uid candidates=%d", #list)
 				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-uid" end
 			end
-			-- 1) direct code
+			-- 1) direct code(s)
 			if codeSet then
 				local list = {}
 				for _, e in ipairs(entries) do
-					if e and e.code and codeSet[e.code] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then list[#list+1] = e end
+					if e and e.code and codeSet[e.code] and monthHasBright(monthFromCard(e)) then
+						list[#list+1] = e
 					end
 				end
 				LOG.debug("[pick] direct-code candidates=%d", #list)
@@ -11526,9 +11931,8 @@ return function(Effects)
 			if poolUidSet then
 				local cand = {}
 				for _, e in ipairs(entries) do
-					if e and e.uid and poolUidSet[e.uid] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then cand[#cand+1] = e end
+					if e and e.uid and poolUidSet[e.uid] and monthHasBright(monthFromCard(e)) then
+						cand[#cand+1] = e
 					end
 				end
 				LOG.debug("[pick] pool-uid candidates=%d", #cand)
@@ -11538,9 +11942,8 @@ return function(Effects)
 			if poolCodeSet then
 				local cand = {}
 				for _, e in ipairs(entries) do
-					if e and e.code and poolCodeSet[e.code] then
-						local m = monthFromCard(e)
-						if monthHasBright(m) then cand[#cand+1] = e end
+					if e and e.code and poolCodeSet[e.code] and monthHasBright(monthFromCard(e)) then
+						cand[#cand+1] = e
 					end
 				end
 				LOG.debug("[pick] pool-code candidates=%d", #cand)
@@ -11549,8 +11952,7 @@ return function(Effects)
 			-- 4) any entry whose month has "bright"
 			local all = {}
 			for _, e in ipairs(entries) do
-				local m = monthFromCard(e)
-				if monthHasBright(m) then all[#all+1] = e end
+				if monthHasBright(monthFromCard(e)) then all[#all+1] = e end
 			end
 			LOG.debug("[pick] any-bright-month candidates=%d", #all)
 			if #all > 0 then return all[rng:NextInteger(1, #all)], "any-bright-month" end
@@ -11574,6 +11976,7 @@ return function(Effects)
 
 			LOG.debug("[target] via=%s %s", tostring(reason), cardStr(target))
 
+			-- If already tagged, skip (idempotent)
 			if alreadyTagged(target) then
 				LOG.info("[result] already-applied uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
 				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = target.uid, targetCode = target.code, pickReason = reason }
@@ -11606,8 +12009,18 @@ return function(Effects)
 			end
 
 			local dt = (os.clock() - t0) * 1000
-			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms", tostring(target.uid), tostring(target.code), tostring(reason), dt)
-			return store, { ok = true, changed = 1, targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms",
+				tostring(target.uid), tostring(target.code), tostring(reason), dt)
+			return store, {
+				ok       = true,
+				changed  = 1,
+				targetUid  = target.uid,
+				targetCode = target.code,
+				pickReason = reason,
+			}
+		end)
+	end
+
 ... (truncated)
 ```
 
@@ -11617,7 +12030,7 @@ return function(Effects)
 -- Deck/Effects 以下の ModuleScript を自動スキャンして EffectsRegistry に一括登録する
 --
 -- サポートするモジュールの返り値（3通りすべて対応）:
---   1) ビルダー関数: function(Effects) -> ()           -- ← NEW: Effects.register(...) を内部で呼ぶ
+--   1) ビルダー関数: function(Effects) -> ()           -- ← 推奨: builder内で Effects.register(...) などを呼ぶ
 --   2) ハンドラ関数: function(ctx) -> ...              -- 旧来: 直接適用される関数
 --   3) 設定テーブル: { id|name, apply|run|exec|call }  -- 旧来: idと関数をテーブルで返す
 --
@@ -11625,8 +12038,9 @@ return function(Effects)
 --   テーブル返り値: payload.id > payload.name > module._id > ModuleScript.Name
 --   関数返り値(ハンドラ扱い): module._id > ModuleScript.Name
 --
--- ビルダー関数を検出した場合は、Effects.register をプロキシして捕捉し、内部で実レジストリへ中継登録する。
--- これにより、モジュール内で "kito.xxx" のような命名規約を自律的に採用可能。
+-- 追加: canApply 登録の標準化
+--   - Effects.registerCanApply(id, fn) をビルダーからも呼べるようプロキシを提供
+--   - 本ファイルでも酉/巳の canApply を中央登録する（UIグレーアウト/サーバ最終判定の唯一の正）
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -11646,8 +12060,12 @@ local function getLogger()
 end
 local LOG = getLogger()
 
+local Shared     = RS:WaitForChild("SharedModules")
 local DeckFolder = script.Parent
-local Registry = require(DeckFolder:WaitForChild("EffectsRegistry"))
+local Registry   = require(DeckFolder:WaitForChild("EffectsRegistry"))
+
+-- 依存（canApply用）
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
 
 --====================
 -- 内部 util
@@ -11689,9 +12107,9 @@ local function pickId(modInst: Instance, payload:any)
 	return modInst.Name
 end
 
--- Effects.register をプロキシして捕捉し、本体 Registry に中継
+-- Effects.register / registerCanApply をプロキシして捕捉し、本体 Registry に中継
 local function buildEffectsProxy(modInst: Instance)
-	local captured = {}  -- { {id=id, fn=fn}, ... }
+	local captured = {}  -- { {id=id, fn=fn}, ... } ※register だけ捕捉（canApply は捕捉しなくてもOK）
 	local Effects = {}
 
 	function Effects.register(id: string, fn: any)
@@ -11707,6 +12125,19 @@ local function buildEffectsProxy(modInst: Instance)
 		LOG.info("registered: id=%s from=%s", tostring(id), modInst:GetFullName())
 	end
 
+	-- ★ canApply のプロキシ（ビルダーがここから登録できる）
+	function Effects.registerCanApply(id: string, fn: any)
+		local ok, err = pcall(function()
+			Registry.registerCanApply(id, fn)
+		end)
+		if not ok then
+			LOG.warn("registerCanApply failed via builder: id=%s mod=%s | err=%s",
+				tostring(id), modInst:GetFullName(), tostring(err))
+			return
+		end
+		LOG.info("registered canApply: id=%s from=%s", tostring(id), modInst:GetFullName())
+	end
+
 	-- 任意: ビルダーがログを使いたい場合
 	function Effects.log(msg: string, ...)
 		LOG.debug("[effects:%s] "..tostring(msg), modInst.Name, ...)
@@ -11718,7 +12149,7 @@ end
 local function registerAsBuilder(modInst: Instance, builderFn: any): boolean
 	local Effects, captured = buildEffectsProxy(modInst)
 	local ok, err = pcall(function()
-		-- ビルダーは副作用として Effects.register を呼ぶ想定
+		-- ビルダーは副作用として Effects.register / registerCanApply を呼ぶ想定
 		builderFn(Effects)
 	end)
 	if not ok then
@@ -11816,20 +12247,86 @@ local function scanAndRegister(root: Instance)
 end
 
 --====================
--- エントリ
+-- canApply（酉/巳）の中央登録
 --====================
--- 規約: Deck/Effects 以下をスキャン（無ければ何もせず成功扱い）
-local effectsRoot = DeckFolder:FindFirstChild("Effects")
-local total = 0
-if effectsRoot then
-	total = scanAndRegister(effectsRoot)
-else
-	LOG.warn("Deck/Effects not found under %s (no effects registered)", DeckFolder:GetFullName())
+local function hasTag(card:any, mark:string): boolean
+	if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+	for _, t in ipairs(card.tags) do
+		if t == mark then return true end
+	end
+	return false
 end
 
-LOG.info("EffectsRegistry initialized: %d module(s) registered", total)
+local function monthHasBright(month:number?): boolean
+	if not month or not CardEngine or not CardEngine.cardsByMonth then return false end
+	local defs = CardEngine.cardsByMonth[month]
+	if typeof(defs) ~= "table" then return false end
+	for _, def in ipairs(defs) do
+		if tostring(def.kind or "") == "bright" then
+			return true
+		end
+	end
+	return false
+end
 
-return true
+local function parseMonthFromCard(card:any): number?
+	if typeof(card) ~= "table" then return nil end
+	if card.month ~= nil then
+		local m = tonumber(card.month)
+		if typeof(m) == "number" then return m end
+	end
+	local code = tostring(card.code or "")
+	if #code >= 2 then
+		local mm = tonumber(string.sub(code, 1, 2))
+		if typeof(mm) == "number" then return mm end
+	end
+	return nil
+end
+
+local function registerBuiltinCanApply()
+	-- 酉（Brighten）
+	local ToriIdPrimary = "kito.tori_brighten"
+	local ToriIdLegacy  = "Tori_Brighten"
+	local toriTag       = "eff:kito_tori_bright"
+
+	local function toriCan(card:any, _ctx:any)
+		if typeof(card) ~= "table" then return false, "not-eligible" end
+		if tostring(card.kind or "") == "bright" then
+			return false, "already-bright"
+		end
+		if hasTag(card, toriTag) then
+			return false, "already-applied"
+		end
+		local m = parseMonthFromCard(card)
+		if not monthHasBright(m) then
+			return false, "month-has-no-bright"
+		end
+		return true, nil
+	end
+
+	-- 巳（Venom）
+	local MiIdPrimary = "kito.mi_venom"
+	local miTag       = "eff:kito_mi_venom"
+
+	local function miCan(card:any, _ctx:any)
+		if typeof(card) ~= "table" then return false, "not-eligible" end
+		if tostring(card.kind or "") == "chaff" then
+			return false, "already-chaff"
+		end
+		if hasTag(card, miTag) then
+			return false, "already-applied"
+		end
+		return true, nil
+	end
+
+	-- 登録（存在チェックは EffectsRegistry 側で持つためそのまま上書きOK）
+	local ok1, err1 = pcall(function()
+		Registry.registerCanApply(ToriIdPrimary, toriCan)
+		Registry.registerCanApply(ToriIdLegacy,  toriCan) -- 旧別名
+	end)
+	if not ok1 then
+		LOG.warn("registerCanApply(tori) failed: %s", tostring(err1))
+... (truncated)
 ```
 
 ### src/shared/Deck/EffectsRegistry.lua
@@ -11840,6 +12337,7 @@ return true
 --  - register(id, handler) で効果を登録
 --  - apply(runId, effectId, payload?) で効果を実行
 --  - handler 内で DeckStore / DeckOps / CardEngine を自由に使えるよう依存を注入
+--  - registerCanApply(id, fn) / canApply(id, card, ctx) で「適格判定」を統一提供（Serverが唯一の正）
 --
 -- ポリシー：
 --  - Deck の変更は DeckStore.transact を通す（純関数 DeckOps で生成→差し替え）
@@ -11853,63 +12351,60 @@ local DeckStore  = require(Shared:WaitForChild("Deck"):WaitForChild("DeckStore")
 local DeckOps    = require(Shared:WaitForChild("Deck"):WaitForChild("DeckOps"))
 local CardEngine = require(Shared:WaitForChild("CardEngine"))
 
+-- 任意ロガー（無依存ノイズ抑制）
+local LOG do
+	local ok, Logger = pcall(function()
+		return require(Shared:WaitForChild("Logger"))
+	end)
+	if ok and Logger and type(Logger.scope) == "function" then
+		LOG = Logger.scope("EffectsRegistry")
+	else
+		LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+	end
+end
+
+-- 登録テーブル
 local Registry: {[string]: (any)->(any)} = {}
+local CanApplyRegistry: {[string]: (any, any)->(boolean, string?)} = {} -- (card, ctx) -> (ok, reason?)
 
 local M = {}
 
 export type ApplyResult = {
 	ok: boolean,
-	changed: number?,      -- 変更枚数など（任意）
+	changed: number?,      -- 変更枚数（任意）
 	meta: any?,            -- 効果側からの追加情報（任意）
 	error: string?,        -- エラー文字列（失敗時）
 }
 
--- 効果を登録
-function M.register(id: string, handler: (ctx:any)->(any))
-	assert(type(id) == "string" and #id > 0, "EffectsRegistry.register: id must be non-empty string")
-	assert(type(handler) == "function", "EffectsRegistry.register: handler must be function")
-	if Registry[id] ~= nil then
-		warn(("[EffectsRegistry] overwriting existing effect id: %s"):format(id))
-	end
-	Registry[id] = handler
-end
-
--- 効果が登録済みか
-function M.has(id: string): boolean
-	return Registry[id] ~= nil
-end
-
--- 登録一覧（デバッグ用）
-function M.list(): {string}
-	local t = {}
-	for k,_ in pairs(Registry) do table.insert(t, k) end
-	table.sort(t)
-	return t
-end
-
--- 効果を実行
--- runId: DeckStore のランID（ゲーム/ラウンドなどの単位）
--- effectId: 登録した効果ID
--- payload: 効果固有の入力（対象コード配列など）
-function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
-	if type(effectId) ~= "string" or #effectId == 0 then
-		return { ok = false, error = "effectId is invalid" }
-	end
-	local handler = Registry[effectId]
-	if not handler then
-		return { ok = false, error = ("effect '%s' not registered"):format(tostring(effectId)) }
+--========================================================
+-- 内部: ハンドラに渡す ctx の生成
+--========================================================
+local function buildCtx(runId:any, payload:any?): any
+	-- rng は payload.rng（Random型）を優先注入。無ければ各ハンドラ側で Random.new() フォールバック想定。
+	local rng
+	if typeof(payload) == "table" then
+		if typeof(payload.rng) == "Random" then
+			rng = payload.rng
+		elseif typeof(payload.rngSeed) == "number" then
+			-- 任意: 数値seedが来たらここでRandom化
+			local ok, r = pcall(function() return Random.new(payload.rngSeed) end)
+			if ok and typeof(r) == "Random" then rng = r end
+		end
 	end
 
-	-- 効果ハンドラへ渡すコンテキスト
-	local ctx = {
+	return {
 		runId   = runId,
 		payload = payload,
+
 		-- 共通道具（依存の注入）
 		DeckStore  = DeckStore,
 		DeckOps    = DeckOps,
 		CardEngine = CardEngine,
 
-		-- よく使う補助（任意で追加可能）
+		-- （任意）RNG
+		rng = rng,
+
+		-- よく使う補助（必要最小限）
 		selectByCodes = function(deck, codes: {string})
 			local out = {}
 			if typeof(deck) ~= "table" or typeof(codes) ~= "table" then
@@ -11922,7 +12417,6 @@ function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
 					if c then table.insert(out, c) end
 				end
 			elseif deck.entries and typeof(deck.entries) == "table" then
-				-- 線形探索のフォールバック
 				local want = {}
 				for _, code in ipairs(codes) do want[code] = true end
 				for _, c in ipairs(deck.entries) do
@@ -11932,9 +12426,8 @@ function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
 			return out
 		end,
 
-		-- Deck 置換の薄いラッパ（関数名はプロジェクト実装に合わせて）
+		-- Deck 置換の薄いラッパ（プロジェクト依存：適宜置き換え）
 		replace = function(deck, oldCode: string, newCard: any)
-			-- DeckStore に実体 API があればそちらを使う
 			if DeckStore.replaceEntry then
 				return DeckStore.replaceEntry(deck, oldCode, newCard)
 			elseif DeckStore.upsertEntry then
@@ -11944,11 +12437,87 @@ function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
 			end
 		end,
 	}
+end
+
+--========================================================
+-- 効果本体の登録・参照
+--========================================================
+function M.register(id: string, handler: (ctx:any)->(any))
+	assert(type(id) == "string" and #id > 0, "EffectsRegistry.register: id must be non-empty string")
+	assert(type(handler) == "function", "EffectsRegistry.register: handler must be function")
+	if Registry[id] ~= nil then
+		warn(("[EffectsRegistry] overwriting existing effect id: %s"):format(id))
+	end
+	Registry[id] = handler
+	LOG.debug("[register] id=%s", id)
+end
+
+function M.has(id: string): boolean
+	return Registry[id] ~= nil
+end
+
+function M.list(): {string}
+	local t = {}
+	for k,_ in pairs(Registry) do table.insert(t, k) end
+	table.sort(t)
+	return t
+end
+
+--========================================================
+-- canApply（適格判定）の登録・参照
+--========================================================
+-- 登録: (card, ctx) -> (ok:boolean, reason:string?)
+function M.registerCanApply(id: string, fn: (any, any)->(boolean, string?))
+	assert(type(id) == "string" and #id > 0, "EffectsRegistry.registerCanApply: id must be non-empty string")
+	assert(type(fn) == "function", "EffectsRegistry.registerCanApply: fn must be function")
+	if CanApplyRegistry[id] ~= nil then
+		warn(("[EffectsRegistry] overwriting existing canApply for id: %s"):format(id))
+	end
+	CanApplyRegistry[id] = fn
+	LOG.debug("[registerCanApply] id=%s", id)
+end
+
+function M.hasCanApply(id: string): boolean
+	return CanApplyRegistry[id] ~= nil
+end
+
+-- 取得: 登録が無ければ true を返す（= フィルタ無し）
+function M.canApply(id: string, card:any, externCtx:any?): (boolean, string?)
+	local fn = CanApplyRegistry[id]
+	if not fn then
+		return true, "no-check"
+	end
+	-- externCtx が来ていればそれをベースに最小限の依存を補完
+	local ctx = externCtx or {}
+	if ctx.DeckStore == nil then ctx.DeckStore = DeckStore end
+	if ctx.DeckOps   == nil then ctx.DeckOps   = DeckOps   end
+	if ctx.CardEngine== nil then ctx.CardEngine= CardEngine end
+	local ok, reason = fn(card, ctx)
+	return ok and true or false, reason
+end
+
+--========================================================
+-- 効果の実行
+--========================================================
+-- runId: DeckStore のランID（ゲーム/ラウンドなどの単位）
+-- effectId: 登録した効果ID
+-- payload: 効果固有の入力（対象UID/コード配列・poolUidsなど）
+function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
+	if type(effectId) ~= "string" or #effectId == 0 then
+		return { ok = false, error = "effectId is invalid" }
+	end
+	local handler = Registry[effectId]
+	if not handler then
+		return { ok = false, error = ("effect '%s' not registered"):format(tostring(effectId)) }
+	end
+
+	local ctx = buildCtx(runId, payload)
 
 	-- ハンドラは（必要なら）内部で DeckStore.transact を呼ぶ想定
 	-- 返り値は自由だが、ここでは { ok, changed, meta } 形式に正規化して返す
 	local ok, res = pcall(handler, ctx)
 	if not ok then
+		LOG.warn("[apply] error id=%s err=%s", effectId, tostring(res))
 		return { ok = false, error = tostring(res) }
 	end
 
@@ -11966,8 +12535,10 @@ return M
 ### src/shared/DeckSampler.lua
 ```lua
 -- ReplicatedStorage/SharedModules/DeckSampler.lua
--- 目的: ラン中デッキ(state.deck)から K 枚ぶんの "uid" 候補を無作為抽出する。
+-- 目的: ラン中デッキ(state.deck)から K 枚ぶんの "uid" を無作為抽出する（重複なし）。
 -- 依存: Balance.KITO_POOL_SIZE / RunDeckUtil.ensureUids
+-- 追記: ctx.rng があればそれを優先使用。なければ時刻ベースでフォールバック。
+-- 追加: sampleAny12(state, ctx?) … 既定サイズ(KITO_POOL_SIZE)で抽出するショートカット。
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -11976,18 +12547,73 @@ local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDe
 
 local M = {}
 
--- ランごとに安定しすぎない程度の RNG を取得（ない場合は時刻ベース）
-local function pickRng(state:any)
-	-- 将来 seed を run.meta などに保存するならここで掴む
-	return Random.new(os.clock() * 1e6 % 2^31)
+-- ───────────────── Logger（任意・無害）
+local LOG do
+	local ok, Logger = pcall(function()
+		return require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+	end)
+	if ok and Logger and type(Logger.scope) == "function" then
+		LOG = Logger.scope("DeckSampler")
+	else
+		LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+	end
 end
 
--- デッキから uid の配列を K 個ぶん返す（Kが未指定なら既定値）
-function M.sampleUids(state:any, k:number?): {string}
+-- ───────────────── RNG 取得（ctx.rng 優先）
+-- 引数 rngOrCtx は Random か、ctxテーブル（ctx.rng を見る）か、nil を受け付ける
+local function resolveRng(state:any, rngOrCtx:any?): Random
+	-- 明示 Random
+	if typeof(rngOrCtx) == "Random" then
+		return rngOrCtx
+	end
+	-- ctx テーブルから
+	if typeof(rngOrCtx) == "table" and typeof(rngOrCtx.rng) == "Random" then
+		return rngOrCtx.rng
+	end
+	-- フォールバック: 時刻＋runId/seed風味
+	local salt = 0
+	if typeof(state) == "table" then
+		local runId = tostring(state.runId or "")
+		-- runId から数字だけ抽出して少しだけ安定性を持たせる（任意）
+		local num = string.match(runId, "%d+")
+		if num then salt = tonumber(num) or 0 end
+	end
+	local seed = (os.clock() * 1e6 + salt) % 2^31
+	return Random.new(seed)
+end
+
+-- ───────────────── 部分フィッシャー–イェーツ: K 枚だけランダム抽出
+-- 速度最適化: 全体シャッフルではなく「末尾K個をランダム化」して取り出す
+local function pickKIndices(total: number, want: number, rng: Random): {number}
+	-- インデックス配列 [1..total]
+	local idx = table.create(total)
+	for i = 1, total do
+		idx[i] = i
+	end
+	-- i=total から total-want+1 まで部分シャッフル
+	for i = total, math.max(total - want + 1, 2), -1 do
+		local j = rng:NextInteger(1, i)
+		idx[i], idx[j] = idx[j], idx[i]
+	end
+	-- 末尾 want 件を返す
+	local out = table.create(want)
+	local p = 1
+	for i = total - want + 1, total do
+		out[p] = idx[i]
+		p += 1
+	end
+	return out
+end
+
+-- ───────────────── デッキから uid の配列を K 個ぶん返す（Kが未指定なら既定値）
+-- 互換I/F: 呼び出しは従来どおり M.sampleUids(state [, k [, rngOrCtx]])
+function M.sampleUids(state:any, k:number?, rngOrCtx:any?): {string}
 	if typeof(state) ~= "table" then return {} end
 	if typeof(state.deck) ~= "table" then return {} end
 
+	-- UID 付与を保証
 	RunDeckUtil.ensureUids(state)
+
 	local deck = state.deck
 	local total = #deck
 	if total <= 0 then return {} end
@@ -11996,21 +12622,59 @@ function M.sampleUids(state:any, k:number?): {string}
 	want = math.clamp(want, 0, total)
 	if want <= 0 then return {} end
 
-	-- フィッシャー–イェーツでインデックスをシャッフル → 先頭 want 件を採用
-	local rng = pickRng(state)
-	local idx = table.create(total)
-	for i=1,total do idx[i] = i end
-	for i = total, 2, -1 do
-		local j = rng:NextInteger(1, i)
-		idx[i], idx[j] = idx[j], idx[i]
+	local rng = resolveRng(state, rngOrCtx)
+
+	-- K 枚だけ部分シャッフルして取得
+	local indices = pickKIndices(total, want, rng)
+
+	-- UID配列を作成（万一の欠損はスキップして詰める）
+	local out = table.create(want)
+	local o = 1
+	for _, i in ipairs(indices) do
+		local e = deck[i]
+		local uid = e and e.uid
+		if typeof(uid) == "string" and #uid > 0 then
+			out[o] = uid
+			o += 1
+		else
+			LOG.warn("[sampleUids] missing uid at index=%s (skipped)", tostring(i))
+		end
+	end
+	-- 欠損があって want 未満になる場合は、余りのインデックスから補充を試みる
+	if o <= want then
+		for i = 1, total do
+			-- 既に選んだ index は飛ばす（簡易セット）
+			-- ※ want が小さい前提のため O(n) で十分
+			local used = false
+			for _, ii in ipairs(indices) do if ii == i then used = true break end end
+			if not used then
+				local e = deck[i]
+				local uid = e and e.uid
+				if typeof(uid) == "string" and #uid > 0 then
+					out[o] = uid
+					o += 1
+					if o > want then break end
+				end
+			end
+		end
 	end
 
-	local out = table.create(want)
-	for i = 1, want do
-		local e = deck[idx[i]]
-		out[i] = e and e.uid or nil
+	-- 最終長を want に合わせる（nil が入らないよう調整）
+	if #out > want then
+		for i = #out, want + 1, -1 do
+			out[i] = nil
+		end
 	end
+
+	LOG.debug("[sampleUids] total=%d want=%d -> out=%d", total, want, #out)
 	return out
+end
+
+-- ───────────────── 既定サイズ（Balance.KITO_POOL_SIZE）で抽出するショートカット
+-- 計画書での any12 に相当。rng は ctx か Random を渡せる。
+function M.sampleAny12(state:any, rngOrCtx:any?): {string}
+	local k = tonumber(Balance.KITO_POOL_SIZE) or 12
+	return M.sampleUids(state, k, rngOrCtx)
 end
 
 return M
@@ -14322,6 +14986,12 @@ ShopDefs.POOLS = {
 			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
 			descEN = "Convert one non-bright in run config to Bright (or queue +1 for next season).",
 		},
+		-- ★ 追加：巳（Venom）
+		{
+			id   = "kito_mi", name = "巳：1枚をカス札に変換", category = "kito", price = 2, effect = "kito_mi",
+			descJP = "ラン構成の対象札をカス札に変換（適用時に少額の文を即時加算）。",
+			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
+		},
 	},
 
 	-- 祭事
@@ -14566,6 +15236,7 @@ return ShopFormat
 --  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 --  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（state.run.talisman をそのまま搭載）
 --               ※補完/推測は一切しない（真実は TalismanService/StateHub が管理）
+--  - ★ KITO（酉/巳 など）を UI 経路に統一（正規effectIdへ正規化して KitoPickCore へ移譲）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -14665,6 +15336,23 @@ local function ensureRunId(state:any): string
     state.run.id = id
   end
   return id
+end
+
+--========================
+-- KITO: ID 正規化 & ラベル
+--========================
+local function toCanonicalEffectId(eid: string?): string
+	if type(eid) ~= "string" or eid == "" then return "" end
+	if eid == "kito_tori" or eid == "Tori_Brighten" then return "kito.tori_brighten" end
+	if eid == "kito_mi"   or eid == "Mi_Venom"      then return "kito.mi_venom"      end
+	return eid
+end
+
+local function kitoLabel(eid: string?): string
+	local id = toCanonicalEffectId(eid)
+	if id == "kito.tori_brighten" then return "酉" end
+	if id == "kito.mi_venom"      then return "巳" end
+	return "KITO"
 end
 
 --========================
@@ -14837,24 +15525,6 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 		mon          = money,              -- 互換（クライアントは mon/totalMon のどちらでも読める）
 		stock        = s.shop.stock,
 		items        = s.shop.stock,       -- 互換
-		notice       = notice,
-		rerollCost   = REROLL_COST,
-		canReroll    = money >= REROLL_COST,
-		currentDeck  = deckView,
-
-		-- UI支援（参照していれば活用 / 不要ならクライアント側で無視）
-		maxStock     = MAX_STOCK,
-		stockCount   = #(s.shop.stock or {}),
-
-		-- ★ 護符データ（nil 許容、上書き/補完なし）
-		talisman     = tali,
-
-		-- 互換用：State を抱えておく（ShopScreen が state.run.talisman を参照できるように）
-		state = {
-			run = { talisman = tali },
-			lang = s.lang,
-		},
-	})
 ... (truncated)
 ```
 

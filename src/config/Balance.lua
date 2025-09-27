@@ -8,6 +8,11 @@ local Balance = {}
 Balance.KITO_POOL_SIZE      = 12  -- サンプル提示枚数（UIなし時も内部で使用）
 Balance.KITO_POOL_TTL_SEC   = 45  -- セッション有効秒数（開始→決定の猶予）
 
+-- ▼ プール生成モード（Core用）
+--   "any12_disable_ineligible" : ランダム12枚提示 → サーバの canApply で不適格をグレーアウト（新仕様）
+--   "eligible12"               : 旧互換。適格なものだけから最大N枚を提示（フィルタ済み）
+Balance.KITO_POOL_MODE      = "any12_disable_ineligible"
+
 -- ▼ UI導入のトグル
 --   false: サーバ自動選択（旧挙動／内部で即確定）
 --   true : UIでプレイヤーが選択（Shop購入後に候補を提示）
@@ -23,5 +28,14 @@ Balance.KITO_AUTO_PICK_COUNT = 1
 
 -- ▼ UI時に提示する枚数（未指定なら KITO_POOL_SIZE を使用）
 Balance.KITO_UI_PICK_COUNT   = Balance.KITO_POOL_SIZE
+
+-- ▼ 効果バランス（巳：Venom）
+--   Venom 適用時に即時付与する文（所持金）の増分
+Balance.KITO_VENOM_CASH      = 5
+
+-- ▼ 互換ノブ（旧Coreが参照していた場合のために残置）
+--   "block": すでに同種（例: bright）ならプール除外 / "allow": 含める
+--   新Core（any12 モード）では使用しないが、他所で参照されても破綻しないよう既定を置く
+Balance.KITO_SAME_KIND_POLICY = "block"  -- legacy / compatibility
 
 return Balance
