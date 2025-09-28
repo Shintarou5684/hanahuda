@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-28 10:29:44
+- Generated: 2025-09-28 20:43:20
 - Max lines/file: 300
 
 ## Folder Tree
@@ -139,6 +139,7 @@ hanahuda
 │       ├── Deck
 │       │   ├── Effects
 │       │   │   ├── kito
+│       │   │   │   ├── Hitsuji_Prune.lua
 │       │   │   │   ├── I_Sakeify.lua
 │       │   │   │   ├── Inu_Chaff2.lua
 │       │   │   │   ├── Mi_Venom.lua
@@ -815,7 +816,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-28 10:29:44
+- Generated: 2025-09-28 20:43:20
 - Max lines/file: 300
 
 ## Folder Tree
@@ -953,6 +954,7 @@ hanahuda
 │       ├── Deck
 │       │   ├── Effects
 │       │   │   ├── kito
+│       │   │   │   ├── Hitsuji_Prune.lua
 │       │   │   │   ├── I_Sakeify.lua
 │       │   │   │   ├── Inu_Chaff2.lua
 │       │   │   │   ├── Mi_Venom.lua
@@ -1111,7 +1113,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 ### v0.9.0 — 2025-09-06
 - **基礎採点**：役→文 / 札→点、総スコア = 文 × 点 を実装。
 - **祭事テーブル**と**役→祭事マッピング**を追加。
-- `CardEngine`：**48枚デッキ**定義と**スナップショット**機能。
 ... (truncated)
 ```
 
@@ -9441,7 +9442,7 @@ end
 ### src/server/ShopEffects/init.lua
 ```lua
 -- ServerScriptService/ShopEffects/init.lua
--- v0.9.0 効果ディスパッチ（カテゴリ別振り分け）
+-- v0.9.1 効果ディスパッチ（カテゴリ別振り分け）
 -- 公開I/F:
 --   apply(effectId, state, ctx) -> (ok:boolean, message:string)
 
@@ -9474,6 +9475,68 @@ M.Spectral = Spectral
 local function msgJa(s) return s end
 
 --========================
+-- 呼び出し元ヒント生成（ログ用）
+--========================
+local UNDERSCORE_WARNED = {}  -- 重複warn防止
+
+-- 自分自身のフルネーム（例: "ServerScriptService.ShopEffects"）
+local SELF_NAME = (function()
+	local ok, name = pcall(function() return script:GetFullName() end)
+	return ok and name or "ServerScriptService.ShopEffects"
+end)()
+
+local function pickExplicitSource(state, ctx)
+	-- 呼び出し側が明示してくれたら最優先
+	if type(ctx) == "table" then
+		if ctx.source  ~= nil then return tostring(ctx.source) end
+		if ctx._source ~= nil then return tostring(ctx._source) end
+	end
+	if type(state) == "table" then
+		if state.source  ~= nil then return tostring(state.source) end
+		if state._source ~= nil then return tostring(state._source) end
+	end
+	return nil
+end
+
+local function guessCallerFromTraceback()
+	-- Luauでは debug.traceback が使えるので、最初にそれっぽい行を拾う
+	local tb
+	local ok, ret = pcall(function()
+		return debug.traceback("", 3) -- この関数から2フレーム上を基点に取得
+	end)
+	if ok then tb = ret end
+	if type(tb) ~= "string" then return "unknown" end
+
+	for line in tb:gmatch("[^\n]+") do
+		-- このモジュール自身や x/pcall フレームは除外
+		if not line:find(SELF_NAME, 1, true)
+			and not line:find("ShopEffects/init", 1, true)
+			and not line:find("xpcall", 1, true)
+			and not line:find("pcall", 1, true)
+		then
+			-- 例: ServerScriptService.ShopService:123 といった形式を優先的に抜く
+			local m = line:match("([%w%._/]+:%d+)")
+			       or line:match("Script '([^']+)'")
+			       or line:match("([%w%._/]+)")
+			if m then return m end
+		end
+	end
+	return "unknown"
+end
+
+local function makeCallerHint(state, ctx)
+	return pickExplicitSource(state, ctx) or guessCallerFromTraceback()
+end
+
+local function warnUnderscoreOnce(effectId, dotId, caller)
+	local key = tostring(caller) .. "|" .. tostring(effectId)
+	if UNDERSCORE_WARNED[key] then return end
+	UNDERSCORE_WARNED[key] = true
+	warn(("[ShopEffects] DEPRECATED underscore id: %s  → use '%s'  | caller=%s")
+		:format(effectId, dotId, caller))
+end
+
+--========================
 -- 内部：委譲呼び出し（共通ラッパ）
 --========================
 local function delegate(mod, fx, effectId, state, ctx, tag)
@@ -9498,8 +9561,14 @@ function M.apply(effectId, state, ctx)
 		return false, msgJa("効果IDが不正です")
 	end
 
-	-- 祈祷（kito_）
-	if effectId:sub(1,5) == "kito_" then
+	-- 祈祷（kito_ または kito. の両方を受け付け）
+	if effectId:sub(1,5) == "kito_" or effectId:sub(1,5) == "kito." then
+		if effectId:sub(1,5) == "kito_" then
+			-- アンダーバーは互換受付しつつ、置換用に呼び出し元ヒントをwarn
+			local dotId  = effectId:gsub("^kito_", "kito.")
+			local caller = makeCallerHint(state, ctx)
+			warnUnderscoreOnce(effectId, dotId, caller)
+		end
 		return delegate(Kito, "apply", effectId, state, ctx, "祈祷")
 	end
 
@@ -11478,6 +11547,182 @@ function M.toVMs(entries: {any}?): {any}
 end
 
 return M
+```
+
+### src/shared/Deck/Effects/kito/Hitsuji_Prune.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/Hitsuji_Prune.lua
+-- Sheep (KITO): prune one target card from the deck (UID-first)
+--  - Effect IDs: "kito.hitsuji_prune" (primary), "kito_hitsuji" (legacy alias)
+--  - Target selection order: payload.uid / payload.uids / payload.poolUids / payload.codes / payload.poolCodes
+--  - DeckStore (v3) is immutable; use DeckStore.transact to return a new store
+--  - No random fallback removal if no target is provided (safety-first)
+--  - Diagnostic logs (scope: Effects.kito.hitsuji_prune)
+
+return function(Effects)
+	-- Logger (optional)
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(game:GetService("ReplicatedStorage")
+				:WaitForChild("SharedModules")
+				:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.hitsuji_prune")
+		else
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+		end
+	end
+
+	-- canApply（現状は常に許可。将来ロック等を導入するならここで判定）
+	local function canApply(_card:any, _ctx:any)
+		return true, nil
+	end
+
+	local function handler(ctx)
+		local payload   = ctx.payload or {}
+		local uidScalar = (typeof(payload.uid)  == "string" and payload.uid)  or nil
+		local uids      = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids  = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes     = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local poolCodes = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+		local tagMark   = tostring(payload.tag or "eff:kito_hitsuji_prune")
+		local runId     = ctx.runId
+
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+		LOG.info("[begin] run=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), tagMark, tostring(uidScalar),
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes),
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+		)
+
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+
+		local uidSet      = listToSet(uids) or {}
+		if uidScalar then uidSet[uidScalar] = true end
+		local poolUidSet  = listToSet(poolUids)
+		local codeSet     = listToSet(codes)
+		local poolCodeSet = listToSet(poolCodes)
+
+		-- pick target（無指定なら削除しない＝安全運用）
+		local function pickTarget(store)
+			local entries = (store and store.entries) or {}
+			-- 0) direct UID(s)
+			if uidSet and next(uidSet) ~= nil then
+				for _, e in ipairs(entries) do if e and e.uid and uidSet[e.uid] then return e, "direct-uid" end end
+			end
+			-- 1) direct code(s)
+			if codeSet and next(codeSet) ~= nil then
+				for _, e in ipairs(entries) do if e and e.code and codeSet[e.code] then return e, "direct-code" end end
+			end
+			-- 2) pool by UID
+			if poolUidSet and next(poolUidSet) ~= nil then
+				for _, e in ipairs(entries) do if e and e.uid and poolUidSet[e.uid] then return e, "pool-uid" end end
+			end
+			-- 3) pool by code
+			if poolCodeSet and next(poolCodeSet) ~= nil then
+				for _, e in ipairs(entries) do if e and e.code and poolCodeSet[e.code] then return e, "pool-code" end end
+			end
+			return nil, "no-target"
+		end
+
+		local function storeSize(store) return (store and store.entries and #store.entries) or 0 end
+
+		local function removeByUidImmutable(store, uid)
+			local entries = (store and store.entries) or {}
+			local n = #entries
+			if n == 0 then return store, nil end
+			local out, removed = table.create(n), nil
+			for i = 1, n do
+				local e = entries[i]
+				if (not removed) and e and e.uid == uid then
+					removed = e -- skip copy
+				else
+					out[#out+1] = e
+				end
+			end
+			return removed and { v = 3, entries = out } or store, removed
+		end
+
+		local function removeByCodeImmutable(store, code)
+			local entries = (store and store.entries) or {}
+			local n = #entries
+			if n == 0 then return store, nil end
+			local out, removed = table.create(n), nil
+			for i = 1, n do
+				local e = entries[i]
+				if (not removed) and e and e.code == code then
+					removed = e
+				else
+					out[#out+1] = e
+				end
+			end
+			return removed and { v = 3, entries = out } or store, removed
+		end
+
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+		return ctx.DeckStore.transact(runId, function(store)
+			LOG.debug("[store] size=%s", tostring(storeSize(store)))
+
+			local target, reason = pickTarget(store)
+			if not target then
+				LOG.info("[result] no-target (pickReason=%s)", tostring(reason))
+				return store, { ok = true, changed = 0, meta = "no-target", pickReason = reason }
+			end
+
+			LOG.debug("[target] via=%s {uid=%s code=%s kind=%s month=%s idx=%s}",
+				tostring(reason), tostring(target.uid), tostring(target.code),
+				tostring(target.kind), tostring(target.month), tostring(target.idx))
+
+			-- remove（UID優先、なければcode）
+			local nextStore, removed
+			if target.uid and target.uid ~= "" then
+				nextStore, removed = removeByUidImmutable(store, target.uid)
+			else
+				nextStore, removed = removeByCodeImmutable(store, target.code)
+			end
+
+			if not removed then
+				LOG.warn("[remove] not-found (no-op) uid=%s code=%s", tostring(target.uid), tostring(target.code))
+				return store, { ok = true, changed = 0, meta = "not-found", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			local dt = (os.clock() - t0) * 1000
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms",
+				tostring(removed.uid), tostring(removed.code), tostring(reason), dt)
+			return nextStore, {
+				ok         = true,
+				changed    = 1,
+				targetUid  = removed.uid,
+				targetCode = removed.code,
+				pickReason = reason,
+				tag        = tagMark,
+			}
+		end)
+	end
+
+	-- 登録（本体＋canApply）
+	Effects.register("kito.hitsuji_prune", handler)
+	Effects.register("kito_hitsuji",      handler) -- legacy
+	Effects.registerCanApply("kito.hitsuji_prune", canApply)
+	Effects.registerCanApply("kito_hitsuji",      canApply)
+end
 ```
 
 ### src/shared/Deck/Effects/kito/I_Sakeify.lua
@@ -16276,6 +16521,13 @@ ShopDefs.POOLS = {
 			descJP = "対象からランダムに最大2枚をカス札に変換（既カス／既タグは自動スキップ）。",
 			descEN = "Convert up to two targets to Chaff (skips already-chaff/tagged).",
 		},
+		-- 未：圧縮（山札から1枚削除）
+		{
+			id = "kito_hitsuji", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
+			effect = "kito.hitsuji_prune", -- レガシー別名: "kito_hitsuji" も可
+			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
+			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
+		},
 		-- ========= 追加ここまで =========
 	},
 
@@ -16511,14 +16763,18 @@ return ShopFormat
 ### src/shared/ShopService.lua
 ```lua
 -- ServerScriptService/ShopService.lua
--- v0.9.2 → v0.9.2c 屋台サービス（SIMPLE+NONCE + Talisman payload）
--- 変更点:
+-- v0.9.2e 屋台サービス（SIMPLE+NONCE + Talisman payload）
+-- 変更点（e）:
+--  - ★ ShopEffects.apply へ必ず ctx.player を付与（UI系効果の必須引数漏れを修正） ※d継承
+--  - ★ KITO の UI 経路を拡張：酉/巳/卯/午/戌/亥 に加えて **未** も KitoPick に統一
+--  - ★ toCanonicalEffectId を拡張（kito_* / Module名 / 旧名 を正規 effectId へ統一変換）※未追加
+--
+-- 既存（c/d）からの仕様は従来通り。
 --  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
 --  - 在庫は満杯でも必ず強制再生成
 --  - SaveService のスナップ対応は従来どおり（存在しなくても続行）
 --  - ShopEffects ローダー復活済み
 --  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
---  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 --  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（state.run.talisman をそのまま搭載）
 --               ※補完/推測は一切しない（真実は TalismanService/StateHub が管理）
 --  - ★ KITO（酉/巳 など）を UI 経路に統一（正規effectIdへ正規化して KitoPickCore へ移譲）
@@ -16614,13 +16870,13 @@ end
 
 -- 置換後（★ run.id を唯一源泉に）
 local function ensureRunId(state:any): string
-  state.run = state.run or {}
-  local id = state.run.id
-  if type(id) ~= "string" or id == "" then
-    id = Http:GenerateGUID(false)
-    state.run.id = id
-  end
-  return id
+	state.run = state.run or {}
+	local id = state.run.id
+	if type(id) ~= "string" or id == "" then
+		id = Http:GenerateGUID(false)
+		state.run.id = id
+	end
+	return id
 end
 
 --========================
@@ -16628,8 +16884,23 @@ end
 --========================
 local function toCanonicalEffectId(eid: string?): string
 	if type(eid) ~= "string" or eid == "" then return "" end
+
+	-- 既存
 	if eid == "kito_tori" or eid == "Tori_Brighten" then return "kito.tori_brighten" end
 	if eid == "kito_mi"   or eid == "Mi_Venom"      then return "kito.mi_venom"      end
+
+	-- ★ 追加（卯/午/戌/亥）
+	if eid == "kito_usagi" or eid == "Usagi_Ribbonize" then return "kito.usagi_ribbon"   end
+	if eid == "kito_uma"   or eid == "Uma_Seedize"     then return "kito.uma_seed"       end
+	-- Inu は別名2種を同一に扱う
+	if eid == "kito_inu"   or eid == "Inu_Chaff2" or eid == "kito.inu_chaff2" then
+		return "kito.inu_two_chaff"
+	end
+	if eid == "kito_i"     or eid == "I_Sakeify"       then return "kito.i_sake"         end
+
+	-- ★ 追加（未 / Hitsuji）
+	if eid == "kito_hitsuji" or eid == "Hitsuji_Prune" then return "kito.hitsuji_prune" end
+	-- すでに canonical ならそのまま返る
 	return eid
 end
 
@@ -16637,7 +16908,31 @@ local function kitoLabel(eid: string?): string
 	local id = toCanonicalEffectId(eid)
 	if id == "kito.tori_brighten" then return "酉" end
 	if id == "kito.mi_venom"      then return "巳" end
+	if id == "kito.usagi_ribbon"  then return "卯" end
+	if id == "kito.uma_seed"      then return "午" end
+	if id == "kito.inu_two_chaff" then return "戌" end
+	if id == "kito.i_sake"        then return "亥" end
+	-- ★ 追加（未）
+	if id == "kito.hitsuji_prune" then return "未" end
 	return "KITO"
+end
+
+-- ★ どの Kito が「選択 UI（KitoPick）」必須か
+local SELECT_KITO: {[string]: boolean} = {
+	["kito.tori_brighten"] = true,
+	["kito.mi_venom"]      = true,
+	["kito.usagi_ribbon"]  = true,
+	["kito.uma_seed"]      = true,
+	["kito.inu_two_chaff"] = true,
+	["kito.i_sake"]        = true,
+	-- ★ 追加（未）
+	["kito.hitsuji_prune"] = true,
+	-- 別名も保険で許容
+	["kito.inu_chaff2"]    = true,
+}
+
+local function requiresKitoPick(canonical: string): boolean
+	return SELECT_KITO[canonical] == true
 end
 
 --========================
@@ -16767,49 +17062,6 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 
 	s.phase = "shop"
 	s.shop = s.shop or {}
-	s.shop.rng = s.shop.rng or Random.new(os.clock()*1000000)
-
-	-- 初回オープン時：在庫が無ければ MAX_STOCK で生成
-	if not s.shop.stock then
-		s.shop.stock = generateStock(s.shop.rng, MAX_STOCK)
-	end
-
-	local reward = (opts and opts.reward) or 0
-	local notice = (opts and opts.notice) or ""
-	local target = (opts and opts.target) or 0
-	local money  = tonumber(s.mon or 0) or 0
-
-	-- ★ RunDeckUtil が読めない環境でも nil 許容
-	local deckView = nil
-	if RunDeckUtil and typeof(RunDeckUtil.snapshot) == "function" then
-		deckView = RunDeckUtil.snapshot(s)
-	end
-
-	-- ★ talisman は state.run.talisman を“そのまま”搭載（補完や推測はしない）
-	local tali = readRunTalisman(s)
-
-	-- ===== LOG =====
-	LOG.info(
-		"[OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s talisman#=%s",
-		tostring(plr and plr.Name or "?"),
-		tostring(s.season), money, REROLL_COST,
-		matsuriJSON(s), stockBrief(s.shop.stock),
-		(notice ~= "" and notice) or "",
-		tostring(type(tali)=="table" and #(tali.slots or {}) or 0)
-	)
-
-	-- 入場スナップ
-	snapShop(plr, s)
-
-	ShopOpen:FireClient(plr, {
-		season       = s.season,
-		target       = target,
-		seasonSum    = s.seasonSum or 0,
-		rewardMon    = reward,
-		totalMon     = money,
-		mon          = money,              -- 互換（クライアントは mon/totalMon のどちらでも読める）
-		stock        = s.shop.stock,
-		items        = s.shop.stock,       -- 互換
 ... (truncated)
 ```
 

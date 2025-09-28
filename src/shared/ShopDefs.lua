@@ -80,6 +80,13 @@ ShopDefs.POOLS = {
 			descJP = "対象からランダムに最大2枚をカス札に変換（既カス／既タグは自動スキップ）。",
 			descEN = "Convert up to two targets to Chaff (skips already-chaff/tagged).",
 		},
+		-- 未：圧縮（山札から1枚削除）
+		{
+			id = "kito_hitsuji", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
+			effect = "kito.hitsuji_prune", -- レガシー別名: "kito_hitsuji" も可
+			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
+			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
+		},
 		-- ========= 追加ここまで =========
 	},
 

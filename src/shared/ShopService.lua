@@ -1,17 +1,16 @@
 -- ServerScriptService/ShopService.lua
--- v0.9.2d 屋台サービス（SIMPLE+NONCE + Talisman payload）
--- 変更点（d）:
---  - ★ ShopEffects.apply へ必ず ctx.player を付与（UI系効果の必須引数漏れを修正）
---  - ★ KITO の UI 経路を拡張：酉/巳 に加えて 卯/午/戌/亥 も KitoPick に統一
---  - ★ toCanonicalEffectId を拡張（kito_* / Module名 を正規 effectId へ統一変換）
+-- v0.9.2e 屋台サービス（SIMPLE+NONCE + Talisman payload）
+-- 変更点（e）:
+--  - ★ ShopEffects.apply へ必ず ctx.player を付与（UI系効果の必須引数漏れを修正） ※d継承
+--  - ★ KITO の UI 経路を拡張：酉/巳/卯/午/戌/亥 に加えて **未** も KitoPick に統一
+--  - ★ toCanonicalEffectId を拡張（kito_* / Module名 / 旧名 を正規 effectId へ統一変換）※未追加
 --
--- 既存（c）からの変更点は上記のみ。その他の仕様は従来通り。
+-- 既存（c/d）からの仕様は従来通り。
 --  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
 --  - 在庫は満杯でも必ず強制再生成
 --  - SaveService のスナップ対応は従来どおり（存在しなくても続行）
 --  - ShopEffects ローダー復活済み
 --  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
---  - ★ P1-3: Logger 導入（print/warn を LOG.* に置換）
 --  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（state.run.talisman をそのまま搭載）
 --               ※補完/推測は一切しない（真実は TalismanService/StateHub が管理）
 --  - ★ KITO（酉/巳 など）を UI 経路に統一（正規effectIdへ正規化して KitoPickCore へ移譲）
@@ -135,6 +134,9 @@ local function toCanonicalEffectId(eid: string?): string
 	end
 	if eid == "kito_i"     or eid == "I_Sakeify"       then return "kito.i_sake"         end
 
+	-- ★ 追加（未 / Hitsuji）
+	if eid == "kito_hitsuji" or eid == "Hitsuji_Prune" then return "kito.hitsuji_prune" end
+	-- すでに canonical ならそのまま返る
 	return eid
 end
 
@@ -146,6 +148,8 @@ local function kitoLabel(eid: string?): string
 	if id == "kito.uma_seed"      then return "午" end
 	if id == "kito.inu_two_chaff" then return "戌" end
 	if id == "kito.i_sake"        then return "亥" end
+	-- ★ 追加（未）
+	if id == "kito.hitsuji_prune" then return "未" end
 	return "KITO"
 end
 
@@ -157,6 +161,8 @@ local SELECT_KITO: {[string]: boolean} = {
 	["kito.uma_seed"]      = true,
 	["kito.inu_two_chaff"] = true,
 	["kito.i_sake"]        = true,
+	-- ★ 追加（未）
+	["kito.hitsuji_prune"] = true,
 	-- 別名も保険で許容
 	["kito.inu_chaff2"]    = true,
 }

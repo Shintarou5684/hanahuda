@@ -62,23 +62,62 @@ end
 
 --==================================================
 -- “名前だけ”フェイス表示（干支ID→短名）
+--  - id/effect の両方を参照
+--  - kito.<name> / kito_<name> / 旧モジュール名(Usagi_Ribbonize 等) すべて対応
 --==================================================
-local ZODIAC_NAME: {[string]: string} = {
-	kito_ko="子", kito_ushi="丑", kito_tora="寅", kito_u="卯", kito_tatsu="辰", kito_mi="巳",
-	kito_uma="午", kito_hitsuji="未", kito_saru="申", kito_tori="酉", kito_inu="戌", kito_i="亥",
+
+-- 基底トークン -> 漢字
+local ZKANJI: {[string]: string} = {
+	ko="子", ushi="丑", tora="寅", u="卯", usagi="卯", tatsu="辰", mi="巳",
+	uma="午", hitsuji="未", saru="申", tori="酉", inu="戌", i="亥",
 }
+
+-- 旧モジュール名（kito.* 以外）→ 漢字
+local LEGACY_MODULE2KANJI: {[string]: string} = {
+	["tori_brighten"]   = "酉",
+	["mi_venom"]        = "巳",
+	["usagi_ribbonize"] = "卯",
+	["uma_seedize"]     = "午",
+	["inu_chaff2"]      = "戌",
+	["i_sakeify"]       = "亥",
+	["hitsuji_prune"]   = "未",
+}
+
+local function pickZodiacKanjiFromId(s: string?): string?
+	if type(s) ~= "string" then return nil end
+	s = string.lower(s)
+
+	-- 1) 旧モジュール名にそのまま一致
+	do
+		local direct = LEGACY_MODULE2KANJI[s]
+		if direct then return direct end
+	end
+
+	-- 2) "kito.<name>..." / "kito_<name>..." の <name> を抽出（最初の区切りまで）
+	--    例: kito.tori_brighten → tori / kito_inu_two_chaff → inu
+	local name = s:match("^kito[._-]([a-z]+)")
+	if name then
+		if name == "u" then name = "usagi" end -- 旧: kito_u 対応
+		return ZKANJI[name]
+	end
+
+	return nil
+end
 
 function ShopFormat.faceName(it: any): string
 	if not it then return "???" end
 	-- 1) 明示の短名を優先
-	if it.displayName and tostring(it.displayName) ~= "" then return tostring(it.displayName) end
-	if it.short and tostring(it.short) ~= "" then return tostring(it.short) end
-	if it.shortName and tostring(it.shortName) ~= "" then return tostring(it.shortName) end
-	-- 2) 干支IDは固定辞書
-	if it.id and ZODIAC_NAME[it.id] then return ZODIAC_NAME[it.id] end
+	for _, k in ipairs({ "displayName", "short", "shortName" }) do
+		local v = it[k]
+		if v and tostring(v) ~= "" then return tostring(v) end
+	end
+	-- 2) effect → id の順で干支判定（ドット/アンダーバー/旧名すべてOK）
+	local z = pickZodiacKanjiFromId(it.effect) or pickZodiacKanjiFromId(it.id)
+	if z then return z end
 	-- 3) 最後に name / id をそのまま
 	return tostring(it.name or it.id or "???")
 end
+
 
 --==================================================
 -- デッキスナップショット → リスト文字列
