@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-28 20:43:20
+- Generated: 2025-09-28 22:19:08
 - Max lines/file: 300
 
 ## Folder Tree
@@ -816,7 +816,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-28 20:43:20
+- Generated: 2025-09-28 22:19:08
 - Max lines/file: 300
 
 ## Folder Tree
@@ -7592,7 +7592,23 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
-		-- ★ 0.9.6.5（Deck Reforge / 外部向け）
+	-- ★ 0.9.6.6（外部向け）
+	{
+		ver  = "v0.9.6.6",
+		date = "2025-09-28",
+		changes = {
+			{ ja = "ギブアップボタンを実装。現在のランを安全に終了できます。",
+			  en = "Implemented a Give Up button to safely end the current run." },
+
+			{ ja = "祈祷を拡充：子・未・巳・午・卯・亥・戌を追加（子=最後の祈祷を再発火／未=圧縮：山札から1枚削除／巳=カス化／午=タネ化／卯=短冊化／亥=酒化／戌=2枚カス化）。",
+			  en = "Expanded Kito: added Ko (re-fire last Kito), Hitsuji (prune: remove 1 from deck), Mi (venom: convert to Kasu), Uma (seed: convert to Seed), Usagi (ribbon: convert to Ribbon), I (sake: convert to Sake), and Inu (two-chaff: convert 2 to Kasu)." },
+
+			{ ja = "祈祷に関する不具合をいくつか修正（選択フロー／再発火／メッセージ整合など）。",
+			  en = "Fixed several Kito-related issues (selection flow, re-fire behavior, and messaging consistency)." },
+		}
+	},
+
+	-- ★ 0.9.6.5（Deck Reforge / 外部向け）
 	{
 		ver  = "v0.9.6.5",
 		date = "2025-09-26",
@@ -7611,9 +7627,7 @@ local ENTRIES = {
 		}
 	},
 
-	
 	-- ★ 0.9.6.3（外部向け・簡潔）
-	
 	{
 		ver  = "v0.9.6.3",
 		date = "2025-09-21",
@@ -9591,10 +9605,12 @@ return M
 ### src/server/ShopEffects/Kito.lua
 ```lua
 -- src/server/ShopEffects/Kito.lua
--- v0.9.10 Kito（祈祷）: UIDファースト / 酉・巳は EffectsRegistry に委譲 / UI分岐を厳格化
---  - 丑/寅：サーバ状態のみ変更（従来通り）
---  - 酉   ：デッキ変更は Deck/Effects（"kito.tori_brighten"）で実施（UIあり）
---  - 巳   ：デッキ変更は Deck/Effects（"kito.mi_venom"）で実施（UIあり）
+-- v0.9.12 Kito（祈祷）
+--  - UIDファースト / 酉・巳は EffectsRegistry に委譲 / UI分岐を厳格化
+--  - 丑/寅：サーバ状態のみ変更（従来通り）＋ kito_last へ記録
+--  - 酉/巳/（卯/午/戌/亥/未 ブリッジ）: EffectsRegistry に委譲（成功時に kito_last へ記録）
+--  - 子   ：最後に成功した本体KITO（kito_last）を再発火（※ 子自身は記録しない）
+--  - ★ DEPRECATED underscore id（kito_...）を受け取った場合は kito.... に正規化して処理（後方互換）
 -- I/F:
 --   Kito.apply(effectId, state, ctx) -> (ok:boolean, message:string)
 --     state: ランタイム状態テーブル（mon/bonus/kito など）
@@ -9603,8 +9619,10 @@ return M
 --       uids?: {string},        -- UIで選んだ1枚（推奨：1件）
 --       poolUids?: {string},    -- 12枚提示の候補（未選択時の補助）
 --       codes?: {string}, poolCodes?: {string}, -- 後方互換（無ければUIDでOK）
---       preferKind?: "hikari"|"bright",         -- 酉のみ使用
+--       preferKind?: "hikari"|"bright",         -- 酉のみ使用（内部では"hikari"で渡す）
 --       player?: Player         -- UIモード（提示）に必要
+--       -- 内部フラグ:
+--       -- __fromChild?: boolean -- 子からの再発火時に true（記録抑止用）
 --     }
 
 local RS   = game:GetService("ReplicatedStorage")
@@ -9634,6 +9652,7 @@ Kito.ID = {
 	TORA = "kito_tora",        -- 取り札+1
 	TORI = "kito_tori",        -- 1枚を光札に（Effects "kito.tori_brighten"）
 	MI   = "kito_mi",          -- 1枚をカス札に（Effects "kito.mi_venom"）
+	KO   = "kito_ko",          -- 子（最後の本体KITOを再発火）
 }
 
 local DEFAULTS = { CAP_MON = 999999 }
@@ -9690,6 +9709,51 @@ local function resolveRunId(state, ctx)
 end
 
 --========================
+-- kito_last（最後の本体KITO）記録
+--========================
+local function sanitizePayloadForRecord(payload:any)
+	-- 再発火に必要なヒントだけを保持（UID/Code/プレイヤ/Run/RNG等は保存しない）
+	if typeof(payload) ~= "table" then return nil end
+	local out = {}
+	if payload.preferKind ~= nil then out.preferKind = payload.preferKind end
+	return (next(out) ~= nil) and out or nil
+end
+
+local function shouldRecord(ctx:any)
+	-- 子からの再発火では記録しない
+	return not (typeof(ctx) == "table" and ctx.__fromChild == true)
+end
+
+local function recordLastKito(state:any, effectId:string, payload:any?, meta:any?, ctx:any?)
+	if not shouldRecord(ctx) then return end
+	state.run = state.run or {}
+	state.run.kito_last = {
+		v       = 1,
+		id      = tostring(effectId or ""),
+		payload = sanitizePayloadForRecord(payload),
+		meta    = (typeof(meta)=="table") and {
+			changed    = meta.changed,
+			pickReason = meta.pickReason,
+			targetUid  = meta.targetUid,
+			targetCode = meta.targetCode,
+		} or nil,
+		t       = os.time(),
+	}
+end
+
+--========================
+-- DEPRECATED underscore id（kito_...）→ dot（kito....）正規化
+--========================
+local function normalizeDeprecatedId(eid:string?): (string, boolean)
+	if typeof(eid) ~= "string" then return tostring(eid), false end
+	if eid:sub(1,5) == "kito_" then
+		local normalized = "kito." .. eid:sub(6)
+		return normalized, true
+	end
+	return eid, false
+end
+
+--========================
 -- 丑：所持文2倍（ステートのみ）
 --========================
 local function effect_ushi(state, ctx)
@@ -9697,17 +9761,25 @@ local function effect_ushi(state, ctx)
 	local before = tonumber(state.mon or 0) or 0
 	local after  = math.min(before * 2, cap)
 	state.mon    = after
+
+	-- 記録（内蔵系はそのままIDを保存：underscore形式で統一）
+	recordLastKito(state, Kito.ID.USHI, nil, { changed = 1 }, ctx)
+
 	return true, msg(("丑：所持文2倍（%d → %d, 上限=%d）"):format(before, after, cap))
 end
 
 --========================
 -- 寅：取り札の得点+1（恒常）
 --========================
-local function effect_tora(state, _ctx)
+local function effect_tora(state, ctx)
 	local b = ensureBonus(state)
 	b.takenPointPlus = (b.takenPointPlus or 0) + 1
 	local k = ensureKito(state)
 	k.tora = (tonumber(k.tora) or 0) + 1
+
+	-- 記録（内蔵系はそのままIDを保存：underscore形式で統一）
+	recordLastKito(state, Kito.ID.TORA, nil, { changed = 1 }, ctx)
+
 	return true, msg(("寅：取り札の得点+1（累計+%d / Lv=%d）"):format(b.takenPointPlus, k.tora))
 end
 
@@ -9756,6 +9828,9 @@ local function apply_via_effects(effectModuleId:string, labelJP:string, state, c
 		return false, (labelJP .. "：失敗（" .. tostring(reason) .. "）")
 	end
 
+	-- ★ 成功：kito_last に記録（子由来なら記録しない）
+	recordLastKito(state, effectModuleId, payload, res, ctx)
+
 	local changed = tonumber(res.changed or 0) or 0
 	if changed > 0 then
 		return true, (labelJP .. "：1枚を変換（成功）")
@@ -9781,62 +9856,55 @@ local function effect_mi(state, ctx)
 end
 
 --========================
--- ディスパッチ（従来4種）
+-- 子：最後の本体KITOを再発火（自分自身は記録しない）
 --========================
-local DISPATCH = {
-	[Kito.ID.USHI] = effect_ushi,
-	[Kito.ID.TORA] = effect_tora,
-	[Kito.ID.TORI] = effect_tori, -- 酉：EffectsRegistry を叩く（UIモード時はKitoPickへ）
-	[Kito.ID.MI]   = effect_mi,   -- 巳：EffectsRegistry を叩く（UIモード時はKitoPickへ）
-}
-
---=== bridge for new KITO effects (卯/午/戌/亥) ==============================
--- ShopDefs.effect の揺れ（"kito_xxx" と "kito.xxx"）を吸収し、EffectsRegistry へ委譲
-local KITO_BRIDGE_MAP = {
-	-- 卯：短冊化
-	["kito_usagi"]          = { label = "卯", moduleId = "kito.usagi_ribbon" },
-	["kito.usagi_ribbon"]   = { label = "卯", moduleId = "kito.usagi_ribbon" },
-
-	-- 午：タネ化
-	["kito_uma"]            = { label = "午", moduleId = "kito.uma_seed" },
-	["kito.uma_seed"]       = { label = "午", moduleId = "kito.uma_seed" },
-
-	-- 戌：2枚カス化（別名にも対応）
-	["kito_inu"]            = { label = "戌", moduleId = "kito.inu_chaff2" },
-	["kito.inu_chaff2"]     = { label = "戌", moduleId = "kito.inu_chaff2" },
-	["kito.inu_two_chaff"]  = { label = "戌", moduleId = "kito.inu_chaff2" },
-
-	-- 亥：酒化（9月seed=盃）
-	["kito_i"]              = { label = "亥", moduleId = "kito.i_sake" },
-	["kito.i_sake"]         = { label = "亥", moduleId = "kito.i_sake" },
-}
-
---========================
--- エントリポイント
---========================
-function Kito.apply(effectId, state, ctx)
-	if typeof(state) ~= "table" then
-		return false, "state が無効です"
+local function effect_ko(state, ctx)
+	state.run = state.run or {}
+	local last = state.run.kito_last
+	if typeof(last) ~= "table" or typeof(last.id) ~= "string" or last.id == "" then
+		return false, "子：前回の祈祷がありません"
 	end
-	local fn = DISPATCH[effectId]
-	if not fn then
-		-- ★ 新祈祷（卯/午/戌/亥）はブリッジで EffectsRegistry に委譲
-		local key = tostring(effectId or "")
-		local br = KITO_BRIDGE_MAP[key]
-		if br then
-			return apply_via_effects(br.moduleId, br.label, state, ctx, nil)
-		end
-		-- 将来の拡張： "kito." で始まるIDはそのまま EffectsRegistry に渡す（前方互換）
-		if typeof(effectId) == "string" and effectId:sub(1,5) == "kito." then
-			return apply_via_effects(effectId, "祈祷", state, ctx, nil)
-		end
-		return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
+
+	-- 子自身が記録されていた場合の保護（通常ありえないが旧データ救済）
+	if last.id == Kito.ID.KO or last.id == "kito.ko" then
+		return false, "子：前回が子のため再発火不可"
 	end
-	local ok, message = fn(state, ctx)
-	return ok == true, tostring(message or "")
+
+	-- 子由来フラグを立てて“記録抑止”
+	ctx = ctx or {}
+	ctx.__fromChild = true
+
+	-- 保存されていた最小ヒント（現状 preferKind のみ）を反映
+	if typeof(last.payload) == "table" and ctx.preferKind == nil then
+		ctx.preferKind = last.payload.preferKind
+	end
+
+	local id = last.id
+
+	-- 1) 内蔵系（丑/寅/酉/巳）を識別：underscore と dot の両方を救済
+	if id == Kito.ID.TORA or id == "kito.tora" then
+		return effect_tora(state, ctx)
+	elseif id == Kito.ID.USHI or id == "kito.ushi" then
+		return effect_ushi(state, ctx)
+	elseif id == Kito.ID.MI   or id == "kito.mi" then
+		return effect_mi(state, ctx)
+	elseif id == Kito.ID.TORI or id == "kito.tori" then
+		return effect_tori(state, ctx)
+	end
+
+	-- 2) Effects系（"kito." から始まるモジュールID）はそのまま再発火
+	if id:sub(1,5) == "kito." then
+		-- label は "子" でOK（UIトースト用途）
+		return apply_via_effects(id, "子", state, ctx, ctx.preferKind)
+	end
+
+	-- 未知ID
+	return false, ("子：未知の前回ID: %s"):format(tostring(id))
 end
 
-return Kito
+--========================
+-- ディスパッチ（従来4種 + 子）
+... (truncated)
 ```
 
 ### src/server/ShopEffects/Omamori.lua
@@ -16470,6 +16538,13 @@ ShopDefs.WEIGHTS = {
 ShopDefs.POOLS = {
 	-- 祈祷
 	kito = {
+		-- ★ 追加：子（直前の祈祷を再発火）
+		{
+			id = "kito_ko", name = "子：前回の祈祷を再発火", category = "kito", price = 4, effect = "kito_ko",
+			descJP = "最後に成功した祈祷をもう一度発動（子自身の使用では記録は更新されません）。",
+			descEN = "Replay the last successful KITO once more (using Child itself doesn’t update the last).",
+		},
+
 		{
 			id = "kito_ushi", name = "丑：所持文を2倍", category = "kito", price = 5, effect = "kito_ushi",
 			descJP = "所持文を即時2倍（上限あり）。",
@@ -16709,23 +16784,62 @@ end
 
 --==================================================
 -- “名前だけ”フェイス表示（干支ID→短名）
+--  - id/effect の両方を参照
+--  - kito.<name> / kito_<name> / 旧モジュール名(Usagi_Ribbonize 等) すべて対応
 --==================================================
-local ZODIAC_NAME: {[string]: string} = {
-	kito_ko="子", kito_ushi="丑", kito_tora="寅", kito_u="卯", kito_tatsu="辰", kito_mi="巳",
-	kito_uma="午", kito_hitsuji="未", kito_saru="申", kito_tori="酉", kito_inu="戌", kito_i="亥",
+
+-- 基底トークン -> 漢字
+local ZKANJI: {[string]: string} = {
+	ko="子", ushi="丑", tora="寅", u="卯", usagi="卯", tatsu="辰", mi="巳",
+	uma="午", hitsuji="未", saru="申", tori="酉", inu="戌", i="亥",
 }
+
+-- 旧モジュール名（kito.* 以外）→ 漢字
+local LEGACY_MODULE2KANJI: {[string]: string} = {
+	["tori_brighten"]   = "酉",
+	["mi_venom"]        = "巳",
+	["usagi_ribbonize"] = "卯",
+	["uma_seedize"]     = "午",
+	["inu_chaff2"]      = "戌",
+	["i_sakeify"]       = "亥",
+	["hitsuji_prune"]   = "未",
+}
+
+local function pickZodiacKanjiFromId(s: string?): string?
+	if type(s) ~= "string" then return nil end
+	s = string.lower(s)
+
+	-- 1) 旧モジュール名にそのまま一致
+	do
+		local direct = LEGACY_MODULE2KANJI[s]
+		if direct then return direct end
+	end
+
+	-- 2) "kito.<name>..." / "kito_<name>..." の <name> を抽出（最初の区切りまで）
+	--    例: kito.tori_brighten → tori / kito_inu_two_chaff → inu
+	local name = s:match("^kito[._-]([a-z]+)")
+	if name then
+		if name == "u" then name = "usagi" end -- 旧: kito_u 対応
+		return ZKANJI[name]
+	end
+
+	return nil
+end
 
 function ShopFormat.faceName(it: any): string
 	if not it then return "???" end
 	-- 1) 明示の短名を優先
-	if it.displayName and tostring(it.displayName) ~= "" then return tostring(it.displayName) end
-	if it.short and tostring(it.short) ~= "" then return tostring(it.short) end
-	if it.shortName and tostring(it.shortName) ~= "" then return tostring(it.shortName) end
-	-- 2) 干支IDは固定辞書
-	if it.id and ZODIAC_NAME[it.id] then return ZODIAC_NAME[it.id] end
+	for _, k in ipairs({ "displayName", "short", "shortName" }) do
+		local v = it[k]
+		if v and tostring(v) ~= "" then return tostring(v) end
+	end
+	-- 2) effect → id の順で干支判定（ドット/アンダーバー/旧名すべてOK）
+	local z = pickZodiacKanjiFromId(it.effect) or pickZodiacKanjiFromId(it.id)
+	if z then return z end
 	-- 3) 最後に name / id をそのまま
 	return tostring(it.name or it.id or "???")
 end
+
 
 --==================================================
 -- デッキスナップショット → リスト文字列
