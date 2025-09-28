@@ -189,7 +189,7 @@ local function effect_mi(state, ctx)
 end
 
 --========================
--- ディスパッチ
+-- ディスパッチ（従来4種）
 --========================
 local DISPATCH = {
 	[Kito.ID.USHI] = effect_ushi,
@@ -198,12 +198,46 @@ local DISPATCH = {
 	[Kito.ID.MI]   = effect_mi,   -- 巳：EffectsRegistry を叩く（UIモード時はKitoPickへ）
 }
 
+--=== bridge for new KITO effects (卯/午/戌/亥) ==============================
+-- ShopDefs.effect の揺れ（"kito_xxx" と "kito.xxx"）を吸収し、EffectsRegistry へ委譲
+local KITO_BRIDGE_MAP = {
+	-- 卯：短冊化
+	["kito_usagi"]          = { label = "卯", moduleId = "kito.usagi_ribbon" },
+	["kito.usagi_ribbon"]   = { label = "卯", moduleId = "kito.usagi_ribbon" },
+
+	-- 午：タネ化
+	["kito_uma"]            = { label = "午", moduleId = "kito.uma_seed" },
+	["kito.uma_seed"]       = { label = "午", moduleId = "kito.uma_seed" },
+
+	-- 戌：2枚カス化（別名にも対応）
+	["kito_inu"]            = { label = "戌", moduleId = "kito.inu_chaff2" },
+	["kito.inu_chaff2"]     = { label = "戌", moduleId = "kito.inu_chaff2" },
+	["kito.inu_two_chaff"]  = { label = "戌", moduleId = "kito.inu_chaff2" },
+
+	-- 亥：酒化（9月seed=盃）
+	["kito_i"]              = { label = "亥", moduleId = "kito.i_sake" },
+	["kito.i_sake"]         = { label = "亥", moduleId = "kito.i_sake" },
+}
+
+--========================
+-- エントリポイント
+--========================
 function Kito.apply(effectId, state, ctx)
 	if typeof(state) ~= "table" then
 		return false, "state が無効です"
 	end
 	local fn = DISPATCH[effectId]
 	if not fn then
+		-- ★ 新祈祷（卯/午/戌/亥）はブリッジで EffectsRegistry に委譲
+		local key = tostring(effectId or "")
+		local br = KITO_BRIDGE_MAP[key]
+		if br then
+			return apply_via_effects(br.moduleId, br.label, state, ctx, nil)
+		end
+		-- 将来の拡張： "kito." で始まるIDはそのまま EffectsRegistry に渡す（前方互換）
+		if typeof(effectId) == "string" and effectId:sub(1,5) == "kito." then
+			return apply_via_effects(effectId, "祈祷", state, ctx, nil)
+		end
 		return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
 	end
 	local ok, message = fn(state, ctx)

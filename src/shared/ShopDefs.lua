@@ -50,6 +50,37 @@ ShopDefs.POOLS = {
 			descJP = "ラン構成の対象札をカス札に変換（適用時に少額の文を即時加算）。",
 			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
 		},
+
+		-- ========= ここから追加（ガイド v1.1 準拠）=========
+		-- 卯：短冊化
+		{
+			id = "kito_usagi", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
+			effect = "kito.usagi_ribbon",
+			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
+			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
+		},
+		-- 亥：酒化（9月seed=盃へ）
+		{
+			id = "kito_i", name = "亥：1枚を酒に変換", category = "kito", price = 5,
+			effect = "kito.i_sake",
+			descJP = "対象札を9月の盃（タネ）に変換します。",
+			descEN = "Convert target to September's Seed (Sake).",
+		},
+		-- 午：タネ化
+		{
+			id = "kito_uma", name = "午：1枚をタネに変換", category = "kito", price = 4,
+			effect = "kito.uma_seed",
+			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
+			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
+		},
+		-- 戌：2枚カス化
+		{
+			id = "kito_inu", name = "戌：2枚をカス札に変換", category = "kito", price = 3,
+			effect = "kito.inu_two_chaff",
+			descJP = "対象からランダムに最大2枚をカス札に変換（既カス／既タグは自動スキップ）。",
+			descEN = "Convert up to two targets to Chaff (skips already-chaff/tagged).",
+		},
+		-- ========= 追加ここまで =========
 	},
 
 	-- 祭事

@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-27 12:03:00
+- Generated: 2025-09-28 10:29:44
 - Max lines/file: 300
 
 ## Folder Tree
@@ -139,8 +139,12 @@ hanahuda
 │       ├── Deck
 │       │   ├── Effects
 │       │   │   ├── kito
+│       │   │   │   ├── I_Sakeify.lua
+│       │   │   │   ├── Inu_Chaff2.lua
 │       │   │   │   ├── Mi_Venom.lua
-│       │   │   │   └── Tori_Brighten.lua
+│       │   │   │   ├── Tori_Brighten.lua
+│       │   │   │   ├── Uma_Seedize.lua
+│       │   │   │   └── Usagi_Ribbonize.lua
 │       │   │   ├── omamori
 │       │   │   └── spectral
 │       │   ├── CardEngine.lua
@@ -811,7 +815,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-27 12:03:00
+- Generated: 2025-09-28 10:29:44
 - Max lines/file: 300
 
 ## Folder Tree
@@ -949,8 +953,12 @@ hanahuda
 │       ├── Deck
 │       │   ├── Effects
 │       │   │   ├── kito
+│       │   │   │   ├── I_Sakeify.lua
+│       │   │   │   ├── Inu_Chaff2.lua
 │       │   │   │   ├── Mi_Venom.lua
-│       │   │   │   └── Tori_Brighten.lua
+│       │   │   │   ├── Tori_Brighten.lua
+│       │   │   │   ├── Uma_Seedize.lua
+│       │   │   │   └── Usagi_Ribbonize.lua
 │       │   │   ├── omamori
 │       │   │   └── spectral
 │       │   ├── CardEngine.lua
@@ -1104,10 +1112,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 - **基礎採点**：役→文 / 札→点、総スコア = 文 × 点 を実装。
 - **祭事テーブル**と**役→祭事マッピング**を追加。
 - `CardEngine`：**48枚デッキ**定義と**スナップショット**機能。
-- `ShopEffects v1`：安全な **pcall require** と委譲ラッパー。
-
----
-
 ... (truncated)
 ```
 
@@ -8568,11 +8572,7 @@ function Core.startFor(player: Player, runCtx:any, effectId: string, targetKind:
 ### src/server/KitoPickServer.server.lua
 ```lua
 -- ServerScriptService/KitoPickServer.lua
--- v0.9.13 KITO Pick Server (server canApply + safe bankDelta→bank + robust reopen)
--- 変更:
---  - bankDelta は bank に適用（StateHub.applyBankDelta / addBank を最優先）
---  - フォールバックも bank を優先し、mon へは落とさない
---  - ログ強化
+-- v0.9.15 KITO Pick Server (server canApply + safe monDelta→mon + robust reopen + notice(+N文) + msg/bankDelta normalize)
 
 local RS  = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
@@ -8652,7 +8652,7 @@ local function reopenShopSnapshot(plr: Player, opts:any?)
 	end
 	local state    = StateHub.get(plr) or {}
 	local notice   = opts and opts.notice or "変換が完了しました"
-	local preserve = true
+	local preserve = (opts and opts.preserve) ~= false
 	local tried = {}
 	local function tryCall(desc, f)
 		local t0 = os.clock()
@@ -8681,26 +8681,24 @@ local function reopenShopSnapshot(plr: Player, opts:any?)
 end
 
 --─────────────────────────────────────────────────────────────
--- ★ bankDelta を安全に適用（bank 最優先）
---   1) StateHub.applyBankDelta / addBank を優先
---   2) 無ければ state.bank を直接加算（フォールバック）
+-- ★ monDelta を安全に適用（所持文）
+--   1) StateHub.applyMonDelta / addMon があれば優先
+--   2) 無ければ state.mon を直接加算（フォールバック）
 --─────────────────────────────────────────────────────────────
-local function applyBankDelta(plr: Player, delta:number?): (boolean, string?)
+local function applyMonDelta(plr: Player, delta:number?): (boolean, string?)
 	if type(delta) ~= "number" or delta == 0 then return false, "no-delta" end
 
-	-- 1) 既存API
-	for _, fnName in ipairs({ "applyBankDelta", "addBank" }) do
+	for _, fnName in ipairs({ "applyMonDelta", "addMon" }) do
 		if type(StateHub[fnName]) == "function" then
 			local ok, err = pcall(function() StateHub[fnName](plr, delta) end)
 			if ok then return true, nil end
-			LOG.warn("[bankDelta] %s failed: %s", fnName, tostring(err))
+			LOG.warn("[monDelta] %s failed: %s", fnName, tostring(err))
 		end
 	end
 
-	-- 2) フォールバック: state.bank に直接加算
 	local ok, err = pcall(function()
 		local s = StateHub.get(plr) or {}
-		s.bank = (type(s.bank) == "number" and s.bank or 0) + delta
+		s.mon = (type(s.mon) == "number" and s.mon or 0) + delta
 	end)
 	if not ok then
 		return false, tostring(err)
@@ -8824,29 +8822,41 @@ local function onDecide(plr: Player, payload:any)
 		return
 	end
 
-	-- 9) 正規化
-	local ok      = (type(res) == "table") and (res.ok ~= false) or (res ~= nil)
-	local changed = (type(res) == "table") and (res.changed ~= 0 and res.changed ~= false) or true
-	local message = (type(res) == "table") and (res.message or res.meta or res.reason) or nil
-	local bankDelta = (type(res) == "table" and type(res.meta) == "table") and res.meta.bankDelta or nil
+	-- 9) 正規化（messageは文字列のみ採用／bankDeltaは数値化）
+	local ok       = (type(res) == "table") and (res.ok ~= false) or (res ~= nil)
+	local changed  = (type(res) == "table") and (res.changed ~= 0 and res.changed ~= false) or true
+	local msgStr   = ""
+	if type(res) == "table" then
+		if type(res.message) == "string" then
+			msgStr = res.message
+		elseif type(res.reason) == "string" then
+			msgStr = res.reason
+		end
+	end
+	local bankDeltaRaw = (type(res) == "table" and type(res.meta) == "table") and res.meta.bankDelta or nil
+	local bankDelta = tonumber(bankDeltaRaw)
 
 	if not ok then
-		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(message or ""), id=effectId }) end
+		if EvResult then EvResult:FireClient(plr, { ok=false, reason="effect", message=tostring(msgStr or ""), id=effectId }) end
 		return
 	end
 
-	-- 10) bankDelta の適用（bank に適用）
-	if type(bankDelta) == "number" and bankDelta ~= 0 then
-		local bOk, bErr = applyBankDelta(plr, bankDelta)
-		LOG.info("[Decide] bankDelta %+d applied=%s err=%s", bankDelta, tostring(bOk), bOk and "" or tostring(bErr))
+	-- 10) bankDelta（= 所持文の増分）を mon に適用
+	if bankDelta and bankDelta ~= 0 then
+		local mOk, mErr = applyMonDelta(plr, bankDelta)
+		LOG.info("[Decide] monDelta %+d applied=%s err=%s", bankDelta, tostring(mOk), mOk and "" or tostring(mErr))
 	end
 
 	-- 11) 状態同期
 	local okPush, errPush = pcall(function() StateHub.pushState(plr) end)
 	LOG.info("[Decide] pushState ok=%s err=%s", tostring(okPush), okPush and "" or tostring(errPush))
 
-	-- 12) Shop 再表示（在庫維持）
-	reopenShopSnapshot(plr, { notice = (message and tostring(message) ~= "" and tostring(message)) or PRIMARY_NOTICE_DONE })
+	-- 12) Shop 再表示（在庫維持）— notice を（+N 文）付きで
+	local base = (msgStr ~= "" and msgStr) or PRIMARY_NOTICE_DONE
+	local finalNotice = (bankDelta and bankDelta ~= 0)
+		and string.format("%s（+%d 文）", base, bankDelta)
+		or base
+	reopenShopSnapshot(plr, { notice = finalNotice, preserve = true })
 
 	-- 13) 結果通知
 	if EvResult then
@@ -8854,19 +8864,13 @@ local function onDecide(plr: Player, payload:any)
 			ok      = true,
 			changed = changed,
 			uid     = tostring(uid),
-			message = (type(message) == "string") and message or "",
+			message = msgStr,
 			id      = effectId,
 		}
-		if type(bankDelta) == "number" then resOut.bankDelta = bankDelta end
+		if bankDelta then resOut.bankDelta = bankDelta end
 		EvResult:FireClient(plr, resOut)
 	end
 
-	LOG.info("[Decide] OK | u=%s run=%s uid=%s eff=%s msg=%s",
-		plr and plr.Name or "?", tostring(runId), tostring(uid), tostring(effectId), tostring(message or ""))
-end
-
--- Cancel（任意）
-local function onCancel(plr: Player, _payload:any)
 ... (truncated)
 ```
 
@@ -9708,7 +9712,7 @@ local function effect_mi(state, ctx)
 end
 
 --========================
--- ディスパッチ
+-- ディスパッチ（従来4種）
 --========================
 local DISPATCH = {
 	[Kito.ID.USHI] = effect_ushi,
@@ -9717,12 +9721,46 @@ local DISPATCH = {
 	[Kito.ID.MI]   = effect_mi,   -- 巳：EffectsRegistry を叩く（UIモード時はKitoPickへ）
 }
 
+--=== bridge for new KITO effects (卯/午/戌/亥) ==============================
+-- ShopDefs.effect の揺れ（"kito_xxx" と "kito.xxx"）を吸収し、EffectsRegistry へ委譲
+local KITO_BRIDGE_MAP = {
+	-- 卯：短冊化
+	["kito_usagi"]          = { label = "卯", moduleId = "kito.usagi_ribbon" },
+	["kito.usagi_ribbon"]   = { label = "卯", moduleId = "kito.usagi_ribbon" },
+
+	-- 午：タネ化
+	["kito_uma"]            = { label = "午", moduleId = "kito.uma_seed" },
+	["kito.uma_seed"]       = { label = "午", moduleId = "kito.uma_seed" },
+
+	-- 戌：2枚カス化（別名にも対応）
+	["kito_inu"]            = { label = "戌", moduleId = "kito.inu_chaff2" },
+	["kito.inu_chaff2"]     = { label = "戌", moduleId = "kito.inu_chaff2" },
+	["kito.inu_two_chaff"]  = { label = "戌", moduleId = "kito.inu_chaff2" },
+
+	-- 亥：酒化（9月seed=盃）
+	["kito_i"]              = { label = "亥", moduleId = "kito.i_sake" },
+	["kito.i_sake"]         = { label = "亥", moduleId = "kito.i_sake" },
+}
+
+--========================
+-- エントリポイント
+--========================
 function Kito.apply(effectId, state, ctx)
 	if typeof(state) ~= "table" then
 		return false, "state が無効です"
 	end
 	local fn = DISPATCH[effectId]
 	if not fn then
+		-- ★ 新祈祷（卯/午/戌/亥）はブリッジで EffectsRegistry に委譲
+		local key = tostring(effectId or "")
+		local br = KITO_BRIDGE_MAP[key]
+		if br then
+			return apply_via_effects(br.moduleId, br.label, state, ctx, nil)
+		end
+		-- 将来の拡張： "kito." で始まるIDはそのまま EffectsRegistry に渡す（前方互換）
+		if typeof(effectId) == "string" and effectId:sub(1,5) == "kito." then
+			return apply_via_effects(effectId, "祈祷", state, ctx, nil)
+		end
 		return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
 	end
 	local ok, message = fn(state, ctx)
@@ -11442,6 +11480,602 @@ end
 return M
 ```
 
+### src/shared/Deck/Effects/kito/I_Sakeify.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/I_Sakeify.lua
+-- I (KITO): "sakeify" — convert one target card to September's seed (杯) by month+kind
+--  - Effect IDs: "kito.i_sake" (primary), "kito_i" (legacy alias)
+--  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
+--  - Fallback to codes only if no UID is provided
+--  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
+--  - RNG is separated (ctx.rng preferred, otherwise Random.new())
+--  - No month-kind eligibility check needed: we force month=9 then kind=seed
+--  - Idempotent: if already month=9 & kind=seed, or already tagged, no change
+--  - Diagnostic logs (scope: Effects.kito.i_sake)
+return function(Effects)
+	--─────────────────────────────────────────────────────
+	-- Logger (optional)
+	--─────────────────────────────────────────────────────
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(game:GetService("ReplicatedStorage")
+				:WaitForChild("SharedModules")
+				:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.i_sake")
+		else
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+		end
+	end
+
+	--─────────────────────────────────────────────────────
+	-- Shared handler for both effect IDs
+	--─────────────────────────────────────────────────────
+	local function handler(ctx)
+		local payload     = ctx.payload or {}
+		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
+		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+
+		local tagMark     = tostring(payload.tag or "eff:kito_i_sake")
+		local runId       = ctx.runId
+		local rng         = ctx.rng or Random.new()
+
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+		LOG.info("[begin] run=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), tagMark, tostring(uidScalar),
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes),
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+		)
+
+		--─────────────────────────────────────────────────────
+		-- helpers
+		--─────────────────────────────────────────────────────
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+
+		local uidSet = listToSet(uids) or {}
+		if uidScalar then uidSet[uidScalar] = true end
+		local poolUidSet  = listToSet(poolUids)
+		local codeSet     = listToSet(codes)
+		local poolCodeSet = listToSet(poolCodes)
+
+		local function alreadyTagged(card)
+			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+			for _, t in ipairs(card.tags) do if t == tagMark then return true end end
+			return false
+		end
+
+		local function isAlreadySake(card)
+			return (tonumber(card and card.month) == 9) and (tostring(card.kind) == "seed")
+		end
+
+		local function cardStr(c:any)
+			if typeof(c) ~= "table" then return "<nil>" end
+			return string.format("{uid=%s code=%s kind=%s month=%s idx=%s tags=%s}",
+				tostring(c.uid), tostring(c.code), tostring(c.kind),
+				tostring(c.month), tostring(c.idx),
+				(function()
+					if typeof(c.tags) ~= "table" then return "[]" end
+					local t = {}
+					for i,v in ipairs(c.tags) do t[i] = tostring(v) end
+					return "["..table.concat(t, ",").."]"
+				end)()
+			)
+		end
+
+		-- Replace one entry by UID (preserve UID and core fields)
+		local function replaceOneByUid(store, uid, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.uid == uid then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByUid] uid=%s -> %s", tostring(uid), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByUid] uid=%s not found (no-op)", tostring(uid))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- Replace one entry by code (legacy fallback)
+		local function replaceOneByCode(store, code, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.code == code then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByCode] code=%s -> %s", tostring(code), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByCode] code=%s not found (no-op)", tostring(code))
+			end
+			return { v = 3, entries = out }
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Target selection order: UID → Code → pool(UID/Code) → any (excluding already-sake/tagged)
+		--─────────────────────────────────────────────────────
+		local function pickTarget(store)
+			local entries = (store and store.entries) or {}
+			local function candOf(pred)
+				local list = {}
+				for _, e in ipairs(entries) do
+					if e and (not alreadyTagged(e)) and (not isAlreadySake(e)) and pred(e) then
+						list[#list+1] = e
+					end
+				end
+				return list
+			end
+
+			-- direct UIDs
+			if uidSet and next(uidSet) ~= nil then
+				local list = candOf(function(e) return e.uid and uidSet[e.uid] end)
+				LOG.debug("[pick] direct-uid candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-uid" end
+			end
+			-- direct codes
+			if codeSet then
+				local list = candOf(function(e) return e.code and codeSet[e.code] end)
+				LOG.debug("[pick] direct-code candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-code" end
+			end
+			-- pool UIDs
+			if poolUidSet then
+				local list = candOf(function(e) return e.uid and poolUidSet[e.uid] end)
+				LOG.debug("[pick] pool-uid candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "pool-uid" end
+			end
+			-- pool codes
+			if poolCodeSet then
+				local list = candOf(function(e) return e.code and poolCodeSet[e.code] end)
+				LOG.debug("[pick] pool-code candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "pool-code" end
+			end
+			-- any entry (except already-sake/tagged)
+			local all = candOf(function(_) return true end)
+			LOG.debug("[pick] any candidates=%d", #all)
+			if #all > 0 then return all[rng:NextInteger(1, #all)], "any" end
+			return nil, "none"
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Main (DeckStore.transact)
+		--─────────────────────────────────────────────────────
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+		return ctx.DeckStore.transact(runId, function(store)
+			local storeSize = (store and store.entries and #store.entries) or 0
+			LOG.debug("[store] size=%s", tostring(storeSize))
+
+			local target, reason = pickTarget(store)
+			if not target then
+				LOG.info("[result] no-eligible-target (pickReason=%s)", tostring(reason))
+				return store, { ok = true, changed = 0, meta = "no-eligible-target", pickReason = reason }
+			end
+
+			LOG.debug("[target] via=%s %s", tostring(reason), cardStr(target))
+
+			-- Idempotency guard (double-check)
+			if alreadyTagged(target) then
+				LOG.info("[result] already-applied uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+			if isAlreadySake(target) then
+				LOG.info("[result] already-sake uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "already-sake", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			-- Convert: month -> 9, then kind -> seed（9月の seed=盃 の idx に自動寄せ）
+			local beforeMonth, beforeIdx, beforeKind = target.month, target.idx, target.kind
+			local step1 = ctx.DeckOps.convertMonth(target, 9)
+			local step2 = ctx.DeckOps.convertKind(step1, "seed")
+
+			LOG.debug("[convert] month:%s→%s idx:%s→%s kind:%s→%s",
+				tostring(beforeMonth), tostring(step2.month),
+				tostring(beforeIdx), tostring(step2.idx),
+				tostring(beforeKind), tostring(step2.kind))
+
+			-- Tag（UID 維持）
+			local next2 = ctx.DeckOps.attachTag(step2, tagMark)
+			if not next2.uid then next2.uid = target.uid end
+			LOG.debug("[tagged] %s", cardStr(next2))
+
+			-- Replace: prefer UID when available
+			if target.uid and target.uid ~= "" then
+				store = replaceOneByUid(store, target.uid, next2)
+			else
+				store = replaceOneByCode(store, target.code, next2)
+			end
+
+			local dt = (os.clock() - t0) * 1000
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms",
+				tostring(target.uid), tostring(target.code), tostring(reason), dt)
+			return store, {
+				ok         = true,
+				changed    = 1,
+				targetUid  = target.uid,
+				targetCode = target.code,
+				pickReason = reason,
+			}
+		end)
+	end
+
+	--─────────────────────────────────────────────────────
+	-- canApply（UIグレーアウト等に利用）
+	--  - 条件: 未タグ ＆ まだ「9月 seed（盃）」でない
+	--  - 備考: 本効果は月変更前提のため、基本 true（既盃/既タグのみ false）
+	--─────────────────────────────────────────────────────
+	local function registerCanApply(id)
+		Effects.registerCanApply(id, function(card, _ctx2)
+			if type(card) ~= "table" then return false, "not-eligible" end
+			local tags = (type(card.tags)=="table") and card.tags or {}
+			for _,t in ipairs(tags) do if t=="eff:kito_i_sake" then return false, "already-applied" end end
+			if (tonumber(card.month)==9 and tostring(card.kind)=="seed") then
+				return false, "already-sake"
+			end
+			return true
+		end)
+	end
+
+	-- Primary ID
+	Effects.register("kito.i_sake", handler)
+	registerCanApply("kito.i_sake")
+	-- Legacy alias
+	Effects.register("kito_i", handler)
+	registerCanApply("kito_i")
+end
+```
+
+### src/shared/Deck/Effects/kito/Inu_Chaff2.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/Inu_Chaff2.lua
+-- Inu (KITO): convert up to TWO target cards to "chaff" (UID-first, without replacement)
+--  - Effect IDs: "kito.inu_chaff2" (primary), "kito_inu" (legacy alias), "kito.inu_two_chaff" (alias)
+--  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
+--  - Fallback to codes only if no UID is provided
+--  - DeckStore (v3) is immutable; use DeckStore.transact and replace entries (UID-first)
+--  - RNG is separated (ctx.rng preferred, otherwise Random.new())
+--  - If a month has no "chaff", do nothing for that card (meta per-target)
+--  - Diagnostic logs (scope: Effects.kito.inu_chaff2)
+return function(Effects)
+	--─────────────────────────────────────────────────────
+	-- Logger (optional)
+	--─────────────────────────────────────────────────────
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(game:GetService("ReplicatedStorage")
+				:WaitForChild("SharedModules")
+				:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.inu_chaff2")
+		else
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+		end
+	end
+
+	--─────────────────────────────────────────────────────
+	-- Shared handler for both effect IDs
+	--─────────────────────────────────────────────────────
+	local function handler(ctx)
+		local payload     = ctx.payload or {}
+		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
+		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+
+		local tagMark     = tostring(payload.tag or "eff:kito_inu_chaff2")
+		local preferKind  = "chaff"
+		local targetCount = 2
+
+		local runId       = ctx.runId
+		local rng         = ctx.rng or Random.new()
+
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+		LOG.info("[begin] run=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), tagMark, tostring(uidScalar),
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes),
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+		)
+
+		--─────────────────────────────────────────────────────
+		-- helpers
+		--─────────────────────────────────────────────────────
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+
+		local uidSet = listToSet(uids) or {}
+		if uidScalar then uidSet[uidScalar] = true end
+		local poolUidSet  = listToSet(poolUids)
+		local codeSet     = listToSet(codes)
+		local poolCodeSet = listToSet(poolCodes)
+
+		local function monthFromCard(card:any): number?
+			if not card then return nil end
+			if card.month ~= nil then
+				local m = tonumber(card.month)
+				if typeof(m) == "number" then return m end
+			end
+			local code = tostring(card.code or "")
+			if #code >= 2 then
+				local mm = tonumber(string.sub(code, 1, 2))
+				if typeof(mm) == "number" then return mm end
+			end
+			return nil
+		end
+
+		local function monthHasKind(month:number?, kind:string): boolean
+			if not month or not ctx.CardEngine or not ctx.CardEngine.cardsByMonth then return false end
+			local defs = ctx.CardEngine.cardsByMonth[month]
+			if typeof(defs) ~= "table" then return false end
+			for _, def in ipairs(defs) do
+				if tostring(def.kind or "") == kind then
+					return true
+				end
+			end
+			return false
+		end
+
+		local function alreadyTagged(card)
+			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+			for _, t in ipairs(card.tags) do if t == tagMark then return true end end
+			return false
+		end
+
+		local function cardStr(c:any)
+			if typeof(c) ~= "table" then return "<nil>" end
+			return string.format("{uid=%s code=%s kind=%s month=%s idx=%s tags=%s}",
+				tostring(c.uid), tostring(c.code), tostring(c.kind),
+				tostring(c.month), tostring(c.idx),
+				(function()
+					if typeof(c.tags) ~= "table" then return "[]" end
+					local t = {}
+					for i,v in ipairs(c.tags) do t[i] = tostring(v) end
+					return "["..table.concat(t, ",").."]"
+				end)()
+			)
+		end
+
+		local function keyOf(e) return (e and e.uid and e.uid ~= "") and ("uid:"..e.uid) or ("code:"..tostring(e and e.code or "")) end
+
+		-- sampling without replacement
+		local function sampleN(list, n)
+			local out = {}
+			if typeof(list) ~= "table" then return out end
+			local tmp = table.clone(list)
+			local m = math.min(#tmp, n)
+			for i = 1, m do
+				local j = rng:NextInteger(1, #tmp)
+				out[#out+1] = table.remove(tmp, j)
+			end
+			return out
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Target selection (up to 2 unique entries)
+		-- Priority: UID → Code → pool(UID) → pool(Code) → any eligible month
+		--─────────────────────────────────────────────────────
+		local function buildCandidates(store, pred)
+			local entries = (store and store.entries) or {}
+			local list = {}
+			for _, e in ipairs(entries) do if pred(e) then list[#list+1] = e end end
+			return list
+		end
+
+		local function pickTargets(store)
+			local chosen, seen = {}, {}
+			local function takeFrom(list, howMany, randomize)
+				if #chosen >= targetCount then return end
+				local src = list
+				if randomize then src = sampleN(list, #list) end
+				for _, e in ipairs(src) do
+					local k = keyOf(e)
+					if not seen[k] then
+						chosen[#chosen+1] = e
+						seen[k] = true
+						if #chosen >= targetCount then break end
+					end
+				end
+			end
+
+			-- predicates
+			local function hasChaff(e) return e ~= nil and monthHasKind(monthFromCard(e), "chaff") end
+			local function matchUid(e) return e and e.uid and uidSet and uidSet[e.uid] and hasChaff(e) end
+			local function matchCode(e) return e and e.code and codeSet and codeSet[e.code] and hasChaff(e) end
+			local function matchPoolUid(e) return e and e.uid and poolUidSet and poolUidSet[e.uid] and hasChaff(e) end
+			local function matchPoolCode(e) return e and e.code and poolCodeSet and poolCodeSet[e.code] and hasChaff(e) end
+			local function anyChaff(e) return hasChaff(e) end
+
+			-- 0) direct UIDs
+			local list0 = buildCandidates(store, matchUid)
+			LOG.debug("[pick] direct-uid candidates=%d", #list0)
+			takeFrom(list0, targetCount - #chosen, true)
+
+			-- 1) direct codes
+			if #chosen < targetCount then
+				local list1 = buildCandidates(store, matchCode)
+				LOG.debug("[pick] direct-code candidates=%d", #list1)
+				takeFrom(list1, targetCount - #chosen, true)
+			end
+
+			-- 2) pool by UID
+			if #chosen < targetCount then
+				local list2 = buildCandidates(store, matchPoolUid)
+				LOG.debug("[pick] pool-uid candidates=%d", #list2)
+				takeFrom(list2, targetCount - #chosen, true)
+			end
+
+			-- 3) pool by code
+			if #chosen < targetCount then
+				local list3 = buildCandidates(store, matchPoolCode)
+				LOG.debug("[pick] pool-code candidates=%d", #list3)
+				takeFrom(list3, targetCount - #chosen, true)
+			end
+
+			-- 4) any entry whose month has "chaff"
+			if #chosen < targetCount then
+				local list4 = buildCandidates(store, anyChaff)
+				LOG.debug("[pick] any-chaff-month candidates=%d", #list4)
+				takeFrom(list4, targetCount - #chosen, true)
+			end
+
+			return chosen
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Replace helpers
+		--─────────────────────────────────────────────────────
+		local function replaceOneByUid(store, uid, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.uid == uid then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByUid] uid=%s -> %s", tostring(uid), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByUid] uid=%s not found (no-op)", tostring(uid))
+			end
+			return { v = 3, entries = out }
+		end
+
+		local function replaceOneByCode(store, code, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.code == code then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByCode] code=%s -> %s", tostring(code), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByCode] code=%s not found (no-op)", tostring(code))
+			end
+			return { v = 3, entries = out }
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Main (DeckStore.transact)
+		--─────────────────────────────────────────────────────
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+		return ctx.DeckStore.transact(runId, function(store)
+			local storeSize = (store and store.entries and #store.entries) or 0
+			LOG.debug("[store] size=%s", tostring(storeSize))
+
+			local targets = pickTargets(store)
+			if not targets or #targets == 0 then
+				LOG.info("[result] no-eligible-target")
+				return store, { ok = true, changed = 0, meta = "no-eligible-target", picked = 0 }
+			end
+
+			LOG.debug("[targets] picked=%d %s%s",
+				#targets,
+				cardStr(targets[1]),
+				(#targets >= 2 and (" "..cardStr(targets[2])) or "")
+			)
+
+			local changed, applied = 0, {}
+			for idx, target in ipairs(targets) do
+				-- Idempotency: if already tagged, skip
+				if alreadyTagged(target) then
+					LOG.info("[skip] already-applied uid=%s code=%s (i=%d)", tostring(target.uid), tostring(target.code), idx)
+				else
+					local next1 = ctx.DeckOps.convertKind(target, preferKind)
+					if tostring(next1.kind or "") ~= "chaff" then
+						LOG.info("[skip] month-has-no-chaff uid=%s code=%s (i=%d)", tostring(target.uid), tostring(target.code), idx)
+					else
+						local next2 = ctx.DeckOps.attachTag(next1, tagMark)
+						if not next2.uid then next2.uid = target.uid end
+						-- replace (prefer UID)
+... (truncated)
+```
+
 ### src/shared/Deck/Effects/kito/Mi_Venom.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Mi_Venom.lua
@@ -12024,6 +12658,616 @@ return function(Effects)
 ... (truncated)
 ```
 
+### src/shared/Deck/Effects/kito/Uma_Seedize.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/Uma_Seedize.lua
+-- Uma (KITO): convert one target card to "seed" (UID-first)
+--  - Effect IDs: "kito.uma_seed" (primary), "kito_uma" (legacy alias)
+--  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
+--  - Fallback to codes only if no UID is provided
+--  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
+--  - RNG is separated (ctx.rng preferred, otherwise Random.new())
+--  - If the month has no "seed", do nothing (meta returned)
+--  - Diagnostic logs (scope: Effects.kito.uma_seed)
+return function(Effects)
+	--─────────────────────────────────────────────────────
+	-- Logger (optional)
+	--─────────────────────────────────────────────────────
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(game:GetService("ReplicatedStorage")
+				:WaitForChild("SharedModules")
+				:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.uma_seed")
+		else
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+		end
+	end
+
+	--─────────────────────────────────────────────────────
+	-- Shared handler for both effect IDs
+	--─────────────────────────────────────────────────────
+	local function handler(ctx)
+		local payload     = ctx.payload or {}
+		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
+		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+
+		local tagMark     = tostring(payload.tag or "eff:kito_uma_seed")
+		local preferKind  = "seed"
+
+		local runId       = ctx.runId
+		local rng         = ctx.rng or Random.new()
+
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+		LOG.info("[begin] run=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), tagMark, tostring(uidScalar),
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes),
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+		)
+
+		--─────────────────────────────────────────────────────
+		-- helpers
+		--─────────────────────────────────────────────────────
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+
+		local uidSet = listToSet(uids) or {}
+		if uidScalar then uidSet[uidScalar] = true end
+		local poolUidSet  = listToSet(poolUids)
+		local codeSet     = listToSet(codes)
+		local poolCodeSet = listToSet(poolCodes)
+
+		local function monthFromCard(card:any): number?
+			if not card then return nil end
+			if card.month ~= nil then
+				local m = tonumber(card.month)
+				if typeof(m) == "number" then return m end
+			end
+			local code = tostring(card.code or "")
+			if #code >= 2 then
+				local mm = tonumber(string.sub(code, 1, 2))
+				if typeof(mm) == "number" then return mm end
+			end
+			return nil
+		end
+
+		local function monthHasKind(month:number?, kind:string): boolean
+			if not month or not ctx.CardEngine or not ctx.CardEngine.cardsByMonth then return false end
+			local defs = ctx.CardEngine.cardsByMonth[month]
+			if typeof(defs) ~= "table" then return false end
+			for _, def in ipairs(defs) do
+				if tostring(def.kind or "") == kind then
+					return true
+				end
+			end
+			return false
+		end
+
+		local function alreadyTagged(card)
+			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+			for _, t in ipairs(card.tags) do if t == tagMark then return true end end
+			return false
+		end
+
+		local function cardStr(c:any)
+			if typeof(c) ~= "table" then return "<nil>" end
+			return string.format("{uid=%s code=%s kind=%s month=%s idx=%s tags=%s}",
+				tostring(c.uid), tostring(c.code), tostring(c.kind),
+				tostring(c.month), tostring(c.idx),
+				(function()
+					if typeof(c.tags) ~= "table" then return "[]" end
+					local t = {}
+					for i,v in ipairs(c.tags) do t[i] = tostring(v) end
+					return "["..table.concat(t, ",").."]"
+				end)()
+			)
+		end
+
+		-- Replace one entry by UID (preserve UID and core fields)
+		local function replaceOneByUid(store, uid, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.uid == uid then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByUid] uid=%s -> %s", tostring(uid), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByUid] uid=%s not found (no-op)", tostring(uid))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- Replace one entry by code (legacy fallback)
+		local function replaceOneByCode(store, code, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.code == code then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByCode] code=%s -> %s", tostring(code), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByCode] code=%s not found (no-op)", tostring(code))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- Target selection order: UID → Code → pool(UID/Code) → any eligible month
+		local function pickTarget(store)
+			local entries = (store and store.entries) or {}
+			-- 0) direct UID(s)
+			if uidSet and next(uidSet) ~= nil then
+				local list = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and uidSet[e.uid] and monthHasKind(monthFromCard(e), "seed") then
+						list[#list+1] = e
+					end
+				end
+				LOG.debug("[pick] direct-uid candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-uid" end
+			end
+			-- 1) direct code(s)
+			if codeSet then
+				local list = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and codeSet[e.code] and monthHasKind(monthFromCard(e), "seed") then
+						list[#list+1] = e
+					end
+				end
+				LOG.debug("[pick] direct-code candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-code" end
+			end
+			-- 2) pool by UID
+			if poolUidSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and poolUidSet[e.uid] and monthHasKind(monthFromCard(e), "seed") then
+						cand[#cand+1] = e
+					end
+				end
+				LOG.debug("[pick] pool-uid candidates=%d", #cand)
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-uid" end
+			end
+			-- 3) pool by code
+			if poolCodeSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and poolCodeSet[e.code] and monthHasKind(monthFromCard(e), "seed") then
+						cand[#cand+1] = e
+					end
+				end
+				LOG.debug("[pick] pool-code candidates=%d", #cand)
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-code" end
+			end
+			-- 4) any entry whose month has "seed"
+			local all = {}
+			for _, e in ipairs(entries) do
+				if monthHasKind(monthFromCard(e), "seed") then all[#all+1] = e end
+			end
+			LOG.debug("[pick] any-seed-month candidates=%d", #all)
+			if #all > 0 then return all[rng:NextInteger(1, #all)], "any-seed-month" end
+			return nil, "none"
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Main (DeckStore.transact)
+		--─────────────────────────────────────────────────────
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+		return ctx.DeckStore.transact(runId, function(store)
+			local storeSize = (store and store.entries and #store.entries) or 0
+			LOG.debug("[store] size=%s", tostring(storeSize))
+
+			local target, reason = pickTarget(store)
+			if not target then
+				LOG.info("[result] no-eligible-target (pickReason=%s)", tostring(reason))
+				return store, { ok = true, changed = 0, meta = "no-eligible-target", pickReason = reason }
+			end
+
+			LOG.debug("[target] via=%s %s", tostring(reason), cardStr(target))
+
+			-- If already tagged, skip (idempotent)
+			if alreadyTagged(target) then
+				LOG.info("[result] already-applied uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			-- Convert to "seed"（同月の seed に idx を寄せる）
+			local beforeIdx, beforeCode, beforeKind = target.idx, target.code, target.kind
+			local next1 = ctx.DeckOps.convertKind(target, preferKind)
+			local afterIdx, afterCode, afterKind = next1.idx, next1.code, next1.kind
+			LOG.debug("[convert] idx:%s→%s code:%s→%s kind:%s→%s",
+				tostring(beforeIdx), tostring(afterIdx),
+				tostring(beforeCode), tostring(afterCode),
+				tostring(beforeKind), tostring(afterKind))
+
+			if tostring(afterKind or "") ~= "seed" then
+				LOG.info("[result] month-has-no-seed uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "month-has-no-seed", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			-- Tag（UID 維持）
+			local next2 = ctx.DeckOps.attachTag(next1, tagMark)
+			if not next2.uid then next2.uid = target.uid end
+			LOG.debug("[tagged] %s", cardStr(next2))
+
+			-- Replace: prefer UID when available
+			if target.uid and target.uid ~= "" then
+				store = replaceOneByUid(store, target.uid, next2)
+			else
+				store = replaceOneByCode(store, target.code, next2)
+			end
+
+			local dt = (os.clock() - t0) * 1000
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms",
+				tostring(target.uid), tostring(target.code), tostring(reason), dt)
+			return store, {
+				ok         = true,
+				changed    = 1,
+				targetUid  = target.uid,
+				targetCode = target.code,
+				pickReason = reason,
+			}
+		end)
+	end
+
+	--─────────────────────────────────────────────────────
+	-- canApply（UIグレーアウト等に利用）
+	--  - 条件: まだ "seed" でない ＆ 対象月に seed 定義がある ＆ 既タグなし
+... (truncated)
+```
+
+### src/shared/Deck/Effects/kito/Usagi_Ribbonize.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/Usagi_Ribbonize.lua
+-- Usagi (KITO): convert one target card to "ribbon" (UID-first)
+--  - Effect IDs: "kito.usagi_ribbon" (primary), "kito_usagi" (legacy alias)
+--  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
+--  - Fallback to codes only if no UID is provided
+--  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
+--  - RNG is separated (ctx.rng preferred, otherwise Random.new())
+--  - If the month has no "ribbon", do nothing (meta returned)
+--  - Diagnostic logs (scope: Effects.kito.usagi_ribbon)
+return function(Effects)
+	--─────────────────────────────────────────────────────
+	-- Logger (optional)
+	--─────────────────────────────────────────────────────
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(game:GetService("ReplicatedStorage")
+				:WaitForChild("SharedModules")
+				:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.usagi_ribbon")
+		else
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+		end
+	end
+
+	--─────────────────────────────────────────────────────
+	-- Shared handler for both effect IDs
+	--─────────────────────────────────────────────────────
+	local function handler(ctx)
+		local payload     = ctx.payload or {}
+		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
+		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+
+		local tagMark     = tostring(payload.tag or "eff:kito_usagi_ribbon")
+		local preferKind  = "ribbon"
+
+		local runId       = ctx.runId
+		local rng         = ctx.rng or Random.new()
+
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+		LOG.info("[begin] run=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), tagMark, tostring(uidScalar),
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes),
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+		)
+
+		--─────────────────────────────────────────────────────
+		-- helpers
+		--─────────────────────────────────────────────────────
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+
+		local uidSet = listToSet(uids) or {}
+		if uidScalar then uidSet[uidScalar] = true end
+		local poolUidSet  = listToSet(poolUids)
+		local codeSet     = listToSet(codes)
+		local poolCodeSet = listToSet(poolCodes)
+
+		local function monthFromCard(card:any): number?
+			if not card then return nil end
+			if card.month ~= nil then
+				local m = tonumber(card.month)
+				if typeof(m) == "number" then return m end
+			end
+			local code = tostring(card.code or "")
+			if #code >= 2 then
+				local mm = tonumber(string.sub(code, 1, 2))
+				if typeof(mm) == "number" then return mm end
+			end
+			return nil
+		end
+
+		local function monthHasKind(month:number?, kind:string): boolean
+			if not month or not ctx.CardEngine or not ctx.CardEngine.cardsByMonth then return false end
+			local defs = ctx.CardEngine.cardsByMonth[month]
+			if typeof(defs) ~= "table" then return false end
+			for _, def in ipairs(defs) do
+				if tostring(def.kind or "") == kind then
+					return true
+				end
+			end
+			return false
+		end
+
+		local function alreadyTagged(card)
+			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+			for _, t in ipairs(card.tags) do if t == tagMark then return true end end
+			return false
+		end
+
+		local function cardStr(c:any)
+			if typeof(c) ~= "table" then return "<nil>" end
+			return string.format("{uid=%s code=%s kind=%s month=%s idx=%s tags=%s}",
+				tostring(c.uid), tostring(c.code), tostring(c.kind),
+				tostring(c.month), tostring(c.idx),
+				(function()
+					if typeof(c.tags) ~= "table" then return "[]" end
+					local t = {}
+					for i,v in ipairs(c.tags) do t[i] = tostring(v) end
+					return "["..table.concat(t, ",").."]"
+				end)()
+			)
+		end
+
+		-- Replace one entry by UID (preserve UID and core fields)
+		local function replaceOneByUid(store, uid, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.uid == uid then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByUid] uid=%s -> %s", tostring(uid), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByUid] uid=%s not found (no-op)", tostring(uid))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- Replace one entry by code (legacy fallback)
+		local function replaceOneByCode(store, code, newEntry)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.code == code then
+					local c = table.clone(newEntry or {})
+					c.uid   = e.uid
+					c.code  = c.code  or e.code
+					c.month = c.month or e.month
+					c.idx   = c.idx   or e.idx
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByCode] code=%s -> %s", tostring(code), cardStr(newEntry))
+			else
+				LOG.warn("[replaceByCode] code=%s not found (no-op)", tostring(code))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- Target selection order: UID → Code → pool(UID/Code) → any eligible month
+		local function pickTarget(store)
+			local entries = (store and store.entries) or {}
+			-- 0) direct UID(s)
+			if uidSet and next(uidSet) ~= nil then
+				local list = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and uidSet[e.uid] and monthHasKind(monthFromCard(e), "ribbon") then
+						list[#list+1] = e
+					end
+				end
+				LOG.debug("[pick] direct-uid candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-uid" end
+			end
+			-- 1) direct code(s)
+			if codeSet then
+				local list = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and codeSet[e.code] and monthHasKind(monthFromCard(e), "ribbon") then
+						list[#list+1] = e
+					end
+				end
+				LOG.debug("[pick] direct-code candidates=%d", #list)
+				if #list > 0 then return list[rng:NextInteger(1, #list)], "direct-code" end
+			end
+			-- 2) pool by UID
+			if poolUidSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and poolUidSet[e.uid] and monthHasKind(monthFromCard(e), "ribbon") then
+						cand[#cand+1] = e
+					end
+				end
+				LOG.debug("[pick] pool-uid candidates=%d", #cand)
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-uid" end
+			end
+			-- 3) pool by code
+			if poolCodeSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and poolCodeSet[e.code] and monthHasKind(monthFromCard(e), "ribbon") then
+						cand[#cand+1] = e
+					end
+				end
+				LOG.debug("[pick] pool-code candidates=%d", #cand)
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-code" end
+			end
+			-- 4) any entry whose month has "ribbon"（UI側がプール指定しない場合の互換フォールバック）
+			local all = {}
+			for _, e in ipairs(entries) do
+				if monthHasKind(monthFromCard(e), "ribbon") then all[#all+1] = e end
+			end
+			LOG.debug("[pick] any-ribbon-month candidates=%d", #all)
+			if #all > 0 then return all[rng:NextInteger(1, #all)], "any-ribbon-month" end
+			return nil, "none"
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Main (DeckStore.transact)
+		--─────────────────────────────────────────────────────
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+		return ctx.DeckStore.transact(runId, function(store)
+			local storeSize = (store and store.entries and #store.entries) or 0
+			LOG.debug("[store] size=%s", tostring(storeSize))
+
+			local target, reason = pickTarget(store)
+			if not target then
+				LOG.info("[result] no-eligible-target (pickReason=%s)", tostring(reason))
+				return store, { ok = true, changed = 0, meta = "no-eligible-target", pickReason = reason }
+			end
+
+			LOG.debug("[target] via=%s %s", tostring(reason), cardStr(target))
+
+			-- If already tagged, skip (idempotent)
+			if alreadyTagged(target) then
+				LOG.info("[result] already-applied uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			-- Convert to "ribbon"（同月の ribbon に idx を寄せる）
+			local beforeIdx, beforeCode, beforeKind = target.idx, target.code, target.kind
+			local next1 = ctx.DeckOps.convertKind(target, preferKind)
+			local afterIdx, afterCode, afterKind = next1.idx, next1.code, next1.kind
+			LOG.debug("[convert] idx:%s→%s code:%s→%s kind:%s→%s",
+				tostring(beforeIdx), tostring(afterIdx),
+				tostring(beforeCode), tostring(afterCode),
+				tostring(beforeKind), tostring(afterKind))
+
+			if tostring(afterKind or "") ~= "ribbon" then
+				LOG.info("[result] month-has-no-ribbon uid=%s code=%s (via=%s)", tostring(target.uid), tostring(target.code), tostring(reason))
+				return store, { ok = true, changed = 0, meta = "month-has-no-ribbon", targetUid = target.uid, targetCode = target.code, pickReason = reason }
+			end
+
+			-- Tag（UID 維持）
+			local next2 = ctx.DeckOps.attachTag(next1, tagMark)
+			if not next2.uid then next2.uid = target.uid end
+			LOG.debug("[tagged] %s", cardStr(next2))
+
+			-- Replace: prefer UID when available
+			if target.uid and target.uid ~= "" then
+				store = replaceOneByUid(store, target.uid, next2)
+			else
+				store = replaceOneByCode(store, target.code, next2)
+			end
+
+			local dt = (os.clock() - t0) * 1000
+			LOG.info("[result] ok changed=1 uid=%s code=%s via=%s in %.2fms",
+				tostring(target.uid), tostring(target.code), tostring(reason), dt)
+			return store, {
+				ok         = true,
+				changed    = 1,
+				targetUid  = target.uid,
+				targetCode = target.code,
+				pickReason = reason,
+			}
+		end)
+	end
+
+	--─────────────────────────────────────────────────────
+	-- canApply（UIグレーアウト等に利用）
+	--  - 条件: まだ "ribbon" でない ＆ 対象月に ribbon 定義がある ＆ 既タグなし
+... (truncated)
+```
+
 ### src/shared/Deck/EffectsRegisterAll.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/EffectsRegisterAll.lua
@@ -12342,6 +13586,7 @@ local function registerBuiltinCanApply()
 -- ポリシー：
 --  - Deck の変更は DeckStore.transact を通す（純関数 DeckOps で生成→差し替え）
 --  - ここでは「登録と実行の枠」だけ提供。個別効果のロジックは別モジュールで定義して register する
+-- v0.9.1-patch: apply() が (store, result) 戻り値に対応（第二戻り値優先）
 
 local RS = game:GetService("ReplicatedStorage")
 local Shared = RS:WaitForChild("SharedModules")
@@ -12513,17 +13758,26 @@ function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
 
 	local ctx = buildCtx(runId, payload)
 
-	-- ハンドラは（必要なら）内部で DeckStore.transact を呼ぶ想定
-	-- 返り値は自由だが、ここでは { ok, changed, meta } 形式に正規化して返す
-	local ok, res = pcall(handler, ctx)
-	if not ok then
-		LOG.warn("[apply] error id=%s err=%s", effectId, tostring(res))
-		return { ok = false, error = tostring(res) }
+	-- 🔧 ハンドラが (store, result) を返す場合に対応：第二戻り値を優先
+	local okCall, r1, r2 = pcall(handler, ctx)
+	if not okCall then
+		LOG.warn("[apply] error id=%s err=%s", effectId, tostring(r1))
+		return { ok = false, error = tostring(r1) }
 	end
 
-	-- ハンドラ側が {ok=?, changed=?, meta=?} を返さなかった場合の救済
+	local res = (r2 ~= nil) and r2 or r1
+
+	-- デッキストア風テーブルのみ返ってきた場合の救済（成功として扱う）
+	local function looksLikeDeckStore(v:any)
+		return (type(v)=="table") and (type(v.entries)=="table" or type(v.v)=="number")
+	end
+	if looksLikeDeckStore(res) then
+		return { ok = true }
+	end
+
+	-- 正規化
 	if typeof(res) ~= "table" then
-		return { ok = true, meta = res }
+		return { ok = (res ~= false and res ~= nil), meta = res }
 	end
 	if res.ok == nil then res.ok = true end
 	return res :: ApplyResult
@@ -14992,6 +16246,37 @@ ShopDefs.POOLS = {
 			descJP = "ラン構成の対象札をカス札に変換（適用時に少額の文を即時加算）。",
 			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
 		},
+
+		-- ========= ここから追加（ガイド v1.1 準拠）=========
+		-- 卯：短冊化
+		{
+			id = "kito_usagi", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
+			effect = "kito.usagi_ribbon",
+			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
+			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
+		},
+		-- 亥：酒化（9月seed=盃へ）
+		{
+			id = "kito_i", name = "亥：1枚を酒に変換", category = "kito", price = 5,
+			effect = "kito.i_sake",
+			descJP = "対象札を9月の盃（タネ）に変換します。",
+			descEN = "Convert target to September's Seed (Sake).",
+		},
+		-- 午：タネ化
+		{
+			id = "kito_uma", name = "午：1枚をタネに変換", category = "kito", price = 4,
+			effect = "kito.uma_seed",
+			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
+			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
+		},
+		-- 戌：2枚カス化
+		{
+			id = "kito_inu", name = "戌：2枚をカス札に変換", category = "kito", price = 3,
+			effect = "kito.inu_two_chaff",
+			descJP = "対象からランダムに最大2枚をカス札に変換（既カス／既タグは自動スキップ）。",
+			descEN = "Convert up to two targets to Chaff (skips already-chaff/tagged).",
+		},
+		-- ========= 追加ここまで =========
 	},
 
 	-- 祭事

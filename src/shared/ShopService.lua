@@ -1,6 +1,11 @@
 -- ServerScriptService/ShopService.lua
--- v0.9.2 → v0.9.2c 屋台サービス（SIMPLE+NONCE + Talisman payload）
--- 変更点:
+-- v0.9.2d 屋台サービス（SIMPLE+NONCE + Talisman payload）
+-- 変更点（d）:
+--  - ★ ShopEffects.apply へ必ず ctx.player を付与（UI系効果の必須引数漏れを修正）
+--  - ★ KITO の UI 経路を拡張：酉/巳 に加えて 卯/午/戌/亥 も KitoPick に統一
+--  - ★ toCanonicalEffectId を拡張（kito_* / Module名 を正規 effectId へ統一変換）
+--
+-- 既存（c）からの変更点は上記のみ。その他の仕様は従来通り。
 --  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
 --  - 在庫は満杯でも必ず強制再生成
 --  - SaveService のスナップ対応は従来どおり（存在しなくても続行）
@@ -102,13 +107,13 @@ end
 
 -- 置換後（★ run.id を唯一源泉に）
 local function ensureRunId(state:any): string
-  state.run = state.run or {}
-  local id = state.run.id
-  if type(id) ~= "string" or id == "" then
-    id = Http:GenerateGUID(false)
-    state.run.id = id
-  end
-  return id
+	state.run = state.run or {}
+	local id = state.run.id
+	if type(id) ~= "string" or id == "" then
+		id = Http:GenerateGUID(false)
+		state.run.id = id
+	end
+	return id
 end
 
 --========================
@@ -116,8 +121,20 @@ end
 --========================
 local function toCanonicalEffectId(eid: string?): string
 	if type(eid) ~= "string" or eid == "" then return "" end
+
+	-- 既存
 	if eid == "kito_tori" or eid == "Tori_Brighten" then return "kito.tori_brighten" end
 	if eid == "kito_mi"   or eid == "Mi_Venom"      then return "kito.mi_venom"      end
+
+	-- ★ 追加（卯/午/戌/亥）
+	if eid == "kito_usagi" or eid == "Usagi_Ribbonize" then return "kito.usagi_ribbon"   end
+	if eid == "kito_uma"   or eid == "Uma_Seedize"     then return "kito.uma_seed"       end
+	-- Inu は別名2種を同一に扱う
+	if eid == "kito_inu"   or eid == "Inu_Chaff2" or eid == "kito.inu_chaff2" then
+		return "kito.inu_two_chaff"
+	end
+	if eid == "kito_i"     or eid == "I_Sakeify"       then return "kito.i_sake"         end
+
 	return eid
 end
 
@@ -125,7 +142,27 @@ local function kitoLabel(eid: string?): string
 	local id = toCanonicalEffectId(eid)
 	if id == "kito.tori_brighten" then return "酉" end
 	if id == "kito.mi_venom"      then return "巳" end
+	if id == "kito.usagi_ribbon"  then return "卯" end
+	if id == "kito.uma_seed"      then return "午" end
+	if id == "kito.inu_two_chaff" then return "戌" end
+	if id == "kito.i_sake"        then return "亥" end
 	return "KITO"
+end
+
+-- ★ どの Kito が「選択 UI（KitoPick）」必須か
+local SELECT_KITO: {[string]: boolean} = {
+	["kito.tori_brighten"] = true,
+	["kito.mi_venom"]      = true,
+	["kito.usagi_ribbon"]  = true,
+	["kito.uma_seed"]      = true,
+	["kito.inu_two_chaff"] = true,
+	["kito.i_sake"]        = true,
+	-- 別名も保険で許容
+	["kito.inu_chaff2"]    = true,
+}
+
+local function requiresKitoPick(canonical: string): boolean
+	return SELECT_KITO[canonical] == true
 end
 
 --========================
@@ -363,46 +400,52 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			tostring(found.effect or found.id)
 		)
 
--- ★ UI 分岐：KITO は「選択が必要なもの（酉/巳）」のみ KitoPick に送る
-if Balance.KITO_UI_ENABLED == true and (found.category == "kito") then
-  local canonical = toCanonicalEffectId(found.effect or found.id)
-  local isSelectType = (canonical == "kito.tori_brighten") or (canonical == "kito.mi_venom")
+		-- ★ UI 分岐：KITO は「選択が必要なもの」を KitoPick に送る
+		if Balance.KITO_UI_ENABLED == true and (found.category == "kito") then
+			local canonical = toCanonicalEffectId(found.effect or found.id)
+			if requiresKitoPick(canonical) then
+				-- 在庫を減らして保存（購入は完了）
+				if s.shop and s.shop.stock and foundIndex then
+					table.remove(s.shop.stock, foundIndex)
+				end
+				if Service._pushState then Service._pushState(plr) end
+				snapShop(plr, s)
 
-  if isSelectType then
-    -- 在庫を減らして保存（購入は完了）
-    if s.shop and s.shop.stock and foundIndex then
-      table.remove(s.shop.stock, foundIndex)
-    end
-    if Service._pushState then Service._pushState(plr) end
-    snapShop(plr, s)
+				ensureRunId(s)
+				local started = false
+				if canonical ~= "" then
+					started = KitoPickCore.startFor(plr, s, canonical)
+				else
+					LOG.warn("[BUY][WARN] KITO item without effect id: %s", tostring(found.id))
+				end
 
-    ensureRunId(s)
-    local started = false
-    if canonical ~= "" then
-      started = KitoPickCore.startFor(plr, s, canonical)
-    else
-      LOG.warn("[BUY][WARN] KITO item without effect id: %s", tostring(found.id))
-    end
+				local prefix = kitoLabel(canonical)
+				local uiMsg = started and (prefix.."：対象を選んでください（候補を表示中…）")
+									or  (prefix.."：選択候補が用意できませんでした")
 
-    local prefix = kitoLabel(canonical)
-    local uiMsg = started and (prefix.."：対象を選んでください（候補を表示中…）")
-                        or  (prefix.."：選択候補が用意できませんでした")
-
-    LOG.info("[BUY][RES] ok=true msg=%s matsuri(after)=%s", uiMsg, matsuriJSON(s))
-    openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, uiMsg) })
-    return
-  end
-  -- ※ 選択不要（丑/寅など）はこの if を抜けて従来 apply フローへ
-end
+				LOG.info("[BUY][RES] ok=true msg=%s matsuri(after)=%s", uiMsg, matsuriJSON(s))
+				openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, uiMsg) })
+				return
+			end
+			-- ※ 選択不要の KITO はこの if を抜けて従来 apply フローへ
+		end
 		-- ★ 分岐ここまで（UI OFF なら従来どおり効果適用へ）
 
 		local effOk, effMsg = true, ""
 		if ShopEffects then
 			local okCall, okRet, msgRet = pcall(function()
 				return ShopEffects.apply(found.effect or found.id, s, {
-					plr=plr, lang=(s.lang or "ja"),
-					rng=(s.shop and s.shop.rng) or Random.new(),
-					price=price, category=found.category, now=os.time(),
+					-- ★必須: UI系効果は ctx.player を要求する
+					player   = plr,
+					-- 互換キー（古いコードが読む場合用）
+					plr      = plr,
+
+					lang     = (s.lang or "ja"),
+					rng      = (s.shop and s.shop.rng) or Random.new(),
+					price    = price,
+					category = found.category,
+					now      = os.time(),
+					source   = "ShopService.BUY",
 				})
 			end)
 			if not okCall then
