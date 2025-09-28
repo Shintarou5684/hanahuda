@@ -29,6 +29,13 @@ ShopDefs.WEIGHTS = {
 ShopDefs.POOLS = {
 	-- 祈祷
 	kito = {
+		-- ★ 追加：子（直前の祈祷を再発火）
+		{
+			id = "kito_ko", name = "子：前回の祈祷を再発火", category = "kito", price = 4, effect = "kito_ko",
+			descJP = "最後に成功した祈祷をもう一度発動（子自身の使用では記録は更新されません）。",
+			descEN = "Replay the last successful KITO once more (using Child itself doesn’t update the last).",
+		},
+
 		{
 			id = "kito_ushi", name = "丑：所持文を2倍", category = "kito", price = 5, effect = "kito_ushi",
 			descJP = "所持文を即時2倍（上限あり）。",
