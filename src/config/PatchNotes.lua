@@ -22,7 +22,23 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
-		-- ★ 0.9.6.5（Deck Reforge / 外部向け）
+	-- ★ 0.9.6.6（外部向け）
+	{
+		ver  = "v0.9.6.6",
+		date = "2025-09-28",
+		changes = {
+			{ ja = "ギブアップボタンを実装。現在のランを安全に終了できます。",
+			  en = "Implemented a Give Up button to safely end the current run." },
+
+			{ ja = "祈祷を拡充：子・未・巳・午・卯・亥・戌を追加（子=最後の祈祷を再発火／未=圧縮：山札から1枚削除／巳=カス化／午=タネ化／卯=短冊化／亥=酒化／戌=2枚カス化）。",
+			  en = "Expanded Kito: added Ko (re-fire last Kito), Hitsuji (prune: remove 1 from deck), Mi (venom: convert to Kasu), Uma (seed: convert to Seed), Usagi (ribbon: convert to Ribbon), I (sake: convert to Sake), and Inu (two-chaff: convert 2 to Kasu)." },
+
+			{ ja = "祈祷に関する不具合をいくつか修正（選択フロー／再発火／メッセージ整合など）。",
+			  en = "Fixed several Kito-related issues (selection flow, re-fire behavior, and messaging consistency)." },
+		}
+	},
+
+	-- ★ 0.9.6.5（Deck Reforge / 外部向け）
 	{
 		ver  = "v0.9.6.5",
 		date = "2025-09-26",
@@ -41,9 +57,7 @@ local ENTRIES = {
 		}
 	},
 
-	
 	-- ★ 0.9.6.3（外部向け・簡潔）
-	
 	{
 		ver  = "v0.9.6.3",
 		date = "2025-09-21",
