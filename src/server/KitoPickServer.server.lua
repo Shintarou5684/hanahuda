@@ -1,5 +1,7 @@
 -- ServerScriptService/KitoPickServer.lua
--- v0.9.15 KITO Pick Server (server canApply + safe monDelta→mon + robust reopen + notice(+N文) + msg/bankDelta normalize)
+-- v0.9.16 KITO Pick Server
+--  - server canApply + safe monDelta→mon + robust reopen + notice(+N文) + msg/bankDelta normalize
+--  - ★ADD: UI経由の適用成功時に Kito.recordFromPick(...) を呼んで kito_last を記録（子 ko 再発火用）
 
 local RS  = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
@@ -44,6 +46,10 @@ if EffectsRegistry then
 else
 	LOG.warn("[KitoPickServer] EffectsRegistry not found; KITO effects unavailable")
 end
+
+-- ★ Kito（kito_last 記録フック用）
+local Kito = tryRequire(SSS:FindFirstChild("ShopEffects") and SSS.ShopEffects:FindFirstChild("Kito"))
+		or tryRequire(SSS:FindFirstChild("Kito"))
 
 -- ShopService 解決（複数シグネチャに対応）
 local function resolveShopService()
@@ -109,8 +115,6 @@ end
 
 --─────────────────────────────────────────────────────────────
 -- ★ monDelta を安全に適用（所持文）
---   1) StateHub.applyMonDelta / addMon があれば優先
---   2) 無ければ state.mon を直接加算（フォールバック）
 --─────────────────────────────────────────────────────────────
 local function applyMonDelta(plr: Player, delta:number?): (boolean, string?)
 	if type(delta) ~= "number" or delta == 0 then return false, "no-delta" end
@@ -268,24 +272,36 @@ local function onDecide(plr: Player, payload:any)
 		return
 	end
 
-	-- 10) bankDelta（= 所持文の増分）を mon に適用
+	-- 10) ★ kito_last 記録（UI経由でも子 ko が再発火できるように）
+	do
+		local okRec, errRec = pcall(function()
+			if Kito and type(Kito.recordFromPick) == "function" then
+				Kito.recordFromPick(s, effectId, applyPayload, res)
+			end
+		end)
+		if not okRec then
+			LOG.warn("[Decide] recordFromPick failed: %s", tostring(errRec))
+		end
+	end
+
+	-- 11) bankDelta（= 所持文の増分）を mon に適用
 	if bankDelta and bankDelta ~= 0 then
 		local mOk, mErr = applyMonDelta(plr, bankDelta)
 		LOG.info("[Decide] monDelta %+d applied=%s err=%s", bankDelta, tostring(mOk), mOk and "" or tostring(mErr))
 	end
 
-	-- 11) 状態同期
+	-- 12) 状態同期
 	local okPush, errPush = pcall(function() StateHub.pushState(plr) end)
 	LOG.info("[Decide] pushState ok=%s err=%s", tostring(okPush), okPush and "" or tostring(errPush))
 
-	-- 12) Shop 再表示（在庫維持）— notice を（+N 文）付きで
+	-- 13) Shop 再表示（在庫維持）— notice を（+N 文）付きで
 	local base = (msgStr ~= "" and msgStr) or PRIMARY_NOTICE_DONE
 	local finalNotice = (bankDelta and bankDelta ~= 0)
 		and string.format("%s（+%d 文）", base, bankDelta)
 		or base
 	reopenShopSnapshot(plr, { notice = finalNotice, preserve = true })
 
-	-- 13) 結果通知
+	-- 14) 結果通知
 	if EvResult then
 		local resOut = {
 			ok      = true,

@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-28 22:19:08
+- Generated: 2025-09-30 22:53:40
 - Max lines/file: 300
 
 ## Folder Tree
@@ -816,7 +816,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-09-28 22:19:08
+- Generated: 2025-09-30 22:53:40
 - Max lines/file: 300
 
 ## Folder Tree
@@ -11519,6 +11519,8 @@ local RS = game:GetService("ReplicatedStorage")
 local Shared = RS:WaitForChild("SharedModules")
 
 local CardImageMap = require(Shared:WaitForChild("CardImageMap"))
+-- ★ 追加: code → month/idx/定義(kind/name) を引くために利用
+local CardEngine = require(Shared:WaitForChild("CardEngine"))
 
 local M = {}
 
@@ -11527,7 +11529,6 @@ local M = {}
 --========================
 
 local function _deriveCode(card: any): string
-	-- code があれば最優先。無ければ month/idx から派生。
 	if card and card.code then
 		return tostring(card.code)
 	end
@@ -11535,39 +11536,29 @@ local function _deriveCode(card: any): string
 	local i = tonumber(card and card.idx) or 1
 	if m < 1 then m = 1 end; if m > 12 then m = 12 end
 	if i < 1 then i = 1 end; if i > 4 then i = 4 end
-	return string.format("%02d%02d", m, i) -- 例: 0101
+	return string.format("%02d%02d", m, i)
 end
 
 local function _buildBadges(card: any): {string}
-	-- “バッジ”はUI表示用の短いラベル配列。
-	-- 仕様上の必須は「badges を持つこと」まで（表記はUI側に委譲可能）【DeckSchema Step A】
-	-- ここでは tags と effects を素直に並べる（推測による翻訳や省略はしない）。
 	local out = {}
-
-	-- tags: 配列想定（なければ無視）
 	if card and typeof(card.tags) == "table" then
 		for _, t in ipairs(card.tags) do
 			table.insert(out, tostring(t))
 		end
 	end
-
-	-- effects: 文字列 or {id=..., ...} などを素直に見出し化
 	if card and typeof(card.effects) == "table" then
 		for _, e in ipairs(card.effects) do
 			if typeof(e) == "string" then
 				table.insert(out, e)
 			elseif typeof(e) == "table" then
-				local label = (e.id ~= nil) and tostring(e.id) or "effect"
-				table.insert(out, label)
+				table.insert(out, (e.id ~= nil) and tostring(e.id) or "effect")
 			end
 		end
 	end
-
 	return out
 end
 
 local function _pickImageId(card: any, code: string): string
-	-- 画像は imageOverride があればそれを採用、無ければマップから取得（確定仕様）
 	if card and card.imageOverride ~= nil then
 		return tostring(card.imageOverride)
 	end
@@ -11575,36 +11566,54 @@ local function _pickImageId(card: any, code: string): string
 	return ok and tostring(id) or ""
 end
 
+-- ★ 追加: kind/month/name のフォールバック補完
+local function _deriveInfo(card:any, code:string)
+	local kind  = card and card.kind  or nil
+	local month = card and card.month or nil
+	local name  = card and card.name  or nil
+
+	if month == nil or kind == nil or (name == nil or name == "") then
+		local ok, mm, ii = pcall(function()
+			local m, i = CardEngine.fromCode(code)
+			return m, i
+		end)
+		if ok and mm and ii then
+			month = month or mm
+			local defM = CardEngine.cardsByMonth[mm]
+			local def  = (typeof(defM) == "table") and defM[ii] or nil
+			if kind == nil and def and def.kind then kind = def.kind end
+			if (name == nil or name == "") and def and def.name then name = def.name end
+		end
+	end
+	return kind, month, name
+end
+
 --========================
 -- 公開API
 --========================
 
--- card 1枚 → 表示VM
--- 返すテーブル：
---   { code, imageId, badges, kind, month, name }
 function M.toVM(card: any): any
 	if typeof(card) ~= "table" then
 		return { code = "0101", imageId = "", badges = {}, kind = "", month = 1, name = "" }
 	end
 
-	local code = _deriveCode(card)
+	local code    = _deriveCode(card)
 	local imageId = _pickImageId(card, code)
-	local badges = _buildBadges(card)
+	local badges  = _buildBadges(card)
 
-	-- kind/month/name はカードが持つソースをそのまま反映（推測で補完しない）
-	local out = {
-		code   = code,
-		imageId= imageId,
-		badges = badges,
-		kind   = card.kind,
-		month  = card.month,
-		name   = card.name,
+	-- ★ 不足分のみ安全に補完
+	local kind, month, name = _deriveInfo(card, code)
+
+	return {
+		code    = code,
+		imageId = imageId,
+		badges  = badges,
+		kind    = kind,
+		month   = month,
+		name    = name,
 	}
-
-	return out
 end
 
--- entries の配列（デッキなど）→ VM配列
 function M.toVMs(entries: {any}?): {any}
 	local src = (typeof(entries) == "table") and entries or {}
 	local out = table.create(#src)
@@ -12113,7 +12122,7 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler for both effect IDs
+	-- Shared handler for effect IDs
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
@@ -12122,6 +12131,12 @@ return function(Effects)
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
 		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
 		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+
+		-- ★ 完全ランダムモード（呼び出し側が auto/random/randomOnly を true で渡すと、指定を無視してランダム抽出）
+		local RANDOM_MODE = (payload.auto == true) or (payload.random == true) or (payload.randomOnly == true)
+		if RANDOM_MODE then
+			uidScalar, uids, poolUids, codes, poolCodes = nil, nil, nil, nil, nil
+		end
 
 		local tagMark     = tostring(payload.tag or "eff:kito_inu_chaff2")
 		local preferKind  = "chaff"
@@ -12139,12 +12154,13 @@ return function(Effects)
 
 		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
 			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
-		LOG.info("[begin] run=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+		LOG.info("[begin] run=%s tag=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s] random=%s",
 			tostring(runId), tagMark, tostring(uidScalar),
 			tostring(uids and #uids or 0), head5(uids),
 			tostring(poolUids and #poolUids or 0), head5(poolUids),
 			tostring(codes and #codes or 0), head5(codes),
-			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes),
+			tostring(RANDOM_MODE)
 		)
 
 		--─────────────────────────────────────────────────────
@@ -12222,6 +12238,16 @@ return function(Effects)
 				out[#out+1] = table.remove(tmp, j)
 			end
 			return out
+		end
+
+		-- 表示ラベル
+		local function labelOf(e:any)
+			if typeof(e) ~= "table" then return "?" end
+			if e.name and e.name ~= "" then return tostring(e.name) end
+			if e.code and e.code ~= "" then return tostring(e.code) end
+			local m = monthFromCard(e); local idx = tonumber(e.idx or 0) or 0
+			if m then return string.format("%02d-%d", m, idx) end
+			return "?"
 		end
 
 		--─────────────────────────────────────────────────────
@@ -12357,35 +12383,18 @@ return function(Effects)
 		--─────────────────────────────────────────────────────
 		local t0 = os.clock()
 		LOG.debug("[transact] run=%s enter", tostring(runId))
-		return ctx.DeckStore.transact(runId, function(store)
+
+		local resultOut
+		ctx.DeckStore.transact(runId, function(store)
 			local storeSize = (store and store.entries and #store.entries) or 0
 			LOG.debug("[store] size=%s", tostring(storeSize))
 
 			local targets = pickTargets(store)
 			if not targets or #targets == 0 then
 				LOG.info("[result] no-eligible-target")
-				return store, { ok = true, changed = 0, meta = "no-eligible-target", picked = 0 }
+				resultOut = { ok = true, changed = 0, meta = "no-eligible-target", picked = 0, message = "対象なし" }
+				return store, resultOut
 			end
-
-			LOG.debug("[targets] picked=%d %s%s",
-				#targets,
-				cardStr(targets[1]),
-				(#targets >= 2 and (" "..cardStr(targets[2])) or "")
-			)
-
-			local changed, applied = 0, {}
-			for idx, target in ipairs(targets) do
-				-- Idempotency: if already tagged, skip
-				if alreadyTagged(target) then
-					LOG.info("[skip] already-applied uid=%s code=%s (i=%d)", tostring(target.uid), tostring(target.code), idx)
-				else
-					local next1 = ctx.DeckOps.convertKind(target, preferKind)
-					if tostring(next1.kind or "") ~= "chaff" then
-						LOG.info("[skip] month-has-no-chaff uid=%s code=%s (i=%d)", tostring(target.uid), tostring(target.code), idx)
-					else
-						local next2 = ctx.DeckOps.attachTag(next1, tagMark)
-						if not next2.uid then next2.uid = target.uid end
-						-- replace (prefer UID)
 ... (truncated)
 ```
 
@@ -16589,13 +16598,12 @@ ShopDefs.POOLS = {
 			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
 			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
 		},
-		-- 戌：2枚カス化
-		{
-			id = "kito_inu", name = "戌：2枚をカス札に変換", category = "kito", price = 3,
-			effect = "kito.inu_two_chaff",
-			descJP = "対象からランダムに最大2枚をカス札に変換（既カス／既タグは自動スキップ）。",
-			descEN = "Convert up to two targets to Chaff (skips already-chaff/tagged).",
-		},
+{
+  id = "kito_inu", name = "戌：2枚をカス札に変換", category = "kito", price = 3,
+  effect = "kito.inu_two_chaff",
+  descJP = "デッキからランダムに最大2枚をカス札へ変換（既カス／既適用は自動スキップ）。",
+  descEN = "Randomly convert up to two cards in your deck to Chaff (skips already-chaff/already-affected).",
+},
 		-- 未：圧縮（山札から1枚削除）
 		{
 			id = "kito_hitsuji", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
@@ -17037,12 +17045,10 @@ local SELECT_KITO: {[string]: boolean} = {
 	["kito.mi_venom"]      = true,
 	["kito.usagi_ribbon"]  = true,
 	["kito.uma_seed"]      = true,
-	["kito.inu_two_chaff"] = true,
 	["kito.i_sake"]        = true,
 	-- ★ 追加（未）
 	["kito.hitsuji_prune"] = true,
 	-- 別名も保険で許容
-	["kito.inu_chaff2"]    = true,
 }
 
 local function requiresKitoPick(canonical: string): boolean
@@ -17176,6 +17182,8 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 
 	s.phase = "shop"
 	s.shop = s.shop or {}
+	s.shop.rng = s.shop.rng or Random.new(os.clock()*1000000)
+
 ... (truncated)
 ```
 
