@@ -3,7 +3,7 @@
 -- 変更点（e）:
 --  - ★ ShopEffects.apply へ必ず ctx.player を付与（UI系効果の必須引数漏れを修正） ※d継承
 --  - ★ KITO の UI 経路を拡張：酉/巳/卯/午/戌/亥 に加えて **未** も KitoPick に統一
---  - ★ toCanonicalEffectId を拡張（kito_* / Module名 / 旧名 を正規 effectId へ統一変換）※未追加
+--  - ★ toCanonicalEffectId を拡張（kito_* / Module名 / 旧名 を **ShopDefs 準拠の underscore 形式**へ正規化）
 --
 -- 既存（c/d）からの仕様は従来通り。
 --  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
@@ -116,57 +116,66 @@ local function ensureRunId(state:any): string
 end
 
 --========================
--- KITO: ID 正規化 & ラベル
+-- KITO: ID 正規化 & ラベル（ShopDefs=underscoreに合わせる）
 --========================
 local function toCanonicalEffectId(eid: string?): string
 	if type(eid) ~= "string" or eid == "" then return "" end
 
-	-- 既存
-	if eid == "kito_tori" or eid == "Tori_Brighten" then return "kito.tori_brighten" end
-	if eid == "kito_mi"   or eid == "Mi_Venom"      then return "kito.mi_venom"      end
-
-	-- ★ 追加（卯/午/戌/亥）
-	if eid == "kito_usagi" or eid == "Usagi_Ribbonize" then return "kito.usagi_ribbon"   end
-	if eid == "kito_uma"   or eid == "Uma_Seedize"     then return "kito.uma_seed"       end
-	-- Inu は別名2種を同一に扱う
-	if eid == "kito_inu"   or eid == "Inu_Chaff2" or eid == "kito.inu_chaff2" then
-		return "kito.inu_two_chaff"
+	-- 酉
+	if eid == "kito_tori" or eid == "Tori_Brighten" or eid == "kito.tori_brighten" then
+		return "kito_tori"
 	end
-	if eid == "kito_i"     or eid == "I_Sakeify"       then return "kito.i_sake"         end
+	-- 巳
+	if eid == "kito_mi" or eid == "Mi_Venom" or eid == "kito.mi_venom" then
+		return "kito_mi"
+	end
+	-- 卯
+	if eid == "kito_usagi" or eid == "Usagi_Ribbonize" or eid == "kito.usagi_ribbon" then
+		return "kito_usagi"
+	end
+	-- 午
+	if eid == "kito_uma" or eid == "Uma_Seedize" or eid == "kito.uma_seed" then
+		return "kito_uma"
+	end
+	-- 戌（旧名群をすべて集約）
+	if eid == "kito_inu" or eid == "Inu_Chaff2" or eid == "kito.inu_chaff2" or eid == "kito.inu_two_chaff" or eid == "kito.inu_chaff" then
+		return "kito_inu"
+	end
+	-- 亥
+	if eid == "kito_i" or eid == "I_Sakeify" or eid == "kito.i_sake" then
+		return "kito_i"
+	end
+	-- 未
+	if eid == "kito_hitsuji" or eid == "Hitsuji_Prune" or eid == "kito.hitsuji_prune" then
+		return "kito_hitsuji"
+	end
 
-	-- ★ 追加（未 / Hitsuji）
-	if eid == "kito_hitsuji" or eid == "Hitsuji_Prune" then return "kito.hitsuji_prune" end
-	-- すでに canonical ならそのまま返る
+	-- すでに underscore か、その他はそのまま返す
 	return eid
 end
 
 local function kitoLabel(eid: string?): string
 	local id = toCanonicalEffectId(eid)
-	if id == "kito.tori_brighten" then return "酉" end
-	if id == "kito.mi_venom"      then return "巳" end
-	if id == "kito.usagi_ribbon"  then return "卯" end
-	if id == "kito.uma_seed"      then return "午" end
-	if id == "kito.inu_two_chaff" then return "戌" end
-	if id == "kito.i_sake"        then return "亥" end
-	-- ★ 追加（未）
-	if id == "kito.hitsuji_prune" then return "未" end
+	if id == "kito_tori"    then return "酉" end
+	if id == "kito_mi"      then return "巳" end
+	if id == "kito_usagi"   then return "卯" end
+	if id == "kito_uma"     then return "午" end
+	if id == "kito_inu"     then return "戌" end
+	if id == "kito_i"       then return "亥" end
+	if id == "kito_hitsuji" then return "未" end
 	return "KITO"
 end
 
--- ★ どの Kito が「選択 UI（KitoPick）」必須か
+-- ★ どの Kito が「選択 UI（KitoPick）」必須か（underscoreで管理）
 local SELECT_KITO: {[string]: boolean} = {
-	["kito.tori_brighten"] = true,
-	["kito.mi_venom"]      = true,
-	["kito.usagi_ribbon"]  = true,
-	["kito.uma_seed"]      = true,
-	["kito.inu_two_chaff"] = true,
-	["kito.i_sake"]        = true,
-	-- ★ 追加（未）
-	["kito.hitsuji_prune"] = true,
-	-- 別名も保険で許容
-	["kito.inu_chaff2"]    = true,
+	["kito_tori"]    = true,
+	["kito_mi"]      = true,
+	["kito_usagi"]   = true,
+	["kito_uma"]     = true,
+	["kito_inu"]     = true,
+	["kito_i"]       = true,
+	["kito_hitsuji"] = true,
 }
-
 local function requiresKitoPick(canonical: string): boolean
 	return SELECT_KITO[canonical] == true
 end
@@ -418,8 +427,11 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 				snapShop(plr, s)
 
 				ensureRunId(s)
+
 				local started = false
 				if canonical ~= "" then
+					-- ★ ここで canonical は underscore（ShopDefs準拠）なので、
+					--    KitoPickView 側の ShopDefs 参照で「祈祷名＋説明」が正しく表示される。
 					started = KitoPickCore.startFor(plr, s, canonical)
 				else
 					LOG.warn("[BUY][WARN] KITO item without effect id: %s", tostring(found.id))

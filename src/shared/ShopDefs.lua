@@ -80,12 +80,13 @@ ShopDefs.POOLS = {
 			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
 			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
 		},
-		-- 戌：2枚カス化
+		-- 戌：カス化（※仕様変更：2枚→任意の1枚）
 		{
-			id = "kito_inu", name = "戌：2枚をカス札に変換", category = "kito", price = 3,
-			effect = "kito.inu_two_chaff",
-			descJP = "対象からランダムに最大2枚をカス札に変換（既カス／既タグは自動スキップ）。",
-			descEN = "Convert up to two targets to Chaff (skips already-chaff/tagged).",
+			id = "kito_inu", name = "戌：1枚をカス札に変換", category = "kito", price = 3,
+			-- ★ 正: 旧 "kito.inu_chaff"/"kito.inu_chaff2"/"kito.inu_two_chaff" を廃止し、正規IDに統一
+			effect = "kito_inu",
+			descJP = "ラン構成の対象札をカス札に変換（既にカス札なら不発）。",
+			descEN = "Convert one target in the run to Chaff (no effect if already chaff).",
 		},
 		-- 未：圧縮（山札から1枚削除）
 		{

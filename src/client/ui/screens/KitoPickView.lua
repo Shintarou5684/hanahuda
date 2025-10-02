@@ -6,6 +6,7 @@
 --     各候補に eligible / reason をマージし、不適格はグレーアウト＆クリック不可。
 --   - 送信前にもクライアント側で eligible を再確認（多重タップ/競合のガード）。
 -- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
+-- ★ P1-7: ShopDefs から祈祷名と説明を引いて上部に表示
 
 local Players    = game:GetService("Players")
 local RS         = game:GetService("ReplicatedStorage")
@@ -33,6 +34,38 @@ pcall(function()
 		ScreenRouter = require(UI_ROOT:WaitForChild("ScreenRouter"))
 	end
 end)
+
+-- ★ ShopDefs（祈祷の name/desc を引くため）
+local okDefs, ShopDefs = pcall(function()
+	return require(RS:WaitForChild("SharedModules"):WaitForChild("ShopDefs"))
+end)
+
+local function _normId(id)
+	if not id then return nil end
+	id = tostring(id)
+	return id, (id:gsub("%.", "_")), (id:gsub("_", "."))
+end
+
+local function findKitoByEffectId(effectId)
+	if not okDefs or not ShopDefs or not ShopDefs.POOLS or not ShopDefs.POOLS.kito then return nil end
+	local a,b,c = _normId(effectId)
+	for _, item in ipairs(ShopDefs.POOLS.kito) do
+		local eA,eB,eC = _normId(item.effect or item.id)
+		if eA == a or eA == b or eA == c or eB == a or eB == b or eB == c or eC == a or eC == b or eC == c then
+			return item
+		end
+		local iA,iB,iC = _normId(item.id)
+		if iA == a or iA == b or iA == c or iB == a or iB == b or iB == c or iC == a or iC == b or iC == c then
+			return item
+		end
+	end
+	return nil
+end
+
+local function pickDesc(item)
+	if not item then return nil end
+	return item.descJP or item.descEN or ""
+end
 
 -- ─────────────────────────────────────────────────────────────
 -- 内部状態
@@ -134,7 +167,19 @@ local function ensureGui()
 		Size                   = UDim2.new(1, 0, 0, 28),
 	}, panel)
 
-	-- 効果説明（可変長）
+	-- ★ 祈祷名（大きめ・太字）
+	local kitoName = make("KitoName","TextLabel",{
+		Text                   = "",
+		Font                   = Enum.Font.GothamBold,
+		TextSize               = 20,
+		TextColor3             = Color3.fromRGB(236,236,246),
+		BackgroundTransparency = 1,
+		Size                   = UDim2.new(1, 0, 0, 22),
+		Position               = UDim2.new(0, 0, 0, 28+2),
+		TextXAlignment         = Enum.TextXAlignment.Left,
+	}, panel)
+
+	-- 効果説明（可変長）— ShopDefs の desc を入れる
 	local effect = make("Effect","TextLabel",{
 		Text                   = "",
 		Font                   = Enum.Font.Gotham,
@@ -143,7 +188,7 @@ local function ensureGui()
 		TextColor3             = Color3.fromRGB(200,200,210),
 		BackgroundTransparency = 1,
 		Size                   = UDim2.new(1, 0, 0, 1), -- 高さは後で調整
-		Position               = UDim2.new(0, 0, 0, 28+6),
+		Position               = UDim2.new(0, 0, 0, 28+2 + 22 + 6), -- 祈祷名の分だけ下げる
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, panel)
 
@@ -223,6 +268,7 @@ local function ensureGui()
 	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, confirm)
 
 	-- 参照
+	refs.kitoName   = kitoName
 	refs.effect     = effect
 	refs.gridHolder = gridHolder
 	refs.scroll     = scroll
@@ -240,7 +286,8 @@ end
 local function relayoutByEffectHeight()
 	local t0 = os.clock()
 	if not (refs.effect and refs.gridHolder) then return end
-	local topY      = 28 + 6
+	local nameH     = (refs.kitoName and refs.kitoName.Text ~= "") and 22 or 0
+	local topY      = 28 + 2 + nameH + 6
 	local baseBelow = 84 -- フッタ確保高さ
 	local effect    = refs.effect
 
@@ -251,7 +298,7 @@ local function relayoutByEffectHeight()
 	local gridTop  = topY + needH + 8
 	refs.gridHolder.Position = UDim2.new(0, 0, 0, gridTop)
 	refs.gridHolder.Size     = UDim2.new(1, 0, 1, -gridTop - baseBelow)
-	LOG.debug("relayoutByEffectHeight: effectH=%d in %.2fms", needH, (os.clock()-t0)*1000)
+	LOG.debug("relayoutByEffectHeight: nameH=%d effectH=%d in %.2fms", nameH, needH, (os.clock()-t0)*1000)
 end
 
 -- 画像ソースを決定（rbxassetid:// またはそのまま文字列）
@@ -278,13 +325,13 @@ end
 -- 理由の日本語化（簡易）
 local function reasonToText(reason: string?): string?
 	local map = {
-		["already-applied"]   = "既に適用済みです",
-		["already-bright"]    = "すでに光札です",
-		["already-chaff"]     = "すでにカス札です",
+		["already-applied"]     = "既に適用済みです",
+		["already-bright"]      = "すでに光札です",
+		["already-chaff"]       = "すでにカス札です",
 		["month-has-no-bright"] = "この月に光札はありません",
-		["not-eligible"]      = "対象外です",
-		["same-target"]       = "同一カードは選べません",
-		["no-check"]          = "対象外（サーバ判定なし）",
+		["not-eligible"]        = "対象外です",
+		["same-target"]         = "同一カードは選べません",
+		["no-check"]            = "対象外（サーバ判定なし）",
 	}
 	return map[tostring(reason or "")] or nil
 end
@@ -482,8 +529,12 @@ local function rebuildList()
 	)
 end
 
--- 効果説明の決定
+-- 効果説明の決定（ShopDefs 優先）
 local function buildEffectText(payload)
+	local item = findKitoByEffectId(payload and (payload.effectId or payload.effect))
+	if item then
+		return pickDesc(item) or ""
+	end
 	if type(payload.effect) == "string" and payload.effect ~= "" then
 		return payload.effect
 	end
@@ -527,7 +578,15 @@ local function openPayload(payload)
 	current.selectedUid  = nil
 	current.busy         = false
 
-	-- 効果説明テキスト
+	-- ★ 祈祷名セット（ShopDefs から）
+	do
+		local item = findKitoByEffectId(current.effectId or payload.effect)
+		if refs.kitoName then
+			refs.kitoName.Text = item and tostring(item.name or "") or ""
+		end
+	end
+
+	-- 効果説明テキスト（desc を優先）
 	refs.effect.Text = buildEffectText(payload)
 	relayoutByEffectHeight()
 
