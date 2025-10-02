@@ -1,5 +1,5 @@
 -- ReplicatedStorage/SharedModules/ShopDefs.lua
--- v0.9.0 → v0.9.0-TAL S3: 護符カテゴリ（talisman）を追加／Dev3種を出現プールに登録
+-- v0.9.0 → v0.9.0-DOT S3: 「KITOはドット唯一の真実」へ統一（kito_* を廃止）
 -- 使い方：
 --  ・各カテゴリの出現率は WEIGHTS.<category> を調整（相対重み。合計1でなくてOK）
 --  ・商品は POOLS.<category> に配列で追加
@@ -27,75 +27,83 @@ ShopDefs.WEIGHTS = {
 
 -- 商品プール
 ShopDefs.POOLS = {
-	-- 祈祷
+	-- 祈祷（★DOT ONLY）
 	kito = {
-		-- ★ 追加：子（直前の祈祷を再発火）
+		-- 子：最後の祈祷を再発火（記録は更新しない）
 		{
-			id = "kito_ko", name = "子：前回の祈祷を再発火", category = "kito", price = 4, effect = "kito_ko",
+			id = "kito.ko", name = "子：前回の祈祷を再発火", category = "kito", price = 4, effect = "kito.ko",
 			descJP = "最後に成功した祈祷をもう一度発動（子自身の使用では記録は更新されません）。",
 			descEN = "Replay the last successful KITO once more (using Child itself doesn’t update the last).",
 		},
 
+		-- 丑：所持文2倍（上限あり）
 		{
-			id = "kito_ushi", name = "丑：所持文を2倍", category = "kito", price = 5, effect = "kito_ushi",
+			id = "kito.ushi", name = "丑：所持文を2倍", category = "kito", price = 5, effect = "kito.ushi",
 			descJP = "所持文を即時2倍（上限あり）。",
 			descEN = "Double your current mon immediately (capped).",
 		},
+
+		-- 寅：取り札の得点+1（恒常／スタック）
 		{
-			id = "kito_tora", name = "寅：取り札の得点+1", category = "kito", price = 4, effect = "kito_tora",
+			id = "kito.tora", name = "寅：取り札の得点+1", category = "kito", price = 4, effect = "kito.tora",
 			descJP = "以後、取り札の得点+1（恒常バフ／スタック可）。",
 			descEN = "Permanent: taken cards score +1 (stackable).",
 		},
+
+		-- 酉：1枚を光札に変換（UIで対象選択）
 		{
-			id = "kito_tori", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito_tori",
+			id = "kito.tori_brighten", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito.tori_brighten",
 			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
-			descEN = "Convert one non-bright in run config to Bright (or queue +1 for next season).",
+			descEN = "Convert one non-Bright in run config to Bright (or queue +1 for next season).",
 		},
-		-- ★ 追加：巳（Venom）
+
+		-- 巳：1枚をカスに変換（UIで対象選択）
 		{
-			id   = "kito_mi", name = "巳：1枚をカス札に変換", category = "kito", price = 2, effect = "kito_mi",
+			id   = "kito.mi_venom", name = "巳：1枚をカス札に変換", category = "kito", price = 2, effect = "kito.mi_venom",
 			descJP = "ラン構成の対象札をカス札に変換（適用時に少額の文を即時加算）。",
 			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
 		},
 
-		-- ========= ここから追加（ガイド v1.1 準拠）=========
-		-- 卯：短冊化
+		-- 卯：短冊化（UIで対象選択）
 		{
-			id = "kito_usagi", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
+			id = "kito.usagi_ribbon", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
 			effect = "kito.usagi_ribbon",
 			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
 			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
 		},
-		-- 亥：酒化（9月seed=盃へ）
+
+		-- 亥：酒化（UIで対象選択）
 		{
-			id = "kito_i", name = "亥：1枚を酒に変換", category = "kito", price = 5,
+			id = "kito.i_sake", name = "亥：1枚を酒に変換", category = "kito", price = 5,
 			effect = "kito.i_sake",
 			descJP = "対象札を9月の盃（タネ）に変換します。",
 			descEN = "Convert target to September's Seed (Sake).",
 		},
-		-- 午：タネ化
+
+		-- 午：タネ化（UIで対象選択）
 		{
-			id = "kito_uma", name = "午：1枚をタネに変換", category = "kito", price = 4,
+			id = "kito.uma_seed", name = "午：1枚をタネに変換", category = "kito", price = 4,
 			effect = "kito.uma_seed",
 			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
 			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
 		},
-		-- 戌：カス化（※仕様変更：2枚→任意の1枚）
+
+		-- 戌：カス化（UIで対象選択）
 		{
-			id = "kito_inu", name = "戌：1枚をカス札に変換", category = "kito", price = 3,
-			-- ★ 正: 旧 "kito.inu_chaff"/"kito.inu_chaff2"/"kito.inu_two_chaff" を廃止し、正規IDに統一
-			effect = "kito_inu",
+			id = "kito.inu_chaff2", name = "戌：1枚をカス札に変換", category = "kito", price = 3,
+			-- 旧 "kito.inu_chaff" / "kito.inu_two_chaff" を廃止し、正規IDに統一
+			effect = "kito.inu_chaff2",
 			descJP = "ラン構成の対象札をカス札に変換（既にカス札なら不発）。",
 			descEN = "Convert one target in the run to Chaff (no effect if already chaff).",
 		},
-		-- 未：圧縮（山札から1枚削除）
+
+		-- 未：圧縮（山札から1枚削除、UIで対象選択）
 		{
-			id = "kito_hitsuji", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
-			effect = "kito.hitsuji_prune", -- レガシー別名: "kito_hitsuji" も可
+			id = "kito.hitsuji_prune", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
+			effect = "kito.hitsuji_prune",
 			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
 			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
 		},
-		-- ========= 追加ここまで =========
 	},
 
 	-- 祭事

@@ -1,7 +1,8 @@
 -- src/server/ShopEffects/Kito.lua
--- v0.9.14 Kito（祈祷）
+-- v0.9.15 Kito（祈祷）— DOT ONLY（kito.* を唯一の真実として運用）
 --  - 子(ko)UI先行起動のFIXを維持（v0.9.13）
---  - ★追加: KitoPickServerから前回祈祷を記録できる公開関数 Kito.recordFromPick(state, effectId, payload, meta)
+--  - Kito.recordFromPick(state, effectId, payload, meta) を維持
+--  - ★破壊的変更: アンダーバーID（kito_）の受理/変換を全廃。渡されてもエラーを返す。
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -12,6 +13,9 @@ local Config  = RS:WaitForChild("Config")
 local EffectsRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("EffectsRegistry"))
 local Balance        = require(Config:WaitForChild("Balance"))
 
+--========================
+-- KitoPickCore lazy-load
+--========================
 local KitoPickCore = nil
 local function lazyGetKitoPickCore()
 	if not KitoPickCore then
@@ -20,14 +24,18 @@ local function lazyGetKitoPickCore()
 	return KitoPickCore
 end
 
+--========================
+-- Module
+--========================
 local Kito = {}
 
+-- ★ドットIDを唯一の真実に統一
 Kito.ID = {
-	USHI = "kito_ushi",
-	TORA = "kito_tora",
-	TORI = "kito_tori",
-	MI   = "kito_mi",
-	KO   = "kito_ko",
+	USHI = "kito.ushi",
+	TORA = "kito.tora",
+	TORI = "kito.tori",
+	MI   = "kito.mi",
+	KO   = "kito.ko",
 }
 
 local DEFAULTS = { CAP_MON = 999999 }
@@ -40,6 +48,7 @@ local function isArray(t) if typeof(t)~="table" then return false end for i=1,#t
 local function isNonEmptyArray(t) return isArray(t) and #t>0 end
 local function normalizeArrayOrNil(t) if isNonEmptyArray(t) then return t end return nil end
 
+-- preferKind は当面 "hikari" 固定（将来の拡張に備え関数化）
 local function normPreferKind(s: string?) if s=="bright" then return "hikari" end return "hikari" end
 
 local function resolveRunIdFrom(anyTable)
@@ -85,16 +94,11 @@ local function recordLastKito(state:any, effectId:string, payload:any?, meta:any
 	}
 end
 
-local function normalizeDeprecatedId(eid:string?): (string, boolean)
-	if typeof(eid) ~= "string" then return tostring(eid), false end
-	if eid:sub(1,5) == "kito_" then
-		local normalized = "kito." .. eid:sub(6)
-		return normalized, true
-	end
-	return eid, false
-end
+--========================
+-- 内蔵エフェクト
+--========================
 
--- 丑
+-- 丑：所持文2倍（上限あり）
 local function effect_ushi(state, ctx)
 	local cap    = (ctx and ctx.capMon) or DEFAULTS.CAP_MON
 	local before = tonumber(state.mon or 0) or 0
@@ -104,7 +108,7 @@ local function effect_ushi(state, ctx)
 	return true, msg(("丑：所持文2倍（%d → %d, 上限=%d）"):format(before, after, cap))
 end
 
--- 寅
+-- 寅：取り札の得点+1（累積）
 local function effect_tora(state, ctx)
 	local b = ensureBonus(state); b.takenPointPlus = (b.takenPointPlus or 0) + 1
 	local k = ensureKito(state);  k.tora = (tonumber(k.tora) or 0) + 1
@@ -112,7 +116,7 @@ local function effect_tora(state, ctx)
 	return true, msg(("寅：取り札の得点+1（累計+%d / Lv=%d）"):format(b.takenPointPlus, k.tora))
 end
 
--- 共通: Effects 経由適用
+-- Deck/Effects 経由の共通適用（UI起動にも対応）
 local function apply_via_effects(effectModuleId:string, labelJP:string, state, ctx, preferKind:string?)
 	local runId = resolveRunId(state, ctx)
 	if runId == nil then
@@ -158,7 +162,7 @@ local function apply_via_effects(effectModuleId:string, labelJP:string, state, c
 	end
 end
 
--- 酉 / 巳
+-- 酉 / 巳（Deck/Effectsを呼ぶタイプ）
 local function effect_tori(state, ctx)
 	local preferKind = normPreferKind(ctx and ctx.preferKind)
 	return apply_via_effects("kito.tori_brighten", "酉", state, ctx, preferKind)
@@ -206,20 +210,23 @@ local function effect_ko(state, ctx)
 		end
 	end
 
-	-- 内蔵
+	-- 内蔵（dotのみ）
 	if id == Kito.ID.TORA or id == "kito.tora" then return effect_tora(state, ctx)
 	elseif id == Kito.ID.USHI or id == "kito.ushi" then return effect_ushi(state, ctx)
 	elseif id == Kito.ID.MI   or id == "kito.mi"   then return effect_mi(state, ctx)
 	elseif id == Kito.ID.TORI or id == "kito.tori" then return effect_tori(state, ctx) end
 
-	-- Deck/Effects系
-	if id:sub(1,5) == "kito." then
+	-- Deck/Effects系（dotのみ）
+	if typeof(id)=="string" and id:sub(1,5) == "kito." then
 		return apply_via_effects(id, "子", state, ctx, ctx.preferKind)
 	end
 
 	return false, ("子：未知の前回ID: %s"):format(tostring(id))
 end
 
+--========================
+-- ディスパッチ（dotのみ）
+--========================
 local DISPATCH = {
 	[Kito.ID.USHI] = effect_ushi,
 	[Kito.ID.TORA] = effect_tora,
@@ -234,48 +241,59 @@ local DISPATCH = {
 	["kito.ko"]    = effect_ko,
 }
 
+--========================
+-- ブリッジ（同義dot→モジュールID）※アンダーバーKEYは廃止
+--========================
 local KITO_BRIDGE_MAP = {
-	["kito_usagi"]         = { label = "卯", moduleId = "kito.usagi_ribbon" },
 	["kito.usagi"]         = { label = "卯", moduleId = "kito.usagi_ribbon" },
 	["kito.usagi_ribbon"]  = { label = "卯", moduleId = "kito.usagi_ribbon" },
 
-	["kito_uma"]           = { label = "午", moduleId = "kito.uma_seed" },
 	["kito.uma"]           = { label = "午", moduleId = "kito.uma_seed" },
 	["kito.uma_seed"]      = { label = "午", moduleId = "kito.uma_seed" },
 
-	["kito_inu"]           = { label = "戌", moduleId = "kito.inu_chaff2" },
 	["kito.inu"]           = { label = "戌", moduleId = "kito.inu_chaff2" },
 	["kito.inu_chaff2"]    = { label = "戌", moduleId = "kito.inu_chaff2" },
 	["kito.inu_two_chaff"] = { label = "戌", moduleId = "kito.inu_chaff2" },
 
-	["kito_i"]             = { label = "亥", moduleId = "kito.i_sake" },
 	["kito.i"]             = { label = "亥", moduleId = "kito.i_sake" },
 	["kito.i_sake"]        = { label = "亥", moduleId = "kito.i_sake" },
 
-	["kito_hitsuji"]       = { label = "未", moduleId = "kito.hitsuji_prune" },
 	["kito.hitsuji"]       = { label = "未", moduleId = "kito.hitsuji_prune" },
 	["kito.hitsuji_prune"] = { label = "未", moduleId = "kito.hitsuji_prune" },
 }
 
+--========================
+-- 公開 I/F
+--========================
 function Kito.apply(effectId, state, ctx)
 	if typeof(state) ~= "table" then return false, "state が無効です" end
-	local key = tostring(effectId or "")
-	key = select(1, normalizeDeprecatedId(key))
 
-	local fn = DISPATCH[key]
-	if not fn then
-		local br = KITO_BRIDGE_MAP[key]
-		if br then
-			return apply_via_effects(br.moduleId, br.label, state, ctx, nil)
-		end
-		if typeof(key)=="string" and key:sub(1,5)=="kito." then
-			return apply_via_effects(key, "祈祷", state, ctx, nil)
-		end
-		return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
+	local key = tostring(effectId or "")
+
+	-- ★明示拒否：アンダーバーIDは非対応（変換しない）
+	if typeof(key)=="string" and key:sub(1,5) == "kito_" then
+		return false, ("不明な祈祷ID（kito_ は非対応です。kito. を使用してください）: %s"):format(key)
 	end
 
-	local ok, message = fn(state, ctx)
-	return ok == true, tostring(message or "")
+	-- 内蔵ディスパッチ（dot）
+	local fn = DISPATCH[key]
+	if fn then
+		local ok, message = fn(state, ctx)
+		return ok == true, tostring(message or "")
+	end
+
+	-- ブリッジ（dot → モジュールID）
+	local br = KITO_BRIDGE_MAP[key]
+	if br then
+		return apply_via_effects(br.moduleId, br.label, state, ctx, nil)
+	end
+
+	-- Deck/Effects 登録IDへ直通（dotのみ）
+	if typeof(key)=="string" and key:sub(1,5)=="kito." then
+		return apply_via_effects(key, "祈祷", state, ctx, nil)
+	end
+
+	return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
 end
 
 -- ★公開：KitoPickServerから成功時に呼ぶ“記録フック”

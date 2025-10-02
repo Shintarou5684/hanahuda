@@ -43,7 +43,7 @@ function P3.applyMatsuriAndKito(roles: any, mon: number, pts: number, state: any
 		-- 干支：寅（Ptsに +1/Lv）
 		do
 			local kitoLevels = (RunDeckUtil.getKitoLevels and RunDeckUtil.getKitoLevels(state)) or state.kito or {}
-			local toraLv = tonumber(kitoLevels.tora or kitoLevels["kito_tora"] or 0) or 0
+			local toraLv = tonumber(kitoLevels.tora or kitoLevels["kito.tora"] or 0) or 0
 			if toraLv > 0 then pts += toraLv end
 		end
 	end

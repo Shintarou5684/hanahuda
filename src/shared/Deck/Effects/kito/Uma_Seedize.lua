@@ -1,12 +1,13 @@
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Uma_Seedize.lua
--- Uma (KITO): convert one target card to "seed" (UID-first)
---  - Effect IDs: "kito.uma_seed" (primary), "kito_uma" (legacy alias)
+-- Uma (KITO / DOT-ONLY): convert one target card to "seed" (UID-first)
+--  - Effect ID: "kito.uma_seed"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "seed", do nothing (meta returned)
 --  - Diagnostic logs (scope: Effects.kito.uma_seed)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -25,17 +26,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler for both effect IDs
+	-- Shared handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat (code選択だけ)
 		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
 
-		local tagMark     = tostring(payload.tag or "eff:kito_uma_seed")
+		-- ★ DOT-ONLY タグ表記
+		local tagMark     = tostring(payload.tag or "eff:kito.uma_seed")
 		local preferKind  = "seed"
 
 		local runId       = ctx.runId
@@ -296,14 +298,14 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- canApply（UIグレーアウト等に利用）
+	-- canApply（UIグレーアウト等に利用） DOT-ONLY
 	--  - 条件: まだ "seed" でない ＆ 対象月に seed 定義がある ＆ 既タグなし
 	--─────────────────────────────────────────────────────
-	local function registerCanApply(id)
+	local function registerCanApplyDot(id)
 		Effects.registerCanApply(id, function(card, ctx2)
 			if type(card) ~= "table" then return false, "not-eligible" end
 			local tags = (type(card.tags)=="table") and card.tags or {}
-			for _,t in ipairs(tags) do if t=="eff:kito_uma_seed" then return false, "already-applied" end end
+			for _,t in ipairs(tags) do if t=="eff:kito.uma_seed" then return false, "already-applied" end end
 			if tostring(card.kind) == "seed" then return false, "already-seed" end
 
 			local function monthFrom(c)
@@ -330,10 +332,7 @@ return function(Effects)
 		end)
 	end
 
-	-- Primary ID
+	-- ★ DOT-ONLY 登録
 	Effects.register("kito.uma_seed", handler)
-	registerCanApply("kito.uma_seed")
-	-- Legacy alias
-	Effects.register("kito_uma", handler)
-	registerCanApply("kito_uma")
+	registerCanApplyDot("kito.uma_seed")
 end

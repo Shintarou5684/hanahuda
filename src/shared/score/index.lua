@@ -109,7 +109,7 @@ function M.getFestivalsForYaku(yakuId)
 end
 
 function M.getKitoPts(effectId, level)
-	if effectId == "tora" or effectId == "kito_tora" then
+	if effectId == "tora" or effectId == "kito.tora" then
 		return tonumber(level or 0) or 0
 	end
 	return 0

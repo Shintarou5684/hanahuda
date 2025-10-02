@@ -13,6 +13,9 @@
 -- 追加: canApply 登録の標準化
 --   - Effects.registerCanApply(id, fn) をビルダーからも呼べるようプロキシを提供
 --   - 本ファイルでも酉/巳の canApply を中央登録する（UIグレーアウト/サーバ最終判定の唯一の正）
+--
+-- ★ ドット化ポリシー（KITO専用）:
+--   - kito 系の登録キーは「kito.*」のみを受け付ける（kito_ やレガシー別名は登録しない）
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -79,12 +82,43 @@ local function pickId(modInst: Instance, payload:any)
 	return modInst.Name
 end
 
+-- ★ KITO の登録キーの妥当性チェック（ドット唯一）
+local function isKitoDot(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito."
+end
+local function isKitoUnderscore(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito_"
+end
+local function isKitoLike(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,4) == "kito"
+end
+
+local function assertKitoDotOrReject(id:string, modFullName:string): boolean
+	if isKitoUnderscore(id) then
+		LOG.warn("[DOT-ONLY] reject underscore id: %s (from %s)", id, modFullName)
+		return false
+	end
+	-- 「kito なのにドットでもアンダーバーでもない」（例: "Tori_Brighten"）は弾く
+	if isKitoLike(id) and (not isKitoDot(id)) then
+		LOG.warn("[DOT-ONLY] reject non-dot kito id: %s (from %s)", id, modFullName)
+		return false
+	end
+	return true
+end
+
 -- Effects.register / registerCanApply をプロキシして捕捉し、本体 Registry に中継
 local function buildEffectsProxy(modInst: Instance)
 	local captured = {}  -- { {id=id, fn=fn}, ... } ※register だけ捕捉（canApply は捕捉しなくてもOK）
 	local Effects = {}
 
 	function Effects.register(id: string, fn: any)
+		-- ★ KITO はドットのみ受理
+		if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+			return
+		end
 		local ok, err = pcall(function()
 			Registry.register(id, fn)
 		end)
@@ -99,6 +133,10 @@ local function buildEffectsProxy(modInst: Instance)
 
 	-- ★ canApply のプロキシ（ビルダーがここから登録できる）
 	function Effects.registerCanApply(id: string, fn: any)
+		-- canApply も KITO の場合はドットのみ受理
+		if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+			return
+		end
 		local ok, err = pcall(function()
 			Registry.registerCanApply(id, fn)
 		end)
@@ -142,6 +180,10 @@ local function registerAsTable(modInst: Instance, payload: table): boolean
 		LOG.warn("skip (no id) : %s", modInst:GetFullName())
 		return false
 	end
+	-- ★ KITO はドットのみ受理
+	if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+		return false
+	end
 	local ok, err = pcall(function()
 		Registry.register(id, fn)
 	end)
@@ -159,6 +201,10 @@ local function registerAsHandler(modInst: Instance, handlerFn: any): boolean
 	local id = pickId(modInst, fakePayload) -- _id が無ければファイル名
 	if type(id) ~= "string" or #id == 0 then
 		id = modInst.Name
+	end
+	-- ★ KITO はドットのみ受理（モジュール名由来のレガシー別名は登録しない）
+	if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+		return false
 	end
 	local ok, err = pcall(function()
 		Registry.register(id, handlerFn)
@@ -219,7 +265,7 @@ local function scanAndRegister(root: Instance)
 end
 
 --====================
--- canApply（酉/巳）の中央登録
+-- canApply（酉/巳）の中央登録（★DOT ONLY）
 --====================
 local function hasTag(card:any, mark:string): boolean
 	if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
@@ -257,9 +303,8 @@ end
 
 local function registerBuiltinCanApply()
 	-- 酉（Brighten）
-	local ToriIdPrimary = "kito.tori_brighten"
-	local ToriIdLegacy  = "Tori_Brighten"
-	local toriTag       = "eff:kito_tori_bright"
+	local ToriId = "kito.tori_brighten"
+	local toriTag = "eff:kito.tori_brighten" -- ★ DOT ONLY: Kito.apply_via_effects 由来の tag 形式に合わせる
 
 	local function toriCan(card:any, _ctx:any)
 		if typeof(card) ~= "table" then return false, "not-eligible" end
@@ -277,8 +322,8 @@ local function registerBuiltinCanApply()
 	end
 
 	-- 巳（Venom）
-	local MiIdPrimary = "kito.mi_venom"
-	local miTag       = "eff:kito_mi_venom"
+	local MiId  = "kito.mi_venom"
+	local miTag = "eff:kito.mi_venom" -- ★ DOT ONLY
 
 	local function miCan(card:any, _ctx:any)
 		if typeof(card) ~= "table" then return false, "not-eligible" end
@@ -293,21 +338,20 @@ local function registerBuiltinCanApply()
 
 	-- 登録（存在チェックは EffectsRegistry 側で持つためそのまま上書きOK）
 	local ok1, err1 = pcall(function()
-		Registry.registerCanApply(ToriIdPrimary, toriCan)
-		Registry.registerCanApply(ToriIdLegacy,  toriCan) -- 旧別名
+		Registry.registerCanApply(ToriId, toriCan)
 	end)
 	if not ok1 then
 		LOG.warn("registerCanApply(tori) failed: %s", tostring(err1))
 	end
 
 	local ok2, err2 = pcall(function()
-		Registry.registerCanApply(MiIdPrimary, miCan)
+		Registry.registerCanApply(MiId, miCan)
 	end)
 	if not ok2 then
 		LOG.warn("registerCanApply(mi) failed: %s", tostring(err2))
 	end
 
-	LOG.info("builtin canApply registered: tori + mi")
+	LOG.info("builtin canApply registered (dot-only): tori + mi")
 end
 
 --====================
@@ -325,6 +369,6 @@ end
 -- canApply 中央登録を最後に実行
 registerBuiltinCanApply()
 
-LOG.info("EffectsRegistry initialized: %d module(s) registered", total)
+LOG.info("EffectsRegistry initialized (dot-only kito): %d module(s) registered", total)
 
 return true

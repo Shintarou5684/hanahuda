@@ -1,6 +1,6 @@
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/I_Sakeify.lua
--- I (KITO): "sakeify" — convert one target card to September's seed (杯) by month+kind
---  - Effect IDs: "kito.i_sake" (primary), "kito_i" (legacy alias)
+-- I (KITO / DOT-ONLY): "sakeify" — convert one target card to September's seed (杯) by month+kind
+--  - Effect ID: "kito.i_sake"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
@@ -8,6 +8,7 @@
 --  - No month-kind eligibility check needed: we force month=9 then kind=seed
 --  - Idempotent: if already month=9 & kind=seed, or already tagged, no change
 --  - Diagnostic logs (scope: Effects.kito.i_sake)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -26,17 +27,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler for both effect IDs
+	-- Handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
-		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- code指定のみ互換
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- 互換
 
-		local tagMark     = tostring(payload.tag or "eff:kito_i_sake")
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark     = tostring(payload.tag or "eff:kito.i_sake")
 		local runId       = ctx.runId
 		local rng         = ctx.rng or Random.new()
 
@@ -57,16 +59,13 @@ return function(Effects)
 			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
 		)
 
-		--─────────────────────────────────────────────────────
-		-- helpers
-		--─────────────────────────────────────────────────────
+		--──────────────── helpers ────────────────
 		local function listToSet(list)
 			if typeof(list) ~= "table" then return nil end
 			local s = {}
 			for _, v in ipairs(list) do s[v] = true end
 			return s
 		end
-
 		local uidSet = listToSet(uids) or {}
 		if uidScalar then uidSet[uidScalar] = true end
 		local poolUidSet  = listToSet(poolUids)
@@ -262,15 +261,14 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- canApply（UIグレーアウト等に利用）
+	-- canApply（UIグレーアウト等に利用） DOT-ONLY
 	--  - 条件: 未タグ ＆ まだ「9月 seed（盃）」でない
-	--  - 備考: 本効果は月変更前提のため、基本 true（既盃/既タグのみ false）
 	--─────────────────────────────────────────────────────
-	local function registerCanApply(id)
+	local function registerCanApplyDot(id)
 		Effects.registerCanApply(id, function(card, _ctx2)
 			if type(card) ~= "table" then return false, "not-eligible" end
 			local tags = (type(card.tags)=="table") and card.tags or {}
-			for _,t in ipairs(tags) do if t=="eff:kito_i_sake" then return false, "already-applied" end end
+			for _,t in ipairs(tags) do if t=="eff:kito.i_sake" then return false, "already-applied" end end
 			if (tonumber(card.month)==9 and tostring(card.kind)=="seed") then
 				return false, "already-sake"
 			end
@@ -278,10 +276,7 @@ return function(Effects)
 		end)
 	end
 
-	-- Primary ID
+	-- ★ DOT-ONLY 登録（レガシー別名は登録しない）
 	Effects.register("kito.i_sake", handler)
-	registerCanApply("kito.i_sake")
-	-- Legacy alias
-	Effects.register("kito_i", handler)
-	registerCanApply("kito_i")
+	registerCanApplyDot("kito.i_sake")
 end

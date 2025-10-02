@@ -1,6 +1,6 @@
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Hitsuji_Prune.lua
--- Sheep (KITO): prune one target card from the deck (UID-first)
---  - Effect IDs: "kito.hitsuji_prune" (primary), "kito_hitsuji" (legacy alias)
+-- Sheep (KITO / DOT-ONLY): prune one target card from the deck (UID-first)
+--  - Effect ID（唯一の真実）: "kito.hitsuji_prune"
 --  - Target selection order: payload.uid / payload.uids / payload.poolUids / payload.codes / payload.poolCodes
 --  - DeckStore (v3) is immutable; use DeckStore.transact to return a new store
 --  - No random fallback removal if no target is provided (safety-first)
@@ -33,7 +33,9 @@ return function(Effects)
 		local poolUids  = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
 		local codes     = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
 		local poolCodes = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
-		local tagMark   = tostring(payload.tag or "eff:kito_hitsuji_prune")
+
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark   = tostring(payload.tag or "eff:kito.hitsuji_prune")
 		local runId     = ctx.runId
 
 		local function head5(list)
@@ -164,9 +166,7 @@ return function(Effects)
 		end)
 	end
 
-	-- 登録（本体＋canApply）
+	-- ★ DOT-ONLY 登録（レガシー別名は登録しない）
 	Effects.register("kito.hitsuji_prune", handler)
-	Effects.register("kito_hitsuji",      handler) -- legacy
 	Effects.registerCanApply("kito.hitsuji_prune", canApply)
-	Effects.registerCanApply("kito_hitsuji",      canApply)
 end

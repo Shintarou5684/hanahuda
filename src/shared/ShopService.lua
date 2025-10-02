@@ -1,19 +1,9 @@
 -- ServerScriptService/ShopService.lua
--- v0.9.2e 屋台サービス（SIMPLE+NONCE + Talisman payload）
--- 変更点（e）:
---  - ★ ShopEffects.apply へ必ず ctx.player を付与（UI系効果の必須引数漏れを修正） ※d継承
---  - ★ KITO の UI 経路を拡張：酉/巳/卯/午/戌/亥 に加えて **未** も KitoPick に統一
---  - ★ toCanonicalEffectId を拡張（kito_* / Module名 / 旧名 を **ShopDefs 準拠の underscore 形式**へ正規化）
---
--- 既存（c/d）からの仕様は従来通り。
---  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
---  - 在庫は満杯でも必ず強制再生成
---  - SaveService のスナップ対応は従来どおり（存在しなくても続行）
---  - ShopEffects ローダー復活済み
---  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
---  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（state.run.talisman をそのまま搭載）
---               ※補完/推測は一切しない（真実は TalismanService/StateHub が管理）
---  - ★ KITO（酉/巳 など）を UI 経路に統一（正規effectIdへ正規化して KitoPickCore へ移譲）
+-- v0.9.4 (DOT-ONLY) 屋台サービス
+-- 変更点（v0.9.4）:
+--  - ★ KITO は“ドット唯一の真実”。購入前プリフライトで 'kito_' を明示拒否し、課金/在庫変更をしない
+--  - ★ UI経路・直適用ともに 'kito.*' 以外は流さない（found.category=="kito" の場合）
+--  - v0.9.3 の仕様を継承（toCanonicalEffectId 廃止、SELECT_KITO(underscore) 撤去、ctx.player 付与）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -28,7 +18,7 @@ local ShopOpen   = Remotes:WaitForChild("ShopOpen")
 local BuyItem    = Remotes:WaitForChild("BuyItem")
 local ShopReroll = Remotes:WaitForChild("ShopReroll")
 
--- ★ UI分岐用の Balance と、候補通知 Remote（RemotesInit で生成済みを待つ）
+-- ★ UI分岐用の Balance と ShopDefs
 local Balance       = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
@@ -116,68 +106,44 @@ local function ensureRunId(state:any): string
 end
 
 --========================
--- KITO: ID 正規化 & ラベル（ShopDefs=underscoreに合わせる）
+-- KITO: ラベル（DOT ONLY）
 --========================
-local function toCanonicalEffectId(eid: string?): string
-	if type(eid) ~= "string" or eid == "" then return "" end
-
-	-- 酉
-	if eid == "kito_tori" or eid == "Tori_Brighten" or eid == "kito.tori_brighten" then
-		return "kito_tori"
-	end
-	-- 巳
-	if eid == "kito_mi" or eid == "Mi_Venom" or eid == "kito.mi_venom" then
-		return "kito_mi"
-	end
-	-- 卯
-	if eid == "kito_usagi" or eid == "Usagi_Ribbonize" or eid == "kito.usagi_ribbon" then
-		return "kito_usagi"
-	end
-	-- 午
-	if eid == "kito_uma" or eid == "Uma_Seedize" or eid == "kito.uma_seed" then
-		return "kito_uma"
-	end
-	-- 戌（旧名群をすべて集約）
-	if eid == "kito_inu" or eid == "Inu_Chaff2" or eid == "kito.inu_chaff2" or eid == "kito.inu_two_chaff" or eid == "kito.inu_chaff" then
-		return "kito_inu"
-	end
-	-- 亥
-	if eid == "kito_i" or eid == "I_Sakeify" or eid == "kito.i_sake" then
-		return "kito_i"
-	end
-	-- 未
-	if eid == "kito_hitsuji" or eid == "Hitsuji_Prune" or eid == "kito.hitsuji_prune" then
-		return "kito_hitsuji"
-	end
-
-	-- すでに underscore か、その他はそのまま返す
-	return eid
-end
-
-local function kitoLabel(eid: string?): string
-	local id = toCanonicalEffectId(eid)
-	if id == "kito_tori"    then return "酉" end
-	if id == "kito_mi"      then return "巳" end
-	if id == "kito_usagi"   then return "卯" end
-	if id == "kito_uma"     then return "午" end
-	if id == "kito_inu"     then return "戌" end
-	if id == "kito_i"       then return "亥" end
-	if id == "kito_hitsuji" then return "未" end
+-- effectId が 'kito.*' のモジュール名である前提
+local function kitoLabelDot(dotId: string?): string
+	local id = tostring(dotId or "")
+	if id:sub(1,5) ~= "kito." then return "KITO" end
+	if id:find("tori",   1, true) then return "酉" end
+	if id:find("mi",     1, true) then return "巳" end
+	if id:find("usagi",  1, true) then return "卯" end
+	if id:find("uma",    1, true) then return "午" end
+	if id:find("inu",    1, true) then return "戌" end
+	if id:find("i_sake", 1, true) or id:match("^kito%.i$") then return "亥" end
+	if id:find("hitsuji",1, true) then return "未" end
+	if id:match("^kito%.ushi$") then return "丑" end
+	if id:match("^kito%.tora$") then return "寅" end
+	if id:match("^kito%.ko$")   then return "子" end
 	return "KITO"
 end
 
--- ★ どの Kito が「選択 UI（KitoPick）」必須か（underscoreで管理）
-local SELECT_KITO: {[string]: boolean} = {
-	["kito_tori"]    = true,
-	["kito_mi"]      = true,
-	["kito_usagi"]   = true,
-	["kito_uma"]     = true,
-	["kito_inu"]     = true,
-	["kito_i"]       = true,
-	["kito_hitsuji"] = true,
+-- ★ どの Kito が「選択 UI（KitoPick）」必須か（DOT ONLY）
+--   Module ID（dot）をそのまま key にする。
+local SELECT_KITO_DOT: {[string]: boolean} = {
+	["kito.tori_brighten"] = true,
+	["kito.mi_venom"]      = true,
+	["kito.usagi_ribbon"]  = true,
+	["kito.uma_seed"]      = true,
+	["kito.inu_chaff2"]    = true,
+	["kito.i_sake"]        = true,
+	["kito.hitsuji_prune"] = true,
+	-- 省略形（将来のShopDefsが 'kito.usagi' などを使う可能性に備える）
+	["kito.usagi"]         = true,
+	["kito.uma"]           = true,
+	["kito.inu"]           = true,
+	["kito.i"]             = true,
+	["kito.hitsuji"]       = true,
 }
-local function requiresKitoPick(canonical: string): boolean
-	return SELECT_KITO[canonical] == true
+local function requiresKitoPickDot(effectId: string): boolean
+	return SELECT_KITO_DOT[effectId] == true
 end
 
 --========================
@@ -339,7 +305,7 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 	)
 
 	-- 入場スナップ
-	snapShop(plr, s)
+	pcall(function() snapShop(plr, s) end)
 
 	ShopOpen:FireClient(plr, {
 		season       = s.season,
@@ -370,12 +336,42 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 	})
 end
 
+--========================
+-- KITO: ドット前提バリデーション
+--========================
+local function validateKitoEffectIdOrExplain(plr: Player, s:any, found:any): (boolean, string)
+	-- 'kito' カテゴリの商品は effect/id が "kito." で始まることを必須にする
+	local effId = tostring(found and (found.effect or found.id) or "")
+	if effId == "" then
+		return false, "KITO：effectId が設定されていません（定義ミス）"
+	end
+	if effId:sub(1,5) == "kito." then
+		return true, effId
+	end
+	if effId:sub(1,5) == "kito_" then
+		-- ドット唯一ポリシー：ここで明示拒否（課金も在庫変更もしない）
+		local label = "KITO"
+		local why   = "kito_ は非対応です。kito.* を使用してください"
+		local msg   = ("%s：%s（定義ID=%s）"):format(label, why, effId)
+		LOG.warn("[BUY][DOT-ONLY][REJECT] %s", msg)
+		openFor(plr, s, { notice=("購入できませんでした：%s"):format(msg) })
+		return false, ""
+	end
+	-- kito. でも kito_ でもない場合
+	local msg = ("KITO：不明なeffectId形式（%s）"):format(effId)
+	LOG.warn("[BUY][DOT-ONLY][REJECT] %s", msg)
+	openFor(plr, s, { notice=("購入できませんでした：%s"):format(msg) })
+	return false, ""
+end
+
 function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 	Service._getState  = getStateFn
 	Service._pushState = pushStateFn
 	LOG.info("init OK")
 
+	--========================
 	-- 購入
+	--========================
 	BuyItem.OnServerEvent:Connect(function(plr: Player, itemId: string)
 		local s = Service._getState and Service._getState(plr)
 		if not s then return end
@@ -399,13 +395,23 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			LOG.warn("[BUY][ERR] not found: %s", tostring(itemId))
 			return openFor(plr, s, { notice="不明な商品です" })
 		end
+
+		-- ===== KITO の DOT 前提を“課金前に”チェック =====
+		if found.category == "kito" then
+			local ok, effIdOrMsg = validateKitoEffectIdOrExplain(plr, s, found)
+			if not ok then
+				return -- 課金・在庫変更なしで終了（openFor 内で案内済み）
+			end
+			-- effIdOrMsg はここでは effId（kito.*）として扱える
+		end
+
 		local price = tonumber(found.price) or 0
 		if (s.mon or 0) < price then
 			LOG.warn("[BUY][ERR] mon short: need=%d have=%d", price, tonumber(s.mon or 0))
 			return openFor(plr, s, { notice=("文が足りません（必要:%d）"):format(price) })
 		end
 
-		-- ★ 安全代入で請求
+		-- ★ 安全代入で請求（DOTチェック通過後）
 		s.mon = (s.mon or 0) - price
 
 		-- ===== before effect =====
@@ -415,40 +421,40 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 			tostring(found.effect or found.id)
 		)
 
-		-- ★ UI 分岐：KITO は「選択が必要なもの」を KitoPick に送る
+		-- ======== KITO: UI 経路（DOT ONLY） ========
 		if Balance.KITO_UI_ENABLED == true and (found.category == "kito") then
-			local canonical = toCanonicalEffectId(found.effect or found.id)
-			if requiresKitoPick(canonical) then
+			local effId = tostring(found.effect or found.id or "")
+			-- ここまで来た時点で effId は kito.* のはず（validate 済み）
+			if effId:sub(1,5) == "kito." and requiresKitoPickDot(effId) then
 				-- 在庫を減らして保存（購入は完了）
 				if s.shop and s.shop.stock and foundIndex then
 					table.remove(s.shop.stock, foundIndex)
 				end
 				if Service._pushState then Service._pushState(plr) end
-				snapShop(plr, s)
+				pcall(function() snapShop(plr, s) end)
 
 				ensureRunId(s)
 
 				local started = false
-				if canonical ~= "" then
-					-- ★ ここで canonical は underscore（ShopDefs準拠）なので、
-					--    KitoPickView 側の ShopDefs 参照で「祈祷名＋説明」が正しく表示される。
-					started = KitoPickCore.startFor(plr, s, canonical)
+				if effId ~= "" then
+					-- ★ DOT モジュールIDをそのまま渡す
+					started = KitoPickCore.startFor(plr, s, effId)
 				else
 					LOG.warn("[BUY][WARN] KITO item without effect id: %s", tostring(found.id))
 				end
 
-				local prefix = kitoLabel(canonical)
+				local prefix = kitoLabelDot(effId)
 				local uiMsg = started and (prefix.."：対象を選んでください（候補を表示中…）")
 									or  (prefix.."：選択候補が用意できませんでした")
 
 				LOG.info("[BUY][RES] ok=true msg=%s matsuri(after)=%s", uiMsg, matsuriJSON(s))
-				openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, uiMsg) })
-				return
+				return openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, uiMsg) })
 			end
 			-- ※ 選択不要の KITO はこの if を抜けて従来 apply フローへ
 		end
-		-- ★ 分岐ここまで（UI OFF なら従来どおり効果適用へ）
+		-- ======== KITO: UI 経路ここまで ========
 
+		-- ===== 効果適用 =====
 		local effOk, effMsg = true, ""
 		if ShopEffects then
 			local okCall, okRet, msgRet = pcall(function()
@@ -494,7 +500,7 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 		if Service._pushState then Service._pushState(plr) end
 
 		-- 購入成功時点スナップ
-		snapShop(plr, s)
+		pcall(function() snapShop(plr, s) end)
 
 		-- ===== final =====
 		LOG.info("[BUY][OK] item=%s mon=%d stock(after)=%s", found.name or found.id, tonumber(s.mon or 0), stockBrief(s.shop and s.shop.stock))
@@ -502,7 +508,9 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 		openFor(plr, s, { notice=("購入：%s（-%d 文）\n%s"):format(found.name or found.id, price, tostring(effMsg or "")) })
 	end)
 
+	--========================
 	-- リロール：回数制限なし／費用=REROLL_COST（★満杯でも常に再抽選）
+	--========================
 	ShopReroll.OnServerEvent:Connect(function(plr: Player, nonce: any)
 		-- ★ nonce 検証（重複は黙って無視）
 		local nonceStr = (typeof(nonce) == "string") and nonce or tostring(nonce or "")
@@ -533,7 +541,7 @@ function Service.init(getStateFn: (Player)->any, pushStateFn: (Player)->())
 		if Service._pushState then Service._pushState(plr) end
 
 		-- リロール後スナップ
-		snapShop(plr, s)
+		pcall(function() snapShop(plr, s) end)
 
 		-- ===== LOG =====
 		LOG.info(

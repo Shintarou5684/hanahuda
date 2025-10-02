@@ -9,6 +9,7 @@
 -- ポリシー：
 --  - Deck の変更は DeckStore.transact を通す（純関数 DeckOps で生成→差し替え）
 --  - ここでは「登録と実行の枠」だけ提供。個別効果のロジックは別モジュールで定義して register する
+-- v0.9.2-dot: KITO は「ドット唯一の真実」。'kito_' やレガシー別名の登録・適用を拒否
 -- v0.9.1-patch: apply() が (store, result) 戻り値に対応（第二戻り値優先）
 
 local RS = game:GetService("ReplicatedStorage")
@@ -29,6 +30,20 @@ local LOG do
 	else
 		LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
 	end
+end
+
+-- ドット化ユーティリティ
+local function isKitoDot(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito."
+end
+local function isKitoUnderscore(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito_"
+end
+local function isKitoLike(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,4) == "kito"
 end
 
 -- 登録テーブル
@@ -113,6 +128,18 @@ end
 function M.register(id: string, handler: (ctx:any)->(any))
 	assert(type(id) == "string" and #id > 0, "EffectsRegistry.register: id must be non-empty string")
 	assert(type(handler) == "function", "EffectsRegistry.register: handler must be function")
+
+	-- ★ ドット化ポリシー：KITO は 'kito.*' のみ受理
+	if isKitoUnderscore(id) then
+		LOG.warn("[DOT-ONLY] reject registering underscore kito id: %s", id)
+		return
+	end
+	-- "kito" で始まるのにドットでもアンダーバーでもない旧別名（例: 'kitoTori'）も拒否
+	if isKitoLike(id) and (not isKitoDot(id)) then
+		LOG.warn("[DOT-ONLY] reject registering non-dot kito id: %s", id)
+		return
+	end
+
 	if Registry[id] ~= nil then
 		warn(("[EffectsRegistry] overwriting existing effect id: %s"):format(id))
 	end
@@ -138,6 +165,17 @@ end
 function M.registerCanApply(id: string, fn: (any, any)->(boolean, string?))
 	assert(type(id) == "string" and #id > 0, "EffectsRegistry.registerCanApply: id must be non-empty string")
 	assert(type(fn) == "function", "EffectsRegistry.registerCanApply: fn must be function")
+
+	-- ★ ドット化ポリシー：KITO は 'kito.*' のみ受理
+	if isKitoUnderscore(id) then
+		LOG.warn("[DOT-ONLY] reject registering canApply for underscore kito id: %s", id)
+		return
+	end
+	if isKitoLike(id) and (not isKitoDot(id)) then
+		LOG.warn("[DOT-ONLY] reject registering canApply for non-dot kito id: %s", id)
+		return
+	end
+
 	if CanApplyRegistry[id] ~= nil then
 		warn(("[EffectsRegistry] overwriting existing canApply for id: %s"):format(id))
 	end
@@ -174,6 +212,15 @@ function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
 	if type(effectId) ~= "string" or #effectId == 0 then
 		return { ok = false, error = "effectId is invalid" }
 	end
+
+	-- ★ ドット化ポリシー：KITO のアンダーバー呼び出しは即拒否（早期に原因が分かるよう明示エラー）
+	if isKitoUnderscore(effectId) then
+		return { ok = false, error = ("underscore kito id is not supported; use dot id: %s -> %s"):format(effectId, ("kito."..effectId:sub(6))) }
+	end
+	if isKitoLike(effectId) and (not isKitoDot(effectId)) then
+		return { ok = false, error = ("non-dot kito id is not supported: %s"):format(effectId) }
+	end
+
 	local handler = Registry[effectId]
 	if not handler then
 		return { ok = false, error = ("effect '%s' not registered"):format(tostring(effectId)) }

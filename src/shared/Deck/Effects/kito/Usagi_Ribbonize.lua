@@ -1,12 +1,13 @@
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Usagi_Ribbonize.lua
--- Usagi (KITO): convert one target card to "ribbon" (UID-first)
---  - Effect IDs: "kito.usagi_ribbon" (primary), "kito_usagi" (legacy alias)
+-- Usagi (KITO / DOT-ONLY): convert one target card to "ribbon" (UID-first)
+--  - Effect ID: "kito.usagi_ribbon"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "ribbon", do nothing (meta returned)
 --  - Diagnostic logs (scope: Effects.kito.usagi_ribbon)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -25,17 +26,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler for both effect IDs
+	-- Handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
-		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- code指定のみ互換
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- 互換
 
-		local tagMark     = tostring(payload.tag or "eff:kito_usagi_ribbon")
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark     = tostring(payload.tag or "eff:kito.usagi_ribbon")
 		local preferKind  = "ribbon"
 
 		local runId       = ctx.runId
@@ -58,9 +60,7 @@ return function(Effects)
 			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
 		)
 
-		--─────────────────────────────────────────────────────
-		-- helpers
-		--─────────────────────────────────────────────────────
+		--──────────────── helpers ────────────────
 		local function listToSet(list)
 			if typeof(list) ~= "table" then return nil end
 			local s = {}
@@ -223,7 +223,7 @@ return function(Effects)
 				LOG.debug("[pick] pool-code candidates=%d", #cand)
 				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-code" end
 			end
-			-- 4) any entry whose month has "ribbon"（UI側がプール指定しない場合の互換フォールバック）
+			-- 4) any entry whose month has "ribbon"
 			local all = {}
 			for _, e in ipairs(entries) do
 				if monthHasKind(monthFromCard(e), "ribbon") then all[#all+1] = e end
@@ -296,14 +296,14 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- canApply（UIグレーアウト等に利用）
+	-- canApply（UIグレーアウト等に利用） DOT-ONLY
 	--  - 条件: まだ "ribbon" でない ＆ 対象月に ribbon 定義がある ＆ 既タグなし
 	--─────────────────────────────────────────────────────
-	local function registerCanApply(id)
+	local function registerCanApplyDot(id)
 		Effects.registerCanApply(id, function(card, ctx2)
 			if type(card) ~= "table" then return false, "not-eligible" end
 			local tags = (type(card.tags)=="table") and card.tags or {}
-			for _,t in ipairs(tags) do if t=="eff:kito_usagi_ribbon" then return false, "already-applied" end end
+			for _,t in ipairs(tags) do if t=="eff:kito.usagi_ribbon" then return false, "already-applied" end end
 			if tostring(card.kind) == "ribbon" then return false, "already-ribbon" end
 
 			local function monthFrom(c)
@@ -330,10 +330,7 @@ return function(Effects)
 		end)
 	end
 
-	-- Primary ID
+	-- ★ DOT-ONLY 登録（レガシー別名は登録しない）
 	Effects.register("kito.usagi_ribbon", handler)
-	registerCanApply("kito.usagi_ribbon")
-	-- Legacy alias
-	Effects.register("kito_usagi", handler)
-	registerCanApply("kito_usagi")
+	registerCanApplyDot("kito.usagi_ribbon")
 end

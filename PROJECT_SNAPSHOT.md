@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-02 11:24:32
+- Generated: 2025-10-02 12:59:40
 - Max lines/file: 300
 
 ## Folder Tree
@@ -816,7 +816,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-02 11:24:32
+- Generated: 2025-10-02 12:59:40
 - Max lines/file: 300
 
 ## Folder Tree
@@ -9456,9 +9456,12 @@ end
 ### src/server/ShopEffects/init.lua
 ```lua
 -- ServerScriptService/ShopEffects/init.lua
--- v0.9.1 効果ディスパッチ（カテゴリ別振り分け）
+-- v0.9.2 効果ディスパッチ（カテゴリ別振り分け）
 -- 公開I/F:
 --   apply(effectId, state, ctx) -> (ok:boolean, message:string)
+-- 変更点（v0.9.2）:
+--  - ★KITOを「ドット唯一の真実」に統一：kito_ を一切受理しない（変換もしない）
+--  - 互換warnロジック／コール元推定など、アンダーバー対応の補助処理を削除
 
 local M = {}
 
@@ -9479,7 +9482,7 @@ end
 
 local Kito     = safeRequire(script, "Kito")
 local Sai      = safeRequire(script, "Sai")
-local Spectral = safeRequire(script, "Spectral") -- ★追加
+local Spectral = safeRequire(script, "Spectral") -- 任意
 
 -- 直接呼びたい場合のエクスポート
 M.Kito     = Kito
@@ -9487,68 +9490,6 @@ M.Sai      = Sai
 M.Spectral = Spectral
 
 local function msgJa(s) return s end
-
---========================
--- 呼び出し元ヒント生成（ログ用）
---========================
-local UNDERSCORE_WARNED = {}  -- 重複warn防止
-
--- 自分自身のフルネーム（例: "ServerScriptService.ShopEffects"）
-local SELF_NAME = (function()
-	local ok, name = pcall(function() return script:GetFullName() end)
-	return ok and name or "ServerScriptService.ShopEffects"
-end)()
-
-local function pickExplicitSource(state, ctx)
-	-- 呼び出し側が明示してくれたら最優先
-	if type(ctx) == "table" then
-		if ctx.source  ~= nil then return tostring(ctx.source) end
-		if ctx._source ~= nil then return tostring(ctx._source) end
-	end
-	if type(state) == "table" then
-		if state.source  ~= nil then return tostring(state.source) end
-		if state._source ~= nil then return tostring(state._source) end
-	end
-	return nil
-end
-
-local function guessCallerFromTraceback()
-	-- Luauでは debug.traceback が使えるので、最初にそれっぽい行を拾う
-	local tb
-	local ok, ret = pcall(function()
-		return debug.traceback("", 3) -- この関数から2フレーム上を基点に取得
-	end)
-	if ok then tb = ret end
-	if type(tb) ~= "string" then return "unknown" end
-
-	for line in tb:gmatch("[^\n]+") do
-		-- このモジュール自身や x/pcall フレームは除外
-		if not line:find(SELF_NAME, 1, true)
-			and not line:find("ShopEffects/init", 1, true)
-			and not line:find("xpcall", 1, true)
-			and not line:find("pcall", 1, true)
-		then
-			-- 例: ServerScriptService.ShopService:123 といった形式を優先的に抜く
-			local m = line:match("([%w%._/]+:%d+)")
-			       or line:match("Script '([^']+)'")
-			       or line:match("([%w%._/]+)")
-			if m then return m end
-		end
-	end
-	return "unknown"
-end
-
-local function makeCallerHint(state, ctx)
-	return pickExplicitSource(state, ctx) or guessCallerFromTraceback()
-end
-
-local function warnUnderscoreOnce(effectId, dotId, caller)
-	local key = tostring(caller) .. "|" .. tostring(effectId)
-	if UNDERSCORE_WARNED[key] then return end
-	UNDERSCORE_WARNED[key] = true
-	warn(("[ShopEffects] DEPRECATED underscore id: %s  → use '%s'  | caller=%s")
-		:format(effectId, dotId, caller))
-end
 
 --========================
 -- 内部：委譲呼び出し（共通ラッパ）
@@ -9575,15 +9516,13 @@ function M.apply(effectId, state, ctx)
 		return false, msgJa("効果IDが不正です")
 	end
 
-	-- 祈祷（kito_ または kito. の両方を受け付け）
-	if effectId:sub(1,5) == "kito_" or effectId:sub(1,5) == "kito." then
-		if effectId:sub(1,5) == "kito_" then
-			-- アンダーバーは互換受付しつつ、置換用に呼び出し元ヒントをwarn
-			local dotId  = effectId:gsub("^kito_", "kito.")
-			local caller = makeCallerHint(state, ctx)
-			warnUnderscoreOnce(effectId, dotId, caller)
-		end
+	-- 祈祷（★dot only）
+	--  kito.XXX …… 受理
+	--  kito_XXX …  エラー（変換しない）
+	if effectId:sub(1,5) == "kito." then
 		return delegate(Kito, "apply", effectId, state, ctx, "祈祷")
+	elseif effectId:sub(1,5) == "kito_" then
+		return false, msgJa(("未対応の効果IDです（kito_ は非対応。kito. を使用してください）: %s"):format(effectId))
 	end
 
 	-- 祭事（sai_）
@@ -9591,7 +9530,7 @@ function M.apply(effectId, state, ctx)
 		return delegate(Sai, "apply", effectId, state, ctx, "祭事")
 	end
 
-	-- ★ スペクタル（spectral_/spec_/互換kito_spec_）
+	-- スペクタル（spectral_/spec_/互換kito_spec_）
 	if effectId:sub(1,9) == "spectral_" or effectId:sub(1,5) == "spec_" or effectId:sub(1,11) == "kito_spec_" then
 		return delegate(Spectral, "apply", effectId, state, ctx, "スペクタル")
 	end
@@ -9605,9 +9544,10 @@ return M
 ### src/server/ShopEffects/Kito.lua
 ```lua
 -- src/server/ShopEffects/Kito.lua
--- v0.9.14 Kito（祈祷）
+-- v0.9.15 Kito（祈祷）— DOT ONLY（kito.* を唯一の真実として運用）
 --  - 子(ko)UI先行起動のFIXを維持（v0.9.13）
---  - ★追加: KitoPickServerから前回祈祷を記録できる公開関数 Kito.recordFromPick(state, effectId, payload, meta)
+--  - Kito.recordFromPick(state, effectId, payload, meta) を維持
+--  - ★破壊的変更: アンダーバーID（kito_）の受理/変換を全廃。渡されてもエラーを返す。
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -9618,6 +9558,9 @@ local Config  = RS:WaitForChild("Config")
 local EffectsRegistry = require(Shared:WaitForChild("Deck"):WaitForChild("EffectsRegistry"))
 local Balance        = require(Config:WaitForChild("Balance"))
 
+--========================
+-- KitoPickCore lazy-load
+--========================
 local KitoPickCore = nil
 local function lazyGetKitoPickCore()
 	if not KitoPickCore then
@@ -9626,14 +9569,18 @@ local function lazyGetKitoPickCore()
 	return KitoPickCore
 end
 
+--========================
+-- Module
+--========================
 local Kito = {}
 
+-- ★ドットIDを唯一の真実に統一
 Kito.ID = {
-	USHI = "kito_ushi",
-	TORA = "kito_tora",
-	TORI = "kito_tori",
-	MI   = "kito_mi",
-	KO   = "kito_ko",
+	USHI = "kito.ushi",
+	TORA = "kito.tora",
+	TORI = "kito.tori",
+	MI   = "kito.mi",
+	KO   = "kito.ko",
 }
 
 local DEFAULTS = { CAP_MON = 999999 }
@@ -9646,6 +9593,7 @@ local function isArray(t) if typeof(t)~="table" then return false end for i=1,#t
 local function isNonEmptyArray(t) return isArray(t) and #t>0 end
 local function normalizeArrayOrNil(t) if isNonEmptyArray(t) then return t end return nil end
 
+-- preferKind は当面 "hikari" 固定（将来の拡張に備え関数化）
 local function normPreferKind(s: string?) if s=="bright" then return "hikari" end return "hikari" end
 
 local function resolveRunIdFrom(anyTable)
@@ -9691,16 +9639,11 @@ local function recordLastKito(state:any, effectId:string, payload:any?, meta:any
 	}
 end
 
-local function normalizeDeprecatedId(eid:string?): (string, boolean)
-	if typeof(eid) ~= "string" then return tostring(eid), false end
-	if eid:sub(1,5) == "kito_" then
-		local normalized = "kito." .. eid:sub(6)
-		return normalized, true
-	end
-	return eid, false
-end
+--========================
+-- 内蔵エフェクト
+--========================
 
--- 丑
+-- 丑：所持文2倍（上限あり）
 local function effect_ushi(state, ctx)
 	local cap    = (ctx and ctx.capMon) or DEFAULTS.CAP_MON
 	local before = tonumber(state.mon or 0) or 0
@@ -9710,7 +9653,7 @@ local function effect_ushi(state, ctx)
 	return true, msg(("丑：所持文2倍（%d → %d, 上限=%d）"):format(before, after, cap))
 end
 
--- 寅
+-- 寅：取り札の得点+1（累積）
 local function effect_tora(state, ctx)
 	local b = ensureBonus(state); b.takenPointPlus = (b.takenPointPlus or 0) + 1
 	local k = ensureKito(state);  k.tora = (tonumber(k.tora) or 0) + 1
@@ -9718,7 +9661,7 @@ local function effect_tora(state, ctx)
 	return true, msg(("寅：取り札の得点+1（累計+%d / Lv=%d）"):format(b.takenPointPlus, k.tora))
 end
 
--- 共通: Effects 経由適用
+-- Deck/Effects 経由の共通適用（UI起動にも対応）
 local function apply_via_effects(effectModuleId:string, labelJP:string, state, ctx, preferKind:string?)
 	local runId = resolveRunId(state, ctx)
 	if runId == nil then
@@ -9764,7 +9707,7 @@ local function apply_via_effects(effectModuleId:string, labelJP:string, state, c
 	end
 end
 
--- 酉 / 巳
+-- 酉 / 巳（Deck/Effectsを呼ぶタイプ）
 local function effect_tori(state, ctx)
 	local preferKind = normPreferKind(ctx and ctx.preferKind)
 	return apply_via_effects("kito.tori_brighten", "酉", state, ctx, preferKind)
@@ -9812,20 +9755,23 @@ local function effect_ko(state, ctx)
 		end
 	end
 
-	-- 内蔵
+	-- 内蔵（dotのみ）
 	if id == Kito.ID.TORA or id == "kito.tora" then return effect_tora(state, ctx)
 	elseif id == Kito.ID.USHI or id == "kito.ushi" then return effect_ushi(state, ctx)
 	elseif id == Kito.ID.MI   or id == "kito.mi"   then return effect_mi(state, ctx)
 	elseif id == Kito.ID.TORI or id == "kito.tori" then return effect_tori(state, ctx) end
 
-	-- Deck/Effects系
-	if id:sub(1,5) == "kito." then
+	-- Deck/Effects系（dotのみ）
+	if typeof(id)=="string" and id:sub(1,5) == "kito." then
 		return apply_via_effects(id, "子", state, ctx, ctx.preferKind)
 	end
 
 	return false, ("子：未知の前回ID: %s"):format(tostring(id))
 end
 
+--========================
+-- ディスパッチ（dotのみ）
+--========================
 local DISPATCH = {
 	[Kito.ID.USHI] = effect_ushi,
 	[Kito.ID.TORA] = effect_tora,
@@ -9840,57 +9786,64 @@ local DISPATCH = {
 	["kito.ko"]    = effect_ko,
 }
 
+--========================
+-- ブリッジ（同義dot→モジュールID）※アンダーバーKEYは廃止
+--========================
 local KITO_BRIDGE_MAP = {
-	["kito_usagi"]         = { label = "卯", moduleId = "kito.usagi_ribbon" },
 	["kito.usagi"]         = { label = "卯", moduleId = "kito.usagi_ribbon" },
 	["kito.usagi_ribbon"]  = { label = "卯", moduleId = "kito.usagi_ribbon" },
 
-	["kito_uma"]           = { label = "午", moduleId = "kito.uma_seed" },
 	["kito.uma"]           = { label = "午", moduleId = "kito.uma_seed" },
 	["kito.uma_seed"]      = { label = "午", moduleId = "kito.uma_seed" },
 
-	["kito_inu"]           = { label = "戌", moduleId = "kito.inu_chaff2" },
 	["kito.inu"]           = { label = "戌", moduleId = "kito.inu_chaff2" },
 	["kito.inu_chaff2"]    = { label = "戌", moduleId = "kito.inu_chaff2" },
 	["kito.inu_two_chaff"] = { label = "戌", moduleId = "kito.inu_chaff2" },
 
-	["kito_i"]             = { label = "亥", moduleId = "kito.i_sake" },
 	["kito.i"]             = { label = "亥", moduleId = "kito.i_sake" },
 	["kito.i_sake"]        = { label = "亥", moduleId = "kito.i_sake" },
 
-	["kito_hitsuji"]       = { label = "未", moduleId = "kito.hitsuji_prune" },
 	["kito.hitsuji"]       = { label = "未", moduleId = "kito.hitsuji_prune" },
 	["kito.hitsuji_prune"] = { label = "未", moduleId = "kito.hitsuji_prune" },
 }
 
+--========================
+-- 公開 I/F
+--========================
 function Kito.apply(effectId, state, ctx)
 	if typeof(state) ~= "table" then return false, "state が無効です" end
-	local key = tostring(effectId or "")
-	key = select(1, normalizeDeprecatedId(key))
 
-	local fn = DISPATCH[key]
-	if not fn then
-		local br = KITO_BRIDGE_MAP[key]
-		if br then
-			return apply_via_effects(br.moduleId, br.label, state, ctx, nil)
-		end
-		if typeof(key)=="string" and key:sub(1,5)=="kito." then
-			return apply_via_effects(key, "祈祷", state, ctx, nil)
-		end
-		return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
+	local key = tostring(effectId or "")
+
+	-- ★明示拒否：アンダーバーIDは非対応（変換しない）
+	if typeof(key)=="string" and key:sub(1,5) == "kito_" then
+		return false, ("不明な祈祷ID（kito_ は非対応です。kito. を使用してください）: %s"):format(key)
 	end
 
-	local ok, message = fn(state, ctx)
-	return ok == true, tostring(message or "")
+	-- 内蔵ディスパッチ（dot）
+	local fn = DISPATCH[key]
+	if fn then
+		local ok, message = fn(state, ctx)
+		return ok == true, tostring(message or "")
+	end
+
+	-- ブリッジ（dot → モジュールID）
+	local br = KITO_BRIDGE_MAP[key]
+	if br then
+		return apply_via_effects(br.moduleId, br.label, state, ctx, nil)
+	end
+
+	-- Deck/Effects 登録IDへ直通（dotのみ）
+	if typeof(key)=="string" and key:sub(1,5)=="kito." then
+		return apply_via_effects(key, "祈祷", state, ctx, nil)
+	end
+
+	return false, ("不明な祈祷ID: %s"):format(tostring(effectId))
 end
 
 -- ★公開：KitoPickServerから成功時に呼ぶ“記録フック”
 function Kito.recordFromPick(state:any, effectModuleId:string, payload:any?, meta:any?)
-	-- ctx=nil（= __fromChild=false で記録する）
-	recordLastKito(state, effectModuleId, payload, meta, nil)
-end
-
-return Kito
+... (truncated)
 ```
 
 ### src/server/ShopEffects/Omamori.lua
@@ -11615,8 +11568,8 @@ return M
 ### src/shared/Deck/Effects/kito/Hitsuji_Prune.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Hitsuji_Prune.lua
--- Sheep (KITO): prune one target card from the deck (UID-first)
---  - Effect IDs: "kito.hitsuji_prune" (primary), "kito_hitsuji" (legacy alias)
+-- Sheep (KITO / DOT-ONLY): prune one target card from the deck (UID-first)
+--  - Effect ID（唯一の真実）: "kito.hitsuji_prune"
 --  - Target selection order: payload.uid / payload.uids / payload.poolUids / payload.codes / payload.poolCodes
 --  - DeckStore (v3) is immutable; use DeckStore.transact to return a new store
 --  - No random fallback removal if no target is provided (safety-first)
@@ -11649,7 +11602,9 @@ return function(Effects)
 		local poolUids  = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
 		local codes     = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
 		local poolCodes = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
-		local tagMark   = tostring(payload.tag or "eff:kito_hitsuji_prune")
+
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark   = tostring(payload.tag or "eff:kito.hitsuji_prune")
 		local runId     = ctx.runId
 
 		local function head5(list)
@@ -11780,19 +11735,17 @@ return function(Effects)
 		end)
 	end
 
-	-- 登録（本体＋canApply）
+	-- ★ DOT-ONLY 登録（レガシー別名は登録しない）
 	Effects.register("kito.hitsuji_prune", handler)
-	Effects.register("kito_hitsuji",      handler) -- legacy
 	Effects.registerCanApply("kito.hitsuji_prune", canApply)
-	Effects.registerCanApply("kito_hitsuji",      canApply)
 end
 ```
 
 ### src/shared/Deck/Effects/kito/I_Sakeify.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/I_Sakeify.lua
--- I (KITO): "sakeify" — convert one target card to September's seed (杯) by month+kind
---  - Effect IDs: "kito.i_sake" (primary), "kito_i" (legacy alias)
+-- I (KITO / DOT-ONLY): "sakeify" — convert one target card to September's seed (杯) by month+kind
+--  - Effect ID: "kito.i_sake"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
@@ -11800,6 +11753,7 @@ end
 --  - No month-kind eligibility check needed: we force month=9 then kind=seed
 --  - Idempotent: if already month=9 & kind=seed, or already tagged, no change
 --  - Diagnostic logs (scope: Effects.kito.i_sake)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -11818,17 +11772,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler for both effect IDs
+	-- Handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
-		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- code指定のみ互換
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- 互換
 
-		local tagMark     = tostring(payload.tag or "eff:kito_i_sake")
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark     = tostring(payload.tag or "eff:kito.i_sake")
 		local runId       = ctx.runId
 		local rng         = ctx.rng or Random.new()
 
@@ -11849,16 +11804,13 @@ return function(Effects)
 			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
 		)
 
-		--─────────────────────────────────────────────────────
-		-- helpers
-		--─────────────────────────────────────────────────────
+		--──────────────── helpers ────────────────
 		local function listToSet(list)
 			if typeof(list) ~= "table" then return nil end
 			local s = {}
 			for _, v in ipairs(list) do s[v] = true end
 			return s
 		end
-
 		local uidSet = listToSet(uids) or {}
 		if uidScalar then uidSet[uidScalar] = true end
 		local poolUidSet  = listToSet(poolUids)
@@ -12054,15 +12006,14 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- canApply（UIグレーアウト等に利用）
+	-- canApply（UIグレーアウト等に利用） DOT-ONLY
 	--  - 条件: 未タグ ＆ まだ「9月 seed（盃）」でない
-	--  - 備考: 本効果は月変更前提のため、基本 true（既盃/既タグのみ false）
 	--─────────────────────────────────────────────────────
-	local function registerCanApply(id)
+	local function registerCanApplyDot(id)
 		Effects.registerCanApply(id, function(card, _ctx2)
 			if type(card) ~= "table" then return false, "not-eligible" end
 			local tags = (type(card.tags)=="table") and card.tags or {}
-			for _,t in ipairs(tags) do if t=="eff:kito_i_sake" then return false, "already-applied" end end
+			for _,t in ipairs(tags) do if t=="eff:kito.i_sake" then return false, "already-applied" end end
 			if (tonumber(card.month)==9 and tostring(card.kind)=="seed") then
 				return false, "already-sake"
 			end
@@ -12070,26 +12021,24 @@ return function(Effects)
 		end)
 	end
 
-	-- Primary ID
+	-- ★ DOT-ONLY 登録（レガシー別名は登録しない）
 	Effects.register("kito.i_sake", handler)
-	registerCanApply("kito.i_sake")
-	-- Legacy alias
-	Effects.register("kito_i", handler)
-	registerCanApply("kito_i")
+	registerCanApplyDot("kito.i_sake")
 end
 ```
 
 ### src/shared/Deck/Effects/kito/Inu_Chaff2.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Inu_Chaff2.lua
--- Inu (KITO): convert ONE target card to "chaff" (UID-first)
---  - Effect IDs (互換維持): "kito.inu_chaff2" (primary), "kito_inu", "kito.inu_two_chaff"
+-- Inu (KITO / DOT-ONLY): convert ONE target card to "chaff" (UID-first)
+--  - Effect ID: "kito.inu_chaff2"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "chaff", do nothing (meta returned)
 --  - Diagnostic logs (scope: Effects.kito.inu_chaff2)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -12108,18 +12057,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler
+	-- Shared handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat（code選択のみ）
 		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
 
-		-- 互換のため既定タグは旧名を踏襲（既適用カードの冪等を維持）
-		local tagMark     = tostring(payload.tag or "eff:kito_inu_chaff2")
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark     = tostring(payload.tag or "eff:kito.inu_chaff2")
 		local preferKind  = "chaff"
 
 		local runId       = ctx.runId
@@ -12184,7 +12133,8 @@ return function(Effects)
 		local function alreadyTagged(card)
 			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
 			for _, t in ipairs(card.tags) do
-				if t == tagMark or t == "eff:kito_inu_chaff" then return true end -- 旧新どちらのタグでも冪等
+				-- DOT-ONLY タグのみを見る（旧タグは無視）
+				if t == tagMark then return true end
 			end
 			return false
 		end
@@ -12379,8 +12329,6 @@ return function(Effects)
 				targetCode = target.code,
 				pickReason = reason,
 			}
-		end)
-	end
 ... (truncated)
 ```
 
@@ -12969,14 +12917,15 @@ return function(Effects)
 ### src/shared/Deck/Effects/kito/Uma_Seedize.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Uma_Seedize.lua
--- Uma (KITO): convert one target card to "seed" (UID-first)
---  - Effect IDs: "kito.uma_seed" (primary), "kito_uma" (legacy alias)
+-- Uma (KITO / DOT-ONLY): convert one target card to "seed" (UID-first)
+--  - Effect ID: "kito.uma_seed"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "seed", do nothing (meta returned)
 --  - Diagnostic logs (scope: Effects.kito.uma_seed)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -12995,17 +12944,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler for both effect IDs
+	-- Shared handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat (code選択だけ)
 		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
 
-		local tagMark     = tostring(payload.tag or "eff:kito_uma_seed")
+		-- ★ DOT-ONLY タグ表記
+		local tagMark     = tostring(payload.tag or "eff:kito.uma_seed")
 		local preferKind  = "seed"
 
 		local runId       = ctx.runId
@@ -13266,22 +13216,21 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- canApply（UIグレーアウト等に利用）
-	--  - 条件: まだ "seed" でない ＆ 対象月に seed 定義がある ＆ 既タグなし
 ... (truncated)
 ```
 
 ### src/shared/Deck/Effects/kito/Usagi_Ribbonize.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Usagi_Ribbonize.lua
--- Usagi (KITO): convert one target card to "ribbon" (UID-first)
---  - Effect IDs: "kito.usagi_ribbon" (primary), "kito_usagi" (legacy alias)
+-- Usagi (KITO / DOT-ONLY): convert one target card to "ribbon" (UID-first)
+--  - Effect ID: "kito.usagi_ribbon"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "ribbon", do nothing (meta returned)
 --  - Diagnostic logs (scope: Effects.kito.usagi_ribbon)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -13300,17 +13249,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler for both effect IDs
+	-- Handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
-		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- code指定のみ互換
+		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- 互換
 
-		local tagMark     = tostring(payload.tag or "eff:kito_usagi_ribbon")
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark     = tostring(payload.tag or "eff:kito.usagi_ribbon")
 		local preferKind  = "ribbon"
 
 		local runId       = ctx.runId
@@ -13333,9 +13283,7 @@ return function(Effects)
 			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
 		)
 
-		--─────────────────────────────────────────────────────
-		-- helpers
-		--─────────────────────────────────────────────────────
+		--──────────────── helpers ────────────────
 		local function listToSet(list)
 			if typeof(list) ~= "table" then return nil end
 			local s = {}
@@ -13498,7 +13446,7 @@ return function(Effects)
 				LOG.debug("[pick] pool-code candidates=%d", #cand)
 				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "pool-code" end
 			end
-			-- 4) any entry whose month has "ribbon"（UI側がプール指定しない場合の互換フォールバック）
+			-- 4) any entry whose month has "ribbon"
 			local all = {}
 			for _, e in ipairs(entries) do
 				if monthHasKind(monthFromCard(e), "ribbon") then all[#all+1] = e end
@@ -13571,7 +13519,7 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- canApply（UIグレーアウト等に利用）
+	-- canApply（UIグレーアウト等に利用） DOT-ONLY
 	--  - 条件: まだ "ribbon" でない ＆ 対象月に ribbon 定義がある ＆ 既タグなし
 ... (truncated)
 ```
@@ -13593,6 +13541,9 @@ return function(Effects)
 -- 追加: canApply 登録の標準化
 --   - Effects.registerCanApply(id, fn) をビルダーからも呼べるようプロキシを提供
 --   - 本ファイルでも酉/巳の canApply を中央登録する（UIグレーアウト/サーバ最終判定の唯一の正）
+--
+-- ★ ドット化ポリシー（KITO専用）:
+--   - kito 系の登録キーは「kito.*」のみを受け付ける（kito_ やレガシー別名は登録しない）
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -13659,12 +13610,43 @@ local function pickId(modInst: Instance, payload:any)
 	return modInst.Name
 end
 
+-- ★ KITO の登録キーの妥当性チェック（ドット唯一）
+local function isKitoDot(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito."
+end
+local function isKitoUnderscore(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito_"
+end
+local function isKitoLike(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,4) == "kito"
+end
+
+local function assertKitoDotOrReject(id:string, modFullName:string): boolean
+	if isKitoUnderscore(id) then
+		LOG.warn("[DOT-ONLY] reject underscore id: %s (from %s)", id, modFullName)
+		return false
+	end
+	-- 「kito なのにドットでもアンダーバーでもない」（例: "Tori_Brighten"）は弾く
+	if isKitoLike(id) and (not isKitoDot(id)) then
+		LOG.warn("[DOT-ONLY] reject non-dot kito id: %s (from %s)", id, modFullName)
+		return false
+	end
+	return true
+end
+
 -- Effects.register / registerCanApply をプロキシして捕捉し、本体 Registry に中継
 local function buildEffectsProxy(modInst: Instance)
 	local captured = {}  -- { {id=id, fn=fn}, ... } ※register だけ捕捉（canApply は捕捉しなくてもOK）
 	local Effects = {}
 
 	function Effects.register(id: string, fn: any)
+		-- ★ KITO はドットのみ受理
+		if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+			return
+		end
 		local ok, err = pcall(function()
 			Registry.register(id, fn)
 		end)
@@ -13679,6 +13661,10 @@ local function buildEffectsProxy(modInst: Instance)
 
 	-- ★ canApply のプロキシ（ビルダーがここから登録できる）
 	function Effects.registerCanApply(id: string, fn: any)
+		-- canApply も KITO の場合はドットのみ受理
+		if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+			return
+		end
 		local ok, err = pcall(function()
 			Registry.registerCanApply(id, fn)
 		end)
@@ -13722,6 +13708,10 @@ local function registerAsTable(modInst: Instance, payload: table): boolean
 		LOG.warn("skip (no id) : %s", modInst:GetFullName())
 		return false
 	end
+	-- ★ KITO はドットのみ受理
+	if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+		return false
+	end
 	local ok, err = pcall(function()
 		Registry.register(id, fn)
 	end)
@@ -13739,6 +13729,10 @@ local function registerAsHandler(modInst: Instance, handlerFn: any): boolean
 	local id = pickId(modInst, fakePayload) -- _id が無ければファイル名
 	if type(id) ~= "string" or #id == 0 then
 		id = modInst.Name
+	end
+	-- ★ KITO はドットのみ受理（モジュール名由来のレガシー別名は登録しない）
+	if not assertKitoDotOrReject(id, modInst:GetFullName()) then
+		return false
 	end
 	local ok, err = pcall(function()
 		Registry.register(id, handlerFn)
@@ -13799,7 +13793,7 @@ local function scanAndRegister(root: Instance)
 end
 
 --====================
--- canApply（酉/巳）の中央登録
+-- canApply（酉/巳）の中央登録（★DOT ONLY）
 --====================
 local function hasTag(card:any, mark:string): boolean
 	if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
@@ -13832,52 +13826,6 @@ local function parseMonthFromCard(card:any): number?
 		local mm = tonumber(string.sub(code, 1, 2))
 		if typeof(mm) == "number" then return mm end
 	end
-	return nil
-end
-
-local function registerBuiltinCanApply()
-	-- 酉（Brighten）
-	local ToriIdPrimary = "kito.tori_brighten"
-	local ToriIdLegacy  = "Tori_Brighten"
-	local toriTag       = "eff:kito_tori_bright"
-
-	local function toriCan(card:any, _ctx:any)
-		if typeof(card) ~= "table" then return false, "not-eligible" end
-		if tostring(card.kind or "") == "bright" then
-			return false, "already-bright"
-		end
-		if hasTag(card, toriTag) then
-			return false, "already-applied"
-		end
-		local m = parseMonthFromCard(card)
-		if not monthHasBright(m) then
-			return false, "month-has-no-bright"
-		end
-		return true, nil
-	end
-
-	-- 巳（Venom）
-	local MiIdPrimary = "kito.mi_venom"
-	local miTag       = "eff:kito_mi_venom"
-
-	local function miCan(card:any, _ctx:any)
-		if typeof(card) ~= "table" then return false, "not-eligible" end
-		if tostring(card.kind or "") == "chaff" then
-			return false, "already-chaff"
-		end
-		if hasTag(card, miTag) then
-			return false, "already-applied"
-		end
-		return true, nil
-	end
-
-	-- 登録（存在チェックは EffectsRegistry 側で持つためそのまま上書きOK）
-	local ok1, err1 = pcall(function()
-		Registry.registerCanApply(ToriIdPrimary, toriCan)
-		Registry.registerCanApply(ToriIdLegacy,  toriCan) -- 旧別名
-	end)
-	if not ok1 then
-		LOG.warn("registerCanApply(tori) failed: %s", tostring(err1))
 ... (truncated)
 ```
 
@@ -13894,6 +13842,7 @@ local function registerBuiltinCanApply()
 -- ポリシー：
 --  - Deck の変更は DeckStore.transact を通す（純関数 DeckOps で生成→差し替え）
 --  - ここでは「登録と実行の枠」だけ提供。個別効果のロジックは別モジュールで定義して register する
+-- v0.9.2-dot: KITO は「ドット唯一の真実」。'kito_' やレガシー別名の登録・適用を拒否
 -- v0.9.1-patch: apply() が (store, result) 戻り値に対応（第二戻り値優先）
 
 local RS = game:GetService("ReplicatedStorage")
@@ -13914,6 +13863,20 @@ local LOG do
 	else
 		LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
 	end
+end
+
+-- ドット化ユーティリティ
+local function isKitoDot(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito."
+end
+local function isKitoUnderscore(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,5) == "kito_"
+end
+local function isKitoLike(id:string?): boolean
+	id = tostring(id or "")
+	return id:sub(1,4) == "kito"
 end
 
 -- 登録テーブル
@@ -13998,6 +13961,18 @@ end
 function M.register(id: string, handler: (ctx:any)->(any))
 	assert(type(id) == "string" and #id > 0, "EffectsRegistry.register: id must be non-empty string")
 	assert(type(handler) == "function", "EffectsRegistry.register: handler must be function")
+
+	-- ★ ドット化ポリシー：KITO は 'kito.*' のみ受理
+	if isKitoUnderscore(id) then
+		LOG.warn("[DOT-ONLY] reject registering underscore kito id: %s", id)
+		return
+	end
+	-- "kito" で始まるのにドットでもアンダーバーでもない旧別名（例: 'kitoTori'）も拒否
+	if isKitoLike(id) and (not isKitoDot(id)) then
+		LOG.warn("[DOT-ONLY] reject registering non-dot kito id: %s", id)
+		return
+	end
+
 	if Registry[id] ~= nil then
 		warn(("[EffectsRegistry] overwriting existing effect id: %s"):format(id))
 	end
@@ -14023,6 +13998,17 @@ end
 function M.registerCanApply(id: string, fn: (any, any)->(boolean, string?))
 	assert(type(id) == "string" and #id > 0, "EffectsRegistry.registerCanApply: id must be non-empty string")
 	assert(type(fn) == "function", "EffectsRegistry.registerCanApply: fn must be function")
+
+	-- ★ ドット化ポリシー：KITO は 'kito.*' のみ受理
+	if isKitoUnderscore(id) then
+		LOG.warn("[DOT-ONLY] reject registering canApply for underscore kito id: %s", id)
+		return
+	end
+	if isKitoLike(id) and (not isKitoDot(id)) then
+		LOG.warn("[DOT-ONLY] reject registering canApply for non-dot kito id: %s", id)
+		return
+	end
+
 	if CanApplyRegistry[id] ~= nil then
 		warn(("[EffectsRegistry] overwriting existing canApply for id: %s"):format(id))
 	end
@@ -14059,6 +14045,15 @@ function M.apply(runId: any, effectId: string, payload: any?): ApplyResult
 	if type(effectId) ~= "string" or #effectId == 0 then
 		return { ok = false, error = "effectId is invalid" }
 	end
+
+	-- ★ ドット化ポリシー：KITO のアンダーバー呼び出しは即拒否（早期に原因が分かるよう明示エラー）
+	if isKitoUnderscore(effectId) then
+		return { ok = false, error = ("underscore kito id is not supported; use dot id: %s -> %s"):format(effectId, ("kito."..effectId:sub(6))) }
+	end
+	if isKitoLike(effectId) and (not isKitoDot(effectId)) then
+		return { ok = false, error = ("non-dot kito id is not supported: %s"):format(effectId) }
+	end
+
 	local handler = Registry[effectId]
 	if not handler then
 		return { ok = false, error = ("effect '%s' not registered"):format(tostring(effectId)) }
@@ -15694,7 +15689,7 @@ function M.getFestivalsForYaku(yakuId)
 end
 
 function M.getKitoPts(effectId, level)
-	if effectId == "tora" or effectId == "kito_tora" then
+	if effectId == "tora" or effectId == "kito.tora" then
 		return tonumber(level or 0) or 0
 	end
 	return 0
@@ -15914,7 +15909,7 @@ function P3.applyMatsuriAndKito(roles: any, mon: number, pts: number, state: any
 		-- 干支：寅（Ptsに +1/Lv）
 		do
 			local kitoLevels = (RunDeckUtil.getKitoLevels and RunDeckUtil.getKitoLevels(state)) or state.kito or {}
-			local toraLv = tonumber(kitoLevels.tora or kitoLevels["kito_tora"] or 0) or 0
+			local toraLv = tonumber(kitoLevels.tora or kitoLevels["kito.tora"] or 0) or 0
 			if toraLv > 0 then pts += toraLv end
 		end
 	end
@@ -16503,7 +16498,7 @@ return loadScoreModule()
 ### src/shared/ShopDefs.lua
 ```lua
 -- ReplicatedStorage/SharedModules/ShopDefs.lua
--- v0.9.0 → v0.9.0-TAL S3: 護符カテゴリ（talisman）を追加／Dev3種を出現プールに登録
+-- v0.9.0 → v0.9.0-DOT S3: 「KITOはドット唯一の真実」へ統一（kito_* を廃止）
 -- 使い方：
 --  ・各カテゴリの出現率は WEIGHTS.<category> を調整（相対重み。合計1でなくてOK）
 --  ・商品は POOLS.<category> に配列で追加
@@ -16531,75 +16526,83 @@ ShopDefs.WEIGHTS = {
 
 -- 商品プール
 ShopDefs.POOLS = {
-	-- 祈祷
+	-- 祈祷（★DOT ONLY）
 	kito = {
-		-- ★ 追加：子（直前の祈祷を再発火）
+		-- 子：最後の祈祷を再発火（記録は更新しない）
 		{
-			id = "kito_ko", name = "子：前回の祈祷を再発火", category = "kito", price = 4, effect = "kito_ko",
+			id = "kito.ko", name = "子：前回の祈祷を再発火", category = "kito", price = 4, effect = "kito.ko",
 			descJP = "最後に成功した祈祷をもう一度発動（子自身の使用では記録は更新されません）。",
 			descEN = "Replay the last successful KITO once more (using Child itself doesn’t update the last).",
 		},
 
+		-- 丑：所持文2倍（上限あり）
 		{
-			id = "kito_ushi", name = "丑：所持文を2倍", category = "kito", price = 5, effect = "kito_ushi",
+			id = "kito.ushi", name = "丑：所持文を2倍", category = "kito", price = 5, effect = "kito.ushi",
 			descJP = "所持文を即時2倍（上限あり）。",
 			descEN = "Double your current mon immediately (capped).",
 		},
+
+		-- 寅：取り札の得点+1（恒常／スタック）
 		{
-			id = "kito_tora", name = "寅：取り札の得点+1", category = "kito", price = 4, effect = "kito_tora",
+			id = "kito.tora", name = "寅：取り札の得点+1", category = "kito", price = 4, effect = "kito.tora",
 			descJP = "以後、取り札の得点+1（恒常バフ／スタック可）。",
 			descEN = "Permanent: taken cards score +1 (stackable).",
 		},
+
+		-- 酉：1枚を光札に変換（UIで対象選択）
 		{
-			id = "kito_tori", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito_tori",
+			id = "kito.tori_brighten", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito.tori_brighten",
 			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
-			descEN = "Convert one non-bright in run config to Bright (or queue +1 for next season).",
+			descEN = "Convert one non-Bright in run config to Bright (or queue +1 for next season).",
 		},
-		-- ★ 追加：巳（Venom）
+
+		-- 巳：1枚をカスに変換（UIで対象選択）
 		{
-			id   = "kito_mi", name = "巳：1枚をカス札に変換", category = "kito", price = 2, effect = "kito_mi",
+			id   = "kito.mi_venom", name = "巳：1枚をカス札に変換", category = "kito", price = 2, effect = "kito.mi_venom",
 			descJP = "ラン構成の対象札をカス札に変換（適用時に少額の文を即時加算）。",
 			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
 		},
 
-		-- ========= ここから追加（ガイド v1.1 準拠）=========
-		-- 卯：短冊化
+		-- 卯：短冊化（UIで対象選択）
 		{
-			id = "kito_usagi", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
+			id = "kito.usagi_ribbon", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
 			effect = "kito.usagi_ribbon",
 			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
 			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
 		},
-		-- 亥：酒化（9月seed=盃へ）
+
+		-- 亥：酒化（UIで対象選択）
 		{
-			id = "kito_i", name = "亥：1枚を酒に変換", category = "kito", price = 5,
+			id = "kito.i_sake", name = "亥：1枚を酒に変換", category = "kito", price = 5,
 			effect = "kito.i_sake",
 			descJP = "対象札を9月の盃（タネ）に変換します。",
 			descEN = "Convert target to September's Seed (Sake).",
 		},
-		-- 午：タネ化
+
+		-- 午：タネ化（UIで対象選択）
 		{
-			id = "kito_uma", name = "午：1枚をタネに変換", category = "kito", price = 4,
+			id = "kito.uma_seed", name = "午：1枚をタネに変換", category = "kito", price = 4,
 			effect = "kito.uma_seed",
 			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
 			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
 		},
-		-- 戌：カス化（※仕様変更：2枚→任意の1枚）
+
+		-- 戌：カス化（UIで対象選択）
 		{
-			id = "kito_inu", name = "戌：1枚をカス札に変換", category = "kito", price = 3,
-			-- ★ 正: 旧 "kito.inu_chaff"/"kito.inu_chaff2"/"kito.inu_two_chaff" を廃止し、正規IDに統一
-			effect = "kito_inu",
+			id = "kito.inu_chaff2", name = "戌：1枚をカス札に変換", category = "kito", price = 3,
+			-- 旧 "kito.inu_chaff" / "kito.inu_two_chaff" を廃止し、正規IDに統一
+			effect = "kito.inu_chaff2",
 			descJP = "ラン構成の対象札をカス札に変換（既にカス札なら不発）。",
 			descEN = "Convert one target in the run to Chaff (no effect if already chaff).",
 		},
-		-- 未：圧縮（山札から1枚削除）
+
+		-- 未：圧縮（山札から1枚削除、UIで対象選択）
 		{
-			id = "kito_hitsuji", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
-			effect = "kito.hitsuji_prune", -- レガシー別名: "kito_hitsuji" も可
+			id = "kito.hitsuji_prune", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
+			effect = "kito.hitsuji_prune",
 			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
 			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
 		},
-		-- ========= 追加ここまで =========
 	},
 
 	-- 祭事
@@ -16873,21 +16876,11 @@ return ShopFormat
 ### src/shared/ShopService.lua
 ```lua
 -- ServerScriptService/ShopService.lua
--- v0.9.2e 屋台サービス（SIMPLE+NONCE + Talisman payload）
--- 変更点（e）:
---  - ★ ShopEffects.apply へ必ず ctx.player を付与（UI系効果の必須引数漏れを修正） ※d継承
---  - ★ KITO の UI 経路を拡張：酉/巳/卯/午/戌/亥 に加えて **未** も KitoPick に統一
---  - ★ toCanonicalEffectId を拡張（kito_* / Module名 / 旧名 を **ShopDefs 準拠の underscore 形式**へ正規化）
---
--- 既存（c/d）からの仕様は従来通り。
---  - リロールは回数無制限・費用1文（残回数概念は撤去済み）
---  - 在庫は満杯でも必ず強制再生成
---  - SaveService のスナップ対応は従来どおり（存在しなくても続行）
---  - ShopEffects ローダー復活済み
---  - ★ リロール多重送出防止: クライアントnonceをサーバで検証（TTL付き）
---  - ★ v0.9.2c: ShopOpen ペイロードに talisman を同梱（state.run.talisman をそのまま搭載）
---               ※補完/推測は一切しない（真実は TalismanService/StateHub が管理）
---  - ★ KITO（酉/巳 など）を UI 経路に統一（正規effectIdへ正規化して KitoPickCore へ移譲）
+-- v0.9.4 (DOT-ONLY) 屋台サービス
+-- 変更点（v0.9.4）:
+--  - ★ KITO は“ドット唯一の真実”。購入前プリフライトで 'kito_' を明示拒否し、課金/在庫変更をしない
+--  - ★ UI経路・直適用ともに 'kito.*' 以外は流さない（found.category=="kito" の場合）
+--  - v0.9.3 の仕様を継承（toCanonicalEffectId 廃止、SELECT_KITO(underscore) 撤去、ctx.player 付与）
 
 local RS   = game:GetService("ReplicatedStorage")
 local SSS  = game:GetService("ServerScriptService")
@@ -16902,7 +16895,7 @@ local ShopOpen   = Remotes:WaitForChild("ShopOpen")
 local BuyItem    = Remotes:WaitForChild("BuyItem")
 local ShopReroll = Remotes:WaitForChild("ShopReroll")
 
--- ★ UI分岐用の Balance と、候補通知 Remote（RemotesInit で生成済みを待つ）
+-- ★ UI分岐用の Balance と ShopDefs
 local Balance       = require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopDefs      = require(SharedModules:WaitForChild("ShopDefs"))
@@ -16990,68 +16983,44 @@ local function ensureRunId(state:any): string
 end
 
 --========================
--- KITO: ID 正規化 & ラベル（ShopDefs=underscoreに合わせる）
+-- KITO: ラベル（DOT ONLY）
 --========================
-local function toCanonicalEffectId(eid: string?): string
-	if type(eid) ~= "string" or eid == "" then return "" end
-
-	-- 酉
-	if eid == "kito_tori" or eid == "Tori_Brighten" or eid == "kito.tori_brighten" then
-		return "kito_tori"
-	end
-	-- 巳
-	if eid == "kito_mi" or eid == "Mi_Venom" or eid == "kito.mi_venom" then
-		return "kito_mi"
-	end
-	-- 卯
-	if eid == "kito_usagi" or eid == "Usagi_Ribbonize" or eid == "kito.usagi_ribbon" then
-		return "kito_usagi"
-	end
-	-- 午
-	if eid == "kito_uma" or eid == "Uma_Seedize" or eid == "kito.uma_seed" then
-		return "kito_uma"
-	end
-	-- 戌（旧名群をすべて集約）
-	if eid == "kito_inu" or eid == "Inu_Chaff2" or eid == "kito.inu_chaff2" or eid == "kito.inu_two_chaff" or eid == "kito.inu_chaff" then
-		return "kito_inu"
-	end
-	-- 亥
-	if eid == "kito_i" or eid == "I_Sakeify" or eid == "kito.i_sake" then
-		return "kito_i"
-	end
-	-- 未
-	if eid == "kito_hitsuji" or eid == "Hitsuji_Prune" or eid == "kito.hitsuji_prune" then
-		return "kito_hitsuji"
-	end
-
-	-- すでに underscore か、その他はそのまま返す
-	return eid
-end
-
-local function kitoLabel(eid: string?): string
-	local id = toCanonicalEffectId(eid)
-	if id == "kito_tori"    then return "酉" end
-	if id == "kito_mi"      then return "巳" end
-	if id == "kito_usagi"   then return "卯" end
-	if id == "kito_uma"     then return "午" end
-	if id == "kito_inu"     then return "戌" end
-	if id == "kito_i"       then return "亥" end
-	if id == "kito_hitsuji" then return "未" end
+-- effectId が 'kito.*' のモジュール名である前提
+local function kitoLabelDot(dotId: string?): string
+	local id = tostring(dotId or "")
+	if id:sub(1,5) ~= "kito." then return "KITO" end
+	if id:find("tori",   1, true) then return "酉" end
+	if id:find("mi",     1, true) then return "巳" end
+	if id:find("usagi",  1, true) then return "卯" end
+	if id:find("uma",    1, true) then return "午" end
+	if id:find("inu",    1, true) then return "戌" end
+	if id:find("i_sake", 1, true) or id:match("^kito%.i$") then return "亥" end
+	if id:find("hitsuji",1, true) then return "未" end
+	if id:match("^kito%.ushi$") then return "丑" end
+	if id:match("^kito%.tora$") then return "寅" end
+	if id:match("^kito%.ko$")   then return "子" end
 	return "KITO"
 end
 
--- ★ どの Kito が「選択 UI（KitoPick）」必須か（underscoreで管理）
-local SELECT_KITO: {[string]: boolean} = {
-	["kito_tori"]    = true,
-	["kito_mi"]      = true,
-	["kito_usagi"]   = true,
-	["kito_uma"]     = true,
-	["kito_inu"]     = true,
-	["kito_i"]       = true,
-	["kito_hitsuji"] = true,
+-- ★ どの Kito が「選択 UI（KitoPick）」必須か（DOT ONLY）
+--   Module ID（dot）をそのまま key にする。
+local SELECT_KITO_DOT: {[string]: boolean} = {
+	["kito.tori_brighten"] = true,
+	["kito.mi_venom"]      = true,
+	["kito.usagi_ribbon"]  = true,
+	["kito.uma_seed"]      = true,
+	["kito.inu_chaff2"]    = true,
+	["kito.i_sake"]        = true,
+	["kito.hitsuji_prune"] = true,
+	-- 省略形（将来のShopDefsが 'kito.usagi' などを使う可能性に備える）
+	["kito.usagi"]         = true,
+	["kito.uma"]           = true,
+	["kito.inu"]           = true,
+	["kito.i"]             = true,
+	["kito.hitsuji"]       = true,
 }
-local function requiresKitoPick(canonical: string): boolean
-	return SELECT_KITO[canonical] == true
+local function requiresKitoPickDot(effectId: string): boolean
+	return SELECT_KITO_DOT[effectId] == true
 end
 
 --========================
@@ -17172,6 +17141,40 @@ end
 --========================
 -- 本体
 --========================
+local Service = { _getState=nil, _pushState=nil }
+
+-- ========= open =========
+local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string?, target:number?}?)
+	-- 開店直前に、正本の talisman を必ず準備（不足キーのみ補う）
+	pcall(function() TaliService.ensureFor(plr, "ShopOpen") end)
+
+	s.phase = "shop"
+	s.shop = s.shop or {}
+	s.shop.rng = s.shop.rng or Random.new(os.clock()*1000000)
+
+	-- 初回オープン時：在庫が無ければ MAX_STOCK で生成
+	if not s.shop.stock then
+		s.shop.stock = generateStock(s.shop.rng, MAX_STOCK)
+	end
+
+	local reward = (opts and opts.reward) or 0
+	local notice = (opts and opts.notice) or ""
+	local target = (opts and opts.target) or 0
+	local money  = tonumber(s.mon or 0) or 0
+
+	-- ★ RunDeckUtil が読めない環境でも nil 許容
+	local deckView = nil
+	if RunDeckUtil and typeof(RunDeckUtil.snapshot) == "function" then
+		deckView = RunDeckUtil.snapshot(s)
+	end
+
+	-- ★ talisman は state.run.talisman を“そのまま”搭載（補完や推測はしない）
+	local tali = readRunTalisman(s)
+
+	-- ===== LOG =====
+	LOG.info(
+		"[OPEN] u=%s season=%s mon=%d rerollCost=%d matsuri=%s stock=%s notice=%s talisman#=%s",
+		tostring(plr and plr.Name or "?"),
 ... (truncated)
 ```
 

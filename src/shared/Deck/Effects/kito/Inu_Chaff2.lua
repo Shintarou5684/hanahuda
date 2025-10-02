@@ -1,12 +1,13 @@
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Inu_Chaff2.lua
--- Inu (KITO): convert ONE target card to "chaff" (UID-first)
---  - Effect IDs (互換維持): "kito.inu_chaff2" (primary), "kito_inu", "kito.inu_two_chaff"
+-- Inu (KITO / DOT-ONLY): convert ONE target card to "chaff" (UID-first)
+--  - Effect ID: "kito.inu_chaff2"（唯一の真実）
 --  - Prioritize payload.uid / payload.uids / payload.poolUids (UID uniquely identifies one card)
 --  - Fallback to codes only if no UID is provided
 --  - DeckStore (v3) is treated as immutable; use DeckStore.transact to replace one entry (UID-first)
 --  - RNG is separated (ctx.rng preferred, otherwise Random.new())
 --  - If the month has no "chaff", do nothing (meta returned)
 --  - Diagnostic logs (scope: Effects.kito.inu_chaff2)
+
 return function(Effects)
 	--─────────────────────────────────────────────────────
 	-- Logger (optional)
@@ -25,18 +26,18 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- Shared handler
+	-- Shared handler (DOT-ONLY)
 	--─────────────────────────────────────────────────────
 	local function handler(ctx)
 		local payload     = ctx.payload or {}
 		local uidScalar   = (typeof(payload.uid)  == "string" and payload.uid)  or nil
 		local uids        = (typeof(payload.uids) == "table"  and payload.uids) or nil
 		local poolUids    = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
-		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat
+		local codes       = (typeof(payload.codes) == "table" and payload.codes) or nil -- legacy compat（code選択のみ）
 		local poolCodes   = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil -- legacy compat
 
-		-- 互換のため既定タグは旧名を踏襲（既適用カードの冪等を維持）
-		local tagMark     = tostring(payload.tag or "eff:kito_inu_chaff2")
+		-- ★ DOT-ONLY タグ表記（Kito.apply_via_effects の tag="eff:<moduleId>" と一致）
+		local tagMark     = tostring(payload.tag or "eff:kito.inu_chaff2")
 		local preferKind  = "chaff"
 
 		local runId       = ctx.runId
@@ -101,7 +102,8 @@ return function(Effects)
 		local function alreadyTagged(card)
 			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
 			for _, t in ipairs(card.tags) do
-				if t == tagMark or t == "eff:kito_inu_chaff" then return true end -- 旧新どちらのタグでも冪等
+				-- DOT-ONLY タグのみを見る（旧タグは無視）
+				if t == tagMark then return true end
 			end
 			return false
 		end
@@ -300,15 +302,15 @@ return function(Effects)
 	end
 
 	--─────────────────────────────────────────────────────
-	-- canApply（UIグレーアウト等に利用｜単カード判定）
+	-- canApply（UIグレーアウト等に利用｜単カード判定） DOT-ONLY
 	--─────────────────────────────────────────────────────
-	local function registerCanApply(id)
+	local function registerCanApplyDot(id)
 		Effects.registerCanApply(id, function(card, ctx2)
 			if type(card) ~= "table" then return false, "not-eligible" end
-			-- 既タグ冪等（旧/新どちらのタグでもスキップ）
+			-- DOT タグのみを見る（旧タグは無視）
 			if type(card.tags)=="table" then
 				for _,t in ipairs(card.tags) do
-					if t=="eff:kito_inu_chaff2" or t=="eff:kito_inu_chaff" then
+					if t=="eff:kito.inu_chaff2" then
 						return false, "already-applied"
 					end
 				end
@@ -339,13 +341,7 @@ return function(Effects)
 		end)
 	end
 
-	-- Primary (互換維持)
+	-- ★ DOT-ONLY 登録（レガシー別名は登録しない）
 	Effects.register("kito.inu_chaff2", handler)
-	registerCanApply("kito.inu_chaff2")
-	-- Legacy alias
-	Effects.register("kito_inu", handler)
-	registerCanApply("kito_inu")
-	-- Alias for ShopDefs consistency
-	Effects.register("kito.inu_two_chaff", handler)
-	registerCanApply("kito.inu_two_chaff")
+	registerCanApplyDot("kito.inu_chaff2")
 end
