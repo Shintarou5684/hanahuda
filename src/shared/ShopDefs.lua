@@ -50,11 +50,20 @@ ShopDefs.POOLS = {
 			descEN = "Permanent: taken cards score +1 (stackable).",
 		},
 
-		-- 酉：1枚を光札に変換（UIで対象選択）
+		-- 卯：短冊化（UIで対象選択）
 		{
-			id = "kito.tori_brighten", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito.tori_brighten",
-			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
-			descEN = "Convert one non-Bright in run config to Bright (or queue +1 for next season).",
+			id = "kito.usagi_ribbon", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
+			effect = "kito.usagi_ribbon",
+			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
+			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
+		},
+
+		-- 辰：写し取り（コピーして最弱候補を上書き）
+		{
+			id = "kito.tatsu_copy", name = "辰：1枚を写し取り", category = "kito", price = 6,
+			effect = "kito.tatsu_copy",
+			descJP = "選んだ札をコピーし、デッキ内の最弱候補（カス優先）1枚を上書き（枚数は不変）。",
+			descEN = "Duplicate a chosen card and overwrite the weakest deck entry (chaff first). Deck size unchanged.",
 		},
 
 		-- 巳：1枚をカスに変換（UIで対象選択）
@@ -64,28 +73,30 @@ ShopDefs.POOLS = {
 			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
 		},
 
-		-- 卯：短冊化（UIで対象選択）
-		{
-			id = "kito.usagi_ribbon", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
-			effect = "kito.usagi_ribbon",
-			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
-			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
-		},
-
-		-- 亥：酒化（UIで対象選択）
-		{
-			id = "kito.i_sake", name = "亥：1枚を酒に変換", category = "kito", price = 5,
-			effect = "kito.i_sake",
-			descJP = "対象札を9月の盃（タネ）に変換します。",
-			descEN = "Convert target to September's Seed (Sake).",
-		},
-
 		-- 午：タネ化（UIで対象選択）
 		{
 			id = "kito.uma_seed", name = "午：1枚をタネに変換", category = "kito", price = 4,
 			effect = "kito.uma_seed",
 			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
 			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
+		},
+
+		-- 未：圧縮（山札から1枚削除、UIで対象選択）
+		{
+			id = "kito.hitsuji_prune", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
+			effect = "kito.hitsuji_prune",
+			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
+			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
+		},
+
+		-- 申：※（将来拡張枠）
+		-- { id = "kito.saru_xxx", ... },
+
+		-- 酉：1枚を光札に変換（UIで対象選択）
+		{
+			id = "kito.tori_brighten", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito.tori_brighten",
+			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
+			descEN = "Convert one non-Bright in run config to Bright (or queue +1 for next season).",
 		},
 
 		-- 戌：カス化（UIで対象選択）
@@ -97,12 +108,12 @@ ShopDefs.POOLS = {
 			descEN = "Convert one target in the run to Chaff (no effect if already chaff).",
 		},
 
-		-- 未：圧縮（山札から1枚削除、UIで対象選択）
+		-- 亥：酒化（UIで対象選択）
 		{
-			id = "kito.hitsuji_prune", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
-			effect = "kito.hitsuji_prune",
-			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
-			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
+			id = "kito.i_sake", name = "亥：1枚を酒に変換", category = "kito", price = 5,
+			effect = "kito.i_sake",
+			descJP = "対象札を9月の盃（タネ）に変換します。",
+			descEN = "Convert target to September's Seed (Sake).",
 		},
 	},
 

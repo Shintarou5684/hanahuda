@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-02 12:59:40
+- Generated: 2025-10-03 02:51:07
 - Max lines/file: 300
 
 ## Folder Tree
@@ -143,6 +143,7 @@ hanahuda
 │       │   │   │   ├── I_Sakeify.lua
 │       │   │   │   ├── Inu_Chaff2.lua
 │       │   │   │   ├── Mi_Venom.lua
+│       │   │   │   ├── Tatsu_Copy.lua
 │       │   │   │   ├── Tori_Brighten.lua
 │       │   │   │   ├── Uma_Seedize.lua
 │       │   │   │   └── Usagi_Ribbonize.lua
@@ -816,7 +817,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-02 12:59:40
+- Generated: 2025-10-03 02:51:07
 - Max lines/file: 300
 
 ## Folder Tree
@@ -958,6 +959,7 @@ hanahuda
 │       │   │   │   ├── I_Sakeify.lua
 │       │   │   │   ├── Inu_Chaff2.lua
 │       │   │   │   ├── Mi_Venom.lua
+│       │   │   │   ├── Tatsu_Copy.lua
 │       │   │   │   ├── Tori_Brighten.lua
 │       │   │   │   ├── Uma_Seedize.lua
 │       │   │   │   └── Usagi_Ribbonize.lua
@@ -1112,7 +1114,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 
 ### v0.9.0 — 2025-09-06
 - **基礎採点**：役→文 / 札→点、総スコア = 文 × 点 を実装。
-- **祭事テーブル**と**役→祭事マッピング**を追加。
 ... (truncated)
 ```
 
@@ -12609,6 +12610,311 @@ return function(Effects)
 end
 ```
 
+### src/shared/Deck/Effects/kito/Tatsu_Copy.lua
+```lua
+-- ReplicatedStorage/SharedModules/Deck/Effects/kito/Tatsu_Copy.lua
+-- 辰（DOT-ONLY）：選んだ1枚を **完全複製** し、新規UIDを割当てて、デッキ内の最弱候補（chaff優先）を **上書き**
+--  - Effect ID: "kito.tatsu_copy"（DOT-ONLY）
+--  - 対象選択: payload.uid / payload.uids / payload.poolUids / payload.codes（UID優先）
+--  - 宛先は自動選定（sourceと同一UIDは除外）: chaff > ribbon/seed > bright
+--  - DeckStore は不変扱い。置換は transact 内で **UIDごと置換**（＝新規UIDを反映）
+--  - 既タグ "eff:kito.tatsu_copy" の **宛先** は no-op（冪等）
+--  - 「酒」など拡張フィールドも **deep clone** で丸ごと引き継ぐ
+--  - Diagnostic logs（scope: Effects.kito.tatsu_copy）
+
+return function(Effects)
+	--─────────────────────────────────────────────────────
+	-- Imports / Logger
+	--─────────────────────────────────────────────────────
+	local RS      = game:GetService("ReplicatedStorage")
+	local Shared  = RS:WaitForChild("SharedModules")
+
+	local LOG do
+		local ok, Logger = pcall(function()
+			return require(Shared:WaitForChild("Logger"))
+		end)
+		if ok and Logger and type(Logger.scope) == "function" then
+			LOG = Logger.scope("Effects.kito.tatsu_copy")
+		else
+			LOG = { info=function(...) end, debug=function(...) end, warn=function(...) warn(string.format(...)) end }
+		end
+	end
+
+	--─────────────────────────────────────────────────────
+	-- Handler
+	--─────────────────────────────────────────────────────
+	local function handler(ctx)
+		local payload   = ctx.payload or {}
+		local runId     = ctx.runId
+		local rng       = ctx.rng or Random.new()
+
+		local TAG       = "eff:kito.tatsu_copy"
+
+		-- 受け取り（UID優先）
+		local uid       = (typeof(payload.uid) == "string" and payload.uid) or nil
+		local uids      = (typeof(payload.uids) == "table"  and payload.uids) or nil
+		local poolUids  = (typeof(payload.poolUids) == "table" and payload.poolUids) or nil
+		local codes     = (typeof(payload.codes) == "table" and payload.codes) or nil
+		local poolCodes = (typeof(payload.poolCodes) == "table" and payload.poolCodes) or nil
+
+		-- ログヘッダ
+		local function head5(list)
+			if typeof(list) ~= "table" then return "-" end
+			local out, n = {}, math.min(#list, 5)
+			for i = 1, n do out[i] = tostring(list[i]) end
+			return table.concat(out, ",")
+		end
+
+		LOG.debug("[deps] DeckStore=%s DeckOps=%s CardEngine=%s",
+			tostring(ctx.DeckStore ~= nil), tostring(ctx.DeckOps ~= nil), tostring(ctx.CardEngine ~= nil))
+		LOG.info("[begin] run=%s | uid=%s uids[%s]=[%s] poolUids[%s]=[%s] codes[%s]=[%s] poolCodes[%s]=[%s]",
+			tostring(runId), tostring(uid),
+			tostring(uids and #uids or 0), head5(uids),
+			tostring(poolUids and #poolUids or 0), head5(poolUids),
+			tostring(codes and #codes or 0), head5(codes),
+			tostring(poolCodes and #poolCodes or 0), head5(poolCodes)
+		)
+
+		--─────────────────────────────────────────────────────
+		-- helpers
+		--─────────────────────────────────────────────────────
+		local function listToSet(list)
+			if typeof(list) ~= "table" then return nil end
+			local s = {}
+			for _, v in ipairs(list) do s[v] = true end
+			return s
+		end
+		local uidSet      = listToSet(uids)
+		local poolUidSet  = listToSet(poolUids)
+		local codeSet     = listToSet(codes)
+		local poolCodeSet = listToSet(poolCodes)
+
+		local function alreadyTagged(card)
+			if typeof(card) ~= "table" or typeof(card.tags) ~= "table" then return false end
+			for _, t in ipairs(card.tags) do if t == TAG then return true end end
+			return false
+		end
+
+		local function deepcopy(tbl, seen)
+			if typeof(tbl) ~= "table" then return tbl end
+			seen = seen or {}
+			if seen[tbl] then return seen[tbl] end
+			local out = {}
+			seen[tbl] = out
+			for k, v in pairs(tbl) do
+				out[deepcopy(k, seen)] = deepcopy(v, seen)
+			end
+			return out
+		end
+
+		local function cardStr(c:any)
+			if typeof(c) ~= "table" then return "<nil>" end
+			return string.format("{uid=%s code=%s kind=%s month=%s idx=%s tags=%s}",
+				tostring(c.uid), tostring(c.code), tostring(c.kind),
+				tostring(c.month), tostring(c.idx),
+				(function()
+					if typeof(c.tags) ~= "table" then return "[]" end
+					local t = {}
+					for i,v in ipairs(c.tags) do t[i] = tostring(v) end
+					return "["..table.concat(t, ",").."]"
+				end)()
+			)
+		end
+
+		-- UID prefix 推定（code 優先、無ければ month/idx から作成）
+		local function codePrefixOf(entry)
+			local code = tostring(entry.code or "")
+			if code ~= "" then return code end
+			local mm = tonumber(entry.month); local ii = tonumber(entry.idx)
+			if typeof(mm)=="number" and typeof(ii)=="number" then
+				return string.format("%02d%02d", mm, ii)
+			end
+			return "0000"
+		end
+
+		-- 既存UIDを走査して "CODE#NNN" の NNN の最大値+1 を採番
+		local function allocNewUid(store, sourceEntry)
+			local prefix = codePrefixOf(sourceEntry)
+			local maxN = 0
+			local entries = (store and store.entries) or {}
+			for _, e in ipairs(entries) do
+				local uid0 = tostring(e.uid or "")
+				if string.sub(uid0, 1, #prefix + 1) == (prefix .. "#") then
+					local suffix = tonumber(string.sub(uid0, #prefix + 2)) or 0
+					if suffix > maxN then maxN = suffix end
+				end
+			end
+			local nextN = math.clamp(maxN + 1, 1, 9999)
+			return string.format("%s#%03d", prefix, nextN)
+		end
+
+		-- UID で1件置換（※ここで **新規UID** を反映させる）
+		local function replaceOneByUidWithNew(store, oldUid, newEntryWithNewUid)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.uid == oldUid then
+					local c = deepcopy(newEntryWithNewUid or {})
+					-- newEntry 側の uid/code/month/idx を **優先採用**（＝完全置換）
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByUid(new)] old=%s -> %s", tostring(oldUid), cardStr(newEntryWithNewUid))
+			else
+				LOG.warn("[replaceByUid(new)] uid=%s not found (no-op)", tostring(oldUid))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- code で1件置換（フォールバック／新UIDで上書き）
+		local function replaceOneByCodeWithNew(store, codeX, newEntryWithNewUid)
+			local entries = (store and store.entries) or {}
+			local n = #entries; if n == 0 then return store end
+			local out = table.create(n)
+			local done = false
+			for i = 1, n do
+				local e = entries[i]
+				if (not done) and e and e.code == codeX then
+					local c = deepcopy(newEntryWithNewUid or {})
+					out[i]  = c
+					done    = true
+				else
+					out[i] = e
+				end
+			end
+			if done then
+				LOG.debug("[replaceByCode(new)] code=%s -> %s", tostring(codeX), cardStr(newEntryWithNewUid))
+			else
+				LOG.warn("[replaceByCode(new)] code=%s not found (no-op)", tostring(codeX))
+			end
+			return { v = 3, entries = out }
+		end
+
+		-- 対象（コピー元）
+		local function pickSource(store)
+			local entries = (store and store.entries) or {}
+			if #entries == 0 then return nil, "empty-store" end
+
+			-- 0) direct uid
+			if uid and uid ~= "" then
+				for _, e in ipairs(entries) do
+					if e and e.uid == uid then return e, "direct-uid" end
+				end
+			end
+			-- 1) uids set
+			if uidSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and uidSet[e.uid] then cand[#cand+1] = e end
+				end
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "uids" end
+			end
+			-- 2) poolUids set
+			if poolUidSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.uid and poolUidSet[e.uid] then cand[#cand+1] = e end
+				end
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "poolUids" end
+			end
+			-- 3) codes set
+			if codeSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and codeSet[e.code] then cand[#cand+1] = e end
+				end
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "codes" end
+			end
+			-- 4) poolCodes set
+			if poolCodeSet then
+				local cand = {}
+				for _, e in ipairs(entries) do
+					if e and e.code and poolCodeSet[e.code] then cand[#cand+1] = e end
+				end
+				if #cand > 0 then return cand[rng:NextInteger(1, #cand)], "poolCodes" end
+			end
+			return nil, "no-candidate"
+		end
+
+		-- 宛先（最弱候補）を自動選定：chaff(1) < ribbon/seed(2) < bright(3)
+		local function pickDestWeakest(store, sourceUid)
+			local entries = (store and store.entries) or {}
+			if #entries == 0 then return nil end
+			local function prioOf(e)
+				local k = tostring(e.kind or "")
+				if k == "chaff" then return 1 end
+				if k == "ribbon" or k == "seed" then return 2 end
+				return 3
+			end
+			local best, bestP = nil, math.huge
+			for _, e in ipairs(entries) do
+				if e and e.uid ~= sourceUid then
+					local p = prioOf(e)
+					if p < bestP then best, bestP = e, p end
+				end
+			end
+			return best
+		end
+
+		--─────────────────────────────────────────────────────
+		-- Main（DeckStore.transact）
+		--─────────────────────────────────────────────────────
+		local t0 = os.clock()
+		LOG.debug("[transact] run=%s enter", tostring(runId))
+
+		return ctx.DeckStore.transact(runId, function(store)
+			local storeSize = (store and store.entries and #store.entries) or 0
+			LOG.debug("[store] size=%s", tostring(storeSize))
+
+			-- 1) コピー元
+			local source, via = pickSource(store)
+			if not source then
+				LOG.info("[result] no-source (via=%s)", tostring(via))
+				return store, { ok = true, changed = 0, meta = "no-source", pickReason = via }
+			end
+			LOG.debug("[source] via=%s %s", tostring(via), cardStr(source))
+
+			-- 2) 宛先（弱い候補）
+			local dest = pickDestWeakest(store, source.uid)
+			if not dest then
+				LOG.info("[result] no-dest (store empty or single)")
+				return store, { ok = true, changed = 0, meta = "no-dest" }
+			end
+			LOG.debug("[dest] %s", cardStr(dest))
+
+			if alreadyTagged(dest) then
+				LOG.info("[result] dest-already-applied uid=%s code=%s", tostring(dest.uid), tostring(dest.code))
+				return store, { ok = true, changed = 0, meta = "already-applied", targetUid = dest.uid, targetCode = dest.code }
+			end
+
+			-- 3) 完全複製：source を deep clone（uid は付け替える）
+			local copyAll = deepcopy(source)
+			copyAll.uid = allocNewUid(store, source)   -- ★ 新規UIDを採番
+			-- tags は複製のうえ、今回のTAGを付与（DeckOps.attachTag があればそれを使う）
+			if ctx.DeckOps and ctx.DeckOps.attachTag then
+				copyAll = ctx.DeckOps.attachTag(copyAll, TAG)
+			else
+				copyAll.tags = typeof(copyAll.tags)=="table" and copyAll.tags or {}
+				table.insert(copyAll.tags, TAG)
+			end
+
+			LOG.debug("[copy(new-uid)] %s", cardStr(copyAll))
+
+			-- 4) 置換：宛先スロットを **copyAll（新UID）** で上書き（＝サイズは不変）
+			if dest.uid and dest.uid ~= "" then
+				store = replaceOneByUidWithNew(store, dest.uid, copyAll)
+			else
+				store = replaceOneByCodeWithNew(store, dest.code, copyAll)
+... (truncated)
+```
+
 ### src/shared/Deck/Effects/kito/Tori_Brighten.lua
 ```lua
 -- ReplicatedStorage/SharedModules/Deck/Effects/kito/Tori_Brighten.lua
@@ -14272,14 +14578,22 @@ return M
 ### src/shared/Logger.lua
 ```lua
 -- SharedModules/Logger.lua
+-- =========================================================
+-- ▼▼▼ ここだけ編集すればOK（保存式・手動切替） ▼▼▼
+-- ログレベル: 1=少ない(WARN/ERROR) / 2=そこそこ(INFO以上) / 3=全部(DEBUGまで)
+local USER_VERBOSITY = 2  -- ★ここを 1 / 2 / 3 に変更して保存してください
+-- ▲▲▲ ここだけ編集すればOK ▲▲▲
+-- =========================================================
+--
 -- 使い方:
 --   local RS = game:GetService("ReplicatedStorage")
 --   local Logger = require(RS.SharedModules.Logger)
 --   local LOG = Logger.scope("RunScreen")  -- タグ＝出所名
 --   LOG.debug("boot %s", tostring(version))
 --
--- 公開ビルドで抑止: どこかのブートで
---   Logger.configure({ level = Logger.WARN })  -- または Logger.ERROR
+-- ※コードから明示的に変えたい場合は:
+--   Logger.setVerbosity(3)  または  Logger.configure({ verbosity = 1 })
+--   （↑USER_VERBOSITY より後に呼ぶと、その設定が優先されます）
 
 local RunService   = game:GetService("RunService")
 local HttpService  = game:GetService("HttpService")
@@ -14291,15 +14605,35 @@ Logger.WARN  = 30
 Logger.ERROR = 40
 Logger.NONE  = 99
 
+-- 1/2/3 を Logger の閾値に変換
+local VERBOSITY_TO_LEVEL = {
+	[1] = Logger.WARN,  -- 少ない: WARN/ERROR
+	[2] = Logger.INFO,  -- そこそこ: INFO/WARN/ERROR
+	[3] = Logger.DEBUG, -- 全部: DEBUG含む
+}
+
+-- 初期レベルは USER_VERBOSITY を最優先。未設定/不正なら Studio=DEBUG / 公開=WARN
+local function _initialLevel()
+	local v = tonumber(USER_VERBOSITY)
+	if v and VERBOSITY_TO_LEVEL[v] then
+		return VERBOSITY_TO_LEVEL[v], v
+	end
+	local lvl = RunService:IsStudio() and Logger.DEBUG or Logger.WARN
+	return lvl, nil
+end
+
+local _initLevel, _initVerbosity = _initialLevel()
+
 local state = {
-	level = RunService:IsStudio() and Logger.DEBUG or Logger.WARN, -- Studioは詳しめ、公開は控えめ
+	level = _initLevel,          -- ← 初期レベル
+	verbosity = _initVerbosity,  -- ← 1/2/3（USER_VERBOSITYが有効なら入る）
 	timePrefix = true,
-	throwOnError = false,       -- ERRORで error() したいなら true
-	enabledTags = nil,          -- nil=全許可 / set型 {"NAV"=true, ...}
-	disabledTags = {},          -- set型
-	dupWindowSec = 0.75,        -- 同一メッセージの抑制ウィンドウ（秒）
-	_last = {},                 -- [key]=lastTime
-	sink = nil,                 -- カスタム出力先 (function(level, line))
+	throwOnError = false,        -- ERRORで error() したいなら true
+	enabledTags = nil,           -- nil=全許可 / set型 {"NAV"=true, ...}
+	disabledTags = {},           -- set型
+	dupWindowSec = 0.75,         -- 同一メッセージの抑制ウィンドウ（秒）
+	_last = {},                  -- [key]=lastTime
+	sink = nil,                  -- カスタム出力先 (function(level, line))
 }
 
 local LVL_NAME = {
@@ -14420,9 +14754,31 @@ end
 
 -- ========= Public API =========
 
+-- 1/2/3 の簡易モード設定
+function Logger.setVerbosity(n)
+	n = tonumber(n)
+	if not n or not VERBOSITY_TO_LEVEL[n] then return end
+	state.verbosity = n
+	state.level = VERBOSITY_TO_LEVEL[n]
+end
+
+function Logger.getVerbosity()
+	return state.verbosity
+end
+
 function Logger.configure(opts)
 	if typeof(opts) ~= "table" then return end
-	if opts.level ~= nil then state.level = opts.level end
+
+	-- verbosity があれば最優先（USER_VERBOSITYより後で呼ぶと上書き）
+	if opts.verbosity ~= nil then
+		Logger.setVerbosity(opts.verbosity)
+	end
+
+	-- level の直接指定も可（verbosity 未指定/無効時はこちらが効く）
+	if opts.level ~= nil then
+		state.level = opts.level
+	end
+
 	if opts.timePrefix ~= nil then state.timePrefix = opts.timePrefix end
 	if opts.throwOnError ~= nil then state.throwOnError = opts.throwOnError end
 	if opts.dupWindowSec ~= nil then state.dupWindowSec = opts.dupWindowSec end
@@ -14430,16 +14786,22 @@ function Logger.configure(opts)
 
 	if opts.enableTags then
 		local set = {}
-		for _, t in ipairs(opts.enableTags) do set[t] = true end
+		for _, t in ipairs(opts.enableTags) do set[tostring(t)] = true end
 		state.enabledTags = set
 	end
 	if opts.disableTags then
-		for _, t in ipairs(opts.disableTags) do state.disabledTags[t] = true end
+		for _, t in ipairs(opts.disableTags) do state.disabledTags[tostring(t)] = true end
 	end
 end
 
-function Logger.setLevel(lvl) state.level = lvl end
-function Logger.getLevel() return state.level end
+function Logger.setLevel(lvl)
+	state.level = lvl
+	-- 明示的に level を上書きした場合、verbosity の値は保持（混在運用OK）
+end
+
+function Logger.getLevel()
+	return state.level
+end
 
 -- タグ別ロガー（推奨）
 function Logger.scope(tag)  -- ← 予約語回避（旧: Logger.for）
@@ -16549,11 +16911,20 @@ ShopDefs.POOLS = {
 			descEN = "Permanent: taken cards score +1 (stackable).",
 		},
 
-		-- 酉：1枚を光札に変換（UIで対象選択）
+		-- 卯：短冊化（UIで対象選択）
 		{
-			id = "kito.tori_brighten", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito.tori_brighten",
-			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
-			descEN = "Convert one non-Bright in run config to Bright (or queue +1 for next season).",
+			id = "kito.usagi_ribbon", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
+			effect = "kito.usagi_ribbon",
+			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
+			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
+		},
+
+		-- 辰：写し取り（コピーして最弱候補を上書き）
+		{
+			id = "kito.tatsu_copy", name = "辰：1枚を写し取り", category = "kito", price = 6,
+			effect = "kito.tatsu_copy",
+			descJP = "選んだ札をコピーし、デッキ内の最弱候補（カス優先）1枚を上書き（枚数は不変）。",
+			descEN = "Duplicate a chosen card and overwrite the weakest deck entry (chaff first). Deck size unchanged.",
 		},
 
 		-- 巳：1枚をカスに変換（UIで対象選択）
@@ -16563,28 +16934,30 @@ ShopDefs.POOLS = {
 			descEN = "Convert a target in the run to Chaff (grants a small immediate mon bonus).",
 		},
 
-		-- 卯：短冊化（UIで対象選択）
-		{
-			id = "kito.usagi_ribbon", name = "卯：1枚を短冊に変換", category = "kito", price = 4,
-			effect = "kito.usagi_ribbon",
-			descJP = "ラン構成の対象札を短冊に変換（対象月に短冊が無い場合は不発）。",
-			descEN = "Convert one target to a Ribbon (no effect if that month has no ribbon).",
-		},
-
-		-- 亥：酒化（UIで対象選択）
-		{
-			id = "kito.i_sake", name = "亥：1枚を酒に変換", category = "kito", price = 5,
-			effect = "kito.i_sake",
-			descJP = "対象札を9月の盃（タネ）に変換します。",
-			descEN = "Convert target to September's Seed (Sake).",
-		},
-
 		-- 午：タネ化（UIで対象選択）
 		{
 			id = "kito.uma_seed", name = "午：1枚をタネに変換", category = "kito", price = 4,
 			effect = "kito.uma_seed",
 			descJP = "ラン構成の対象札をタネに変換（対象月にタネが無い場合は不発）。",
 			descEN = "Convert one target to a Seed (no effect if that month has no seed).",
+		},
+
+		-- 未：圧縮（山札から1枚削除、UIで対象選択）
+		{
+			id = "kito.hitsuji_prune", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
+			effect = "kito.hitsuji_prune",
+			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
+			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
+		},
+
+		-- 申：※（将来拡張枠）
+		-- { id = "kito.saru_xxx", ... },
+
+		-- 酉：1枚を光札に変換（UIで対象選択）
+		{
+			id = "kito.tori_brighten", name = "酉：1枚を光札に変換", category = "kito", price = 6, effect = "kito.tori_brighten",
+			descJP = "ラン構成の非brightを1枚brightへ（対象無しなら次季に+1繰越）。",
+			descEN = "Convert one non-Bright in run config to Bright (or queue +1 for next season).",
 		},
 
 		-- 戌：カス化（UIで対象選択）
@@ -16596,12 +16969,12 @@ ShopDefs.POOLS = {
 			descEN = "Convert one target in the run to Chaff (no effect if already chaff).",
 		},
 
-		-- 未：圧縮（山札から1枚削除、UIで対象選択）
+		-- 亥：酒化（UIで対象選択）
 		{
-			id = "kito.hitsuji_prune", name = "未：1枚を削除（圧縮）", category = "kito", price = 6,
-			effect = "kito.hitsuji_prune",
-			descJP = "山札から1枚を削除（デッキ圧縮）。対象未指定なら不発。",
-			descEN = "Remove one card from the deck (compression). No-op if no target specified.",
+			id = "kito.i_sake", name = "亥：1枚を酒に変換", category = "kito", price = 5,
+			effect = "kito.i_sake",
+			descJP = "対象札を9月の盃（タネ）に変換します。",
+			descEN = "Convert target to September's Seed (Sake).",
 		},
 	},
 
