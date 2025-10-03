@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-03 02:51:07
+- Generated: 2025-10-04 03:10:23
 - Max lines/file: 300
 
 ## Folder Tree
@@ -817,7 +817,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-03 02:51:07
+- Generated: 2025-10-04 03:10:23
 - Max lines/file: 300
 
 ## Folder Tree
@@ -3151,19 +3151,28 @@ return M
 ### src/client/ui/components/ResultModal.lua
 ```lua
 -- StarterPlayerScripts/UI/components/ResultModal.lua
--- ステージ結果モーダル：3択／ワンボタン（final）両対応（Nav統一/ロック無効化対応）
--- v0.9.7-P1-4: Theme 完全デフォルト化（色／角丸／オーバーレイ透過／ボタン配色を Theme 参照に統一）
+-- ステージ結果モーダル：2択（こいこい／ホーム）＋ワンボタン（final）
+-- v0.9.8: 12-month対応／解禁ロジック撤廃／"next","save"削除 → "koikoi","home" に集約
+--         Theme 完全デフォルト化（配色は Theme を参照）
 
 local M = {}
 
 -- 型（Luau）
 type NavIF = { next: (NavIF, string) -> () }
-type Handlers = { home: (() -> ())?, next: (() -> ())?, save: (() -> ())?, final: (() -> ())? }
+type Handlers = { home: (() -> ())?, koikoi: (() -> ())?, final: (() -> ())? }
 type ResultAPI = {
 	hide: (ResultAPI) -> (),
-	show: (ResultAPI, data: { rewardBank: number?, message: string?, clears: number? }?) -> (),
+	-- 2択：こいこい/ホーム（9/10/11/12月のクリア時に利用）
+	show: (ResultAPI, data: {
+		rewardBank: number?,        -- 付与両（既定=2）
+		titleText: string?,         -- タイトル上書き（省略時は自動生成）
+		descText: string?,          -- 説明上書き（省略時は自動生成）
+		nextMonth: number?,         -- こいこい先の月（例: 10）
+		nextGoal: number?,          -- こいこい先の目標スコア
+	}?) -> (),
+	-- ワンボタン（完全終了時 12月想定）
 	showFinal: (ResultAPI, titleText: string?, descText: string?, buttonText: string?, onClick: (() -> ())?) -> (),
-	setLocked: (ResultAPI, boolean, boolean) -> (),
+	setLocked: (ResultAPI, boolean) -> (), -- こいこいボタンのロックだけ提供
 	on: (ResultAPI, Handlers) -> (),
 	bindNav: (ResultAPI, Nav: NavIF) -> (),
 	destroy: (ResultAPI) -> (),
@@ -3285,7 +3294,7 @@ function M.create(parent: Instance): ResultAPI
 	desc.Text = ""
 	desc.TextColor3 = (Theme.COLORS and Theme.COLORS.TextDefault) or Color3.fromRGB(25,25,25)
 
-	-------------------------------- 3択ボタン行
+	-------------------------------- 2択ボタン行（こいこい／ホーム）
 	local btnRow = Instance.new("Frame")
 	btnRow.Name = "BtnRow"
 	btnRow.Parent = modal
@@ -3302,7 +3311,7 @@ function M.create(parent: Instance): ResultAPI
 	local function mkBtn(text: string, style: "primary" | "neutral" | "warn" | nil): TextButton
 		local C = Theme.COLORS
 		local b = Instance.new("TextButton")
-		b.Size = UDim2.new(0.31, 0, 1, 0)
+		b.Size = UDim2.new(0.45, 0, 1, 0)
 		b.Text = text
 		b.AutoButtonColor = true
 		b.TextWrapped = true
@@ -3333,9 +3342,8 @@ function M.create(parent: Instance): ResultAPI
 		return b
 	end
 
-	local btnHome = mkBtn("帰宅する（TOPへ）", "neutral")
-	local btnNext = mkBtn("次のステージへ（+25年＆屋台）", "primary")
-	local btnSave = mkBtn("セーブして終了", "neutral")
+	local btnHome  = mkBtn("ホームへ", "neutral")
+	local btnKoi   = mkBtn("こいこい", "primary") -- テキストは show() 時に上書き
 
 	-------------------------------- ワンボタン（final）
 	local finalBtn = Instance.new("TextButton")
@@ -3359,19 +3367,15 @@ function M.create(parent: Instance): ResultAPI
 	end
 
 	-------------------------------- ハンドラ
-	local on: Handlers = { home = nil, next = nil, save = nil, final = nil }
+	local on: Handlers = { home = nil, koikoi = nil, final = nil }
 
-	-- クリック結線（ロック中は無視）
+	-- クリック結線（ロック中は無視：こいこいのみロック対象）
 	btnHome.Activated:Connect(function()
 		if on.home then on.home() end
 	end)
-	btnNext.Activated:Connect(function()
-		if btnNext:GetAttribute("locked") then return end
-		if on.next then on.next() end
-	end)
-	btnSave.Activated:Connect(function()
-		if btnSave:GetAttribute("locked") then return end
-		if on.save then on.save() end
+	btnKoi.Activated:Connect(function()
+		if btnKoi:GetAttribute("locked") then return end
+		if on.koikoi then on.koikoi() end
 	end)
 	finalBtn.Activated:Connect(function()
 		if on.final then on.final() end
@@ -3388,22 +3392,34 @@ function M.create(parent: Instance): ResultAPI
 		modal.Visible = false
 	end
 
-	-- 従来の3択表示
+	-- 2択（9/10/11/12月のクリア時）
+	-- data: { rewardBank?, titleText?, descText?, nextMonth?, nextGoal? }
 	function api:show(data)
-		local add = tonumber(data and data.rewardBank) or 2
+		local add       = tonumber(data and data.rewardBank) or 2
+		local nextMonth = tonumber(data and data.nextMonth) or nil
+		local nextGoal  = tonumber(data and data.nextGoal) or nil
+
+		local titleText = data and data.titleText
+			or ("クリアおめでとう！  +%d両"):format(add)
+
+		local descText = data and data.descText
+			or (nextMonth and nextGoal)
+				and ("このまま こいこい で <b>%d月：目標 %s</b> に挑戦しますか？"):format(nextMonth, tostring(nextGoal))
+				or "このまま こいこい で続けますか？"
+
+		local koiLabel = (nextMonth and nextGoal)
+			and ("こいこい（%d月：目標 %s）"):format(nextMonth, tostring(nextGoal))
+			or "こいこい"
+
 		local C = Theme.COLORS
 		title.TextColor3 = (C and C.TextDefault) or title.TextColor3
 		desc.TextColor3  = (C and C.TextDefault) or desc.TextColor3
 
-		title.Text = ("冬 クリア！ +%d両"):format(add)
-		if data and data.message and data.message ~= "" then
-			desc.Text = data.message
-		else
-			local clears = tonumber(data and data.clears) or 0
-			desc.Text = ("次の行き先を選んでください。（進捗: 通算 %d/3 クリア）"):format(clears)
-		end
+		title.Text = titleText
+		desc.Text  = descText
+		btnKoi.Text = koiLabel
 
-		-- 表示切替：3択オン／ワンボタンオフ
+		-- 表示切替：2択オン／ワンボタンオフ
 		btnRow.Visible = true
 		finalBtn.Visible = false
 
@@ -3411,14 +3427,14 @@ function M.create(parent: Instance): ResultAPI
 		modal.Visible = true
 	end
 
-	-- 冬（最終）専用：ワンボタン表示
+	-- 完全終了（12月など）：ワンボタン
 	function api:showFinal(titleText: string?, descText: string?, buttonText: string?, onClick: (() -> ())?)
 		title.Text = titleText or "クリアおめでとう！"
 		desc.Text  = descText  or "このランは終了です。メニューに戻ります。"
 		finalBtn.Text = buttonText or "メニューに戻る"
 		on.final = onClick
 
-		-- 表示切替：3択オフ／ワンボタンオン
+		-- 表示切替：2択オフ／ワンボタンオン
 		btnRow.Visible = false
 		finalBtn.Visible = true
 
@@ -3426,30 +3442,14 @@ function M.create(parent: Instance): ResultAPI
 		modal.Visible = true
 	end
 
-	-- 3択のロック設定
-	function api:setLocked(nextLocked:boolean, saveLocked:boolean)
-		setLockedVisual(btnNext, nextLocked)
-		setLockedVisual(btnSave, saveLocked)
+	-- こいこいボタンのロック設定（救済演出や通信中のガード等に）
+	function api:setLocked(koikoiLocked:boolean)
+		setLockedVisual(btnKoi, koikoiLocked and true or false)
 	end
 
-	-- 3択/ワンボタンのハンドラ設定
+	-- ハンドラ設定
 	function api:on(handlers: Handlers)
-		on.home  = handlers and handlers.home  or on.home
-		on.next  = handlers and handlers.next  or on.next
-		on.save  = handlers and handlers.save  or on.save
-		on.final = handlers and handlers.final or on.final
-	end
-
-	-- ▼ Nav 糖衣（UI側は self._resultModal:bindNav(self.deps.Nav) だけでOK）
-	function api:bindNav(nav: NavIF)
-		if not nav or type(nav.next) ~= "function" then return end
-		on.home  = function() nav:next("home") end
-		on.next  = function() nav:next("next") end
-		on.save  = function() nav:next("save") end
-		on.final = function() nav:next("home") end
-	end
-
-	-- 破棄（画面遷移時のリーク防止）
+		on.home   = handlers and handlers.home   or on.home
 ... (truncated)
 ```
 
@@ -4734,14 +4734,18 @@ end, false, Enum.KeyCode.F10)
 ### src/client/ui/lib/FormatUtil.lua
 ```lua
 -- StarterPlayerScripts/UI/lib/FormatUtil.lua
--- スコア・状態などの整形ユーティリティ（言語対応）
+-- スコア・状態などの整形ユーティリティ（12か月版・言語対応）
+-- ・month / monthStr / goal を優先表示（season は互換として括弧付き併記）
+-- ・旧フィールド（target, season, seasonStr 等）も吸収
 
 local RS = game:GetService("ReplicatedStorage")
 local Locale = require(RS:WaitForChild("Config"):WaitForChild("Locale"))
 
 local M = {}
 
+--==================================================
 -- 言語コードの正規化
+--==================================================
 local function normLang(lang: string?)
 	local v = tostring(lang or ""):lower()
 	if v == "jp" then v = "ja" end
@@ -4749,111 +4753,150 @@ local function normLang(lang: string?)
 	return v
 end
 
+--==================================================
 -- 役名のローカライズ辞書（"ja" を正規キーに）
+--==================================================
 local ROLE_NAMES = {
-  en = {
-    five_bright      = "Five Brights",
-    four_bright      = "Four Brights",
-    rain_four_bright = "Rain Four Brights",
-    three_bright     = "Three Brights",
-    inoshikacho      = "Boar–Deer–Butterfly",
-    red_ribbon       = "Red Ribbons",
-    blue_ribbon      = "Blue Ribbons",
-    seeds            = "Seeds",
-    ribbons          = "Ribbons",
-    chaffs           = "Chaff",
-    hanami           = "Hanami Sake",
-    tsukimi          = "Tsukimi Sake",
-  },
-  ja = {
-    five_bright      = "五光",
-    four_bright      = "四光",
-    rain_four_bright = "雨四光",
-    three_bright     = "三光",
-    inoshikacho      = "猪鹿蝶",
-    red_ribbon       = "赤短",
-    blue_ribbon      = "青短",
-    seeds            = "たね",
-    ribbons          = "たん",
-    chaffs           = "かす",
-    hanami           = "花見で一杯",
-    tsukimi          = "月見で一杯",
-  }
+	en = {
+		five_bright      = "Five Brights",
+		four_bright      = "Four Brights",
+		rain_four_bright = "Rain Four Brights",
+		three_bright     = "Three Brights",
+		inoshikacho      = "Boar–Deer–Butterfly",
+		red_ribbon       = "Red Ribbons",
+		blue_ribbon      = "Blue Ribbons",
+		seeds            = "Seeds",
+		ribbons          = "Ribbons",
+		chaffs           = "Chaff",
+		hanami           = "Hanami Sake",
+		tsukimi          = "Tsukimi Sake",
+	},
+	ja = {
+		five_bright      = "五光",
+		four_bright      = "四光",
+		rain_four_bright = "雨四光",
+		three_bright     = "三光",
+		inoshikacho      = "猪鹿蝶",
+		red_ribbon       = "赤短",
+		blue_ribbon      = "青短",
+		seeds            = "たね",
+		ribbons          = "たん",
+		chaffs           = "かす",
+		hanami           = "花見で一杯",
+		tsukimi          = "月見で一杯",
+	}
 }
 
+--==================================================
 -- 役集合を「a / b / c」形式の文字列に
 -- roles: { [role_key]=true or number } / array でもOK（キーを拾う）
+--==================================================
 function M.rolesToLines(roles, langOpt)
-  local lang = normLang(langOpt or (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en")
-  local names = ROLE_NAMES[lang] or ROLE_NAMES.en
+	local lang = normLang(langOpt or (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en")
+	local names = ROLE_NAMES[lang] or ROLE_NAMES.en
 
-  if typeof(roles) ~= "table" then
-    return Locale.t(lang, "ROLES_NONE")
-  end
+	if typeof(roles) ~= "table" then
+		return Locale.t(lang, "ROLES_NONE")
+	end
 
-  local hasAny = false
-  local list = {}
+	local hasAny = false
+	local list = {}
 
-  -- roles が map でも配列でも対応
-  for k, v in pairs(roles) do
-    local key = (typeof(k) == "string") and k
-             or (typeof(v) == "string") and v
-             or nil
-    if key then
-      local disp = names[key] or key
-      table.insert(list, disp)
-      hasAny = true
-    end
-  end
+	-- roles が map でも配列でも対応
+	for k, v in pairs(roles) do
+		local key = (typeof(k) == "string") and k
+		         or (typeof(v) == "string") and v
+		         or nil
+		if key then
+			local disp = names[key] or key
+			table.insert(list, disp)
+			hasAny = true
+		end
+	end
 
-  if not hasAny or #list == 0 then
-    return Locale.t(lang, "ROLES_NONE")
-  end
+	if not hasAny or #list == 0 then
+		return Locale.t(lang, "ROLES_NONE")
+	end
 
-  table.sort(list, function(a, b) return tostring(a) < tostring(b) end)
-  return table.concat(list, " / ")
+	table.sort(list, function(a, b) return tostring(a) < tostring(b) end)
+	return table.concat(list, " / ")
 end
 
--- 状態行（英/日対応）
+--==================================================
+-- 月名 / 季節名（簡易ローカライズ）
+--==================================================
+local SEASON_JA = {"春","夏","秋","冬"}
+local SEASON_EN = {"Spring","Summer","Autumn","Winter"}
+
+local function monthLabel(m:number, lang:string): string
+	m = tonumber(m) or 0
+	if m < 1 then m = 1 end
+	if m > 12 then m = 12 end
+	-- monthStr が来ない場合のフォールバック表記
+	if lang == "ja" then
+		return tostring(m) .. "月"
+	else
+		return "M" .. tostring(m)
+	end
+end
+
+local function seasonLabel(s:number, lang:string): string
+	local tbl = (lang=="ja") and SEASON_JA or SEASON_EN
+	if s>=1 and s<=#tbl then return tbl[s] end
+	-- 不明値を簡易に整形
+	return (lang=="ja") and ("季節"..tostring(s)) or ("S"..tostring(s))
+end
+
+--==================================================
+-- 状態行（英/日対応・12か月対応）
 -- 呼び出し側から lang を渡す想定（nilなら "en"）
+--==================================================
 function M.stateLineText(st, langOpt)
-  local lang = normLang(langOpt or (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en")
+	local lang = normLang(langOpt or (typeof(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en")
 
-  -- できるだけ多くのキーに対応（サーバ実装差異の吸収）
-  local y   = tonumber(st and (st.year or st.y)) or 0
-  local s   = tonumber(st and (st.season or st.s)) or 0
-  local goal= st and (st.goal or st.target)
-  local sum = tonumber(st and (st.sum or st.seasonSum)) or 0
-  local handsLeft   = tonumber(st and (st.hands or st.handLeft or st.handsLeft or st.handRemain)) or 0
-  local rerollsLeft = tonumber(st and (st.rerolls or st.rerollRemain or st.rerollsLeft)) or 0
-  local mult = tonumber(st and (st.mult or st.multiplier)) or 1
-  local bank = tonumber(st and (st.bank)) or 0
-  local deckLeft = tonumber(st and (st.deckLeft or st.deck or st.deckCount)) or 0
-  local handCount= tonumber(st and (st.hand or st.handCount)) or 0
+	-- できるだけ多くのキーに対応（サーバ実装差異の吸収）
+	local y     = tonumber(st and (st.year or st.y)) or 0
+	local s     = tonumber(st and (st.season or st.s)) or 0
+	local m     = tonumber(st and (st.month or (st.run and st.run.month))) or 0
+	local goal  = st and (st.goal or st.target)
+	local sum   = tonumber(st and (st.sum or st.seasonSum)) or 0
+	local handsLeft   = tonumber(st and (st.hands or st.handLeft or st.handsLeft or st.handRemain)) or 0
+	local rerollsLeft = tonumber(st and (st.rerolls or st.rerollRemain or st.rerollsLeft)) or 0
+	local mult  = tonumber(st and (st.mult or st.multiplier)) or 1
+	local bank  = tonumber(st and (st.bank)) or 0
+	local deckLeft = tonumber(st and (st.deckLeft or st.deck or st.deckCount)) or 0
+	local handCount= tonumber(st and (st.hand or st.handCount)) or 0
 
-  local yearTxt = (y > 0) and tostring(y) or ((lang=="ja") and "----" or "----")
+	local yearTxt = (y > 0) and tostring(y) or ((lang=="ja") and "----" or "----")
 
-  -- season は文字列優先（例: "春/夏/秋/冬" をサーバが渡すケース）
-  local seasonStr = nil
-  if st and typeof(st.seasonStr) == "string" then seasonStr = st.seasonStr end
-  if not seasonStr or seasonStr == "" then
-    local seasJa = {"春","夏","秋","冬"}
-    local seasEn = {"Spring","Summer","Autumn","Winter"}
-    local tbl = (lang=="ja") and seasJa or seasEn
-    seasonStr = (s>=1 and s<=#tbl) and tbl[s] or ((lang=="ja") and ("季節"..tostring(s)) or ("S"..tostring(s)))
-  end
+	-- month は文字列優先
+	local monthStr = nil
+	if st and typeof(st.monthStr) == "string" and st.monthStr ~= "" then
+		monthStr = st.monthStr
+	else
+		monthStr = (m > 0) and monthLabel(m, lang) or ((lang=="ja") and "--月" or "M--")
+	end
 
-  if lang == "ja" then
-    return string.format(
-      "年:%s  季節:%s  目標:%s  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d",
-      yearTxt, seasonStr, tostring(goal or "—"), sum, handsLeft, rerollsLeft, mult, bank, deckLeft, handCount
-    )
-  else
-    return string.format(
-      "Year:%s  Season:%s  Goal:%s  Total:%d  Hand left:%d  Rerolls:%d  Mult:%.1fx  Bank:%d  Deck:%d  Hand:%d",
-      yearTxt, seasonStr, tostring(goal or "—"), sum, handsLeft, rerollsLeft, mult, bank, deckLeft, handCount
-    )
-  end
+	-- season は互換のため括弧で併記（存在時のみ）
+	local seasonStr: string? = nil
+	if st and typeof(st.seasonStr) == "string" and st.seasonStr ~= "" then
+		seasonStr = st.seasonStr
+	elseif s > 0 then
+		seasonStr = seasonLabel(s, lang)
+	end
+	local seasonSuffix = (seasonStr and seasonStr ~= "") and (lang=="ja" and ("（"..seasonStr.."）") or (" ("..seasonStr..")")) or ""
+
+	if lang == "ja" then
+		return string.format(
+			"年:%s  月:%s%s  目標:%s  合計:%d  残ハンド:%d  残リロール:%d  倍率:%.1fx  Bank:%d  山:%d  手:%d",
+			yearTxt, monthStr, seasonSuffix, tostring(goal or "—"), sum, handsLeft, rerollsLeft, mult, bank, deckLeft, handCount
+		)
+	else
+		return string.format(
+			"Year:%s  Month:%s%s  Goal:%s  Total:%d  Hands:%d  Rerolls:%d  Mult:%.1fx  Bank:%d  Deck:%d  Hand:%d",
+			yearTxt, monthStr, seasonSuffix, tostring(goal or "—"), sum, handsLeft, rerollsLeft, mult, bank, deckLeft, handCount
+		)
+	end
 end
 
 return M
@@ -7200,6 +7243,37 @@ return Shrine
 
 local Balance = {}
 
+----------------------------------------------------------------
+-- ▼▼ ステージ（12か月一直線）設定 ここから ▼▼
+----------------------------------------------------------------
+-- 月関連の基本パラメータ
+Balance.STAGE_START_MONTH  = 1     -- ラン開始月
+Balance.STAGE_CLEAR_AT     = 9     -- 9月クリアで勝利扱い（その後は任意のEX）
+Balance.STAGE_MONTHS_TOTAL = 12    -- 総月数（EX含めた最終は12月）
+
+-- EX（10〜12月）各月のクリア報酬（両）
+Balance.EX_CLEAR_REWARD_RYO = 2
+
+-- 目標スコア：まずは動作確認用に 1〜12 の連番（後でここだけを調整すればOK）
+Balance.GOAL_BY_MONTH = {
+	[1]=1,  [2]=2,  [3]=3,  [4]=4,  [5]=5,  [6]=6,
+	[7]=7,  [8]=8,  [9]=9,  [10]=10, [11]=11, [12]=12,
+}
+
+-- 後方互換（呼び出し側が小文字を参照しても動くようにエイリアスを提供）
+Balance.goalByMonth = Balance.GOAL_BY_MONTH
+
+-- ヘルパ：月→目標スコア（範囲外はクランプ）
+function Balance.getGoalForMonth(month)
+	if type(month) ~= "number" then return Balance.GOAL_BY_MONTH[1] end
+	if month < 1 then month = 1 end
+	if month > Balance.STAGE_MONTHS_TOTAL then month = Balance.STAGE_MONTHS_TOTAL end
+	return Balance.GOAL_BY_MONTH[month] or Balance.GOAL_BY_MONTH[1]
+end
+----------------------------------------------------------------
+-- ▲▲ ステージ（12か月一直線）設定 ここまで ▲▲
+----------------------------------------------------------------
+
 -- ▼ プールの基本設定
 Balance.KITO_POOL_SIZE      = 12  -- サンプル提示枚数（UIなし時も内部で使用）
 Balance.KITO_POOL_TTL_SEC   = 45  -- セッション有効秒数（開始→決定の猶予）
@@ -7994,16 +8068,13 @@ return Theme
 --  - ★ v0.9.3-fix: ShopDone 時に DeckRegistry の最新スナップショットを次シーズンへ明示伝播
 --                  （変更されたデッキを直後のシーズンで必ず使用）
 
---==================================================
--- Services
---==================================================
+-- ServerScriptService/GameInit.server.lua
+-- （前略：ヘッダコメントは省略）
+
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local SSS     = game:GetService("ServerScriptService")
 
---==================================================
--- Logger
---==================================================
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("GameInit")
 Logger.configure({
@@ -8014,14 +8085,8 @@ Logger.configure({
 
 LOG.info("boot")
 
---==================================================
--- SaveService（bank/year/clears/lang/activeRun の永続化）
---==================================================
 local SaveService = require(SSS:WaitForChild("SaveService"))
 
---==================================================
--- Remotes 生成（すべてここで先に生やす）
---==================================================
 local function ensureRemote(name: string)
 	local rem = RS:FindFirstChild("Remotes")
 	if not rem then
@@ -8038,47 +8103,32 @@ local function ensureRemote(name: string)
 	return e
 end
 
--- Core push系
 local Remotes = {
 	HandPush      = ensureRemote("HandPush"),
 	FieldPush     = ensureRemote("FieldPush"),
 	TakenPush     = ensureRemote("TakenPush"),
 	ScorePush     = ensureRemote("ScorePush"),
 	StatePush     = ensureRemote("StatePush"),
-
-	-- 結果/遷移
 	StageResult   = ensureRemote("StageResult"),
 	DecideNext    = ensureRemote("DecideNext"),
-
-	-- 操作（プレイ）
 	ReqPick       = ensureRemote("ReqPick"),
 	Confirm       = ensureRemote("Confirm"),
 	ReqRerollAll  = ensureRemote("ReqRerollAll"),
 	ReqRerollHand = ensureRemote("ReqRerollHand"),
-
-	-- 屋台（ショップ）
 	ShopOpen      = ensureRemote("ShopOpen"),
 	ShopDone      = ensureRemote("ShopDone"),
 	BuyItem       = ensureRemote("BuyItem"),
 	ShopReroll    = ensureRemote("ShopReroll"),
-
-	-- 同期（C→S：再同期要求。実処理は UiResync.server.lua）
 	ReqSyncUI     = ensureRemote("ReqSyncUI"),
-
-	-- ★ 酉UI（新経路）: サーバ→クライアント候補提示 / クライアント→サーバ決定
-	KitoPickStart  = ensureRemote("KitoPickStart"),   -- S→C: 12候補提示
-	KitoPickDecide = ensureRemote("KitoPickDecide"),  -- C→S: 決定/スキップ
+	KitoPickStart  = ensureRemote("KitoPickStart"),
+	KitoPickDecide = ensureRemote("KitoPickDecide"),
 }
-
--- Top/Home 系
-local HomeOpen        = ensureRemote("HomeOpen")        -- S→C: トップを開く
-local ReqStartNewRun  = ensureRemote("ReqStartNewRun")  -- C→S: ★後方互換（NEW強制）
-local ReqContinueRun  = ensureRemote("ReqContinueRun")  -- C→S: ★後方互換（CONTINUE推奨）
-local ReqStartGame    = ensureRemote("ReqStartGame")    -- C→S: ★統合エントリ（NEW or CONTINUE 自動）
-local RoundReady      = ensureRemote("RoundReady")      -- S→C: 新ラウンド準備完了
-local ReqSetLang      = ensureRemote("ReqSetLang")      -- C→S: 言語保存
-
--- Remotes からも参照できるように追加
+local HomeOpen        = ensureRemote("HomeOpen")
+local ReqStartNewRun  = ensureRemote("ReqStartNewRun")
+local ReqContinueRun  = ensureRemote("ReqContinueRun")
+local ReqStartGame    = ensureRemote("ReqStartGame")
+local RoundReady      = ensureRemote("RoundReady")
+local ReqSetLang      = ensureRemote("ReqSetLang")
 Remotes.HomeOpen        = HomeOpen
 Remotes.ReqStartNewRun  = ReqStartNewRun
 Remotes.ReqContinueRun  = ReqContinueRun
@@ -8086,22 +8136,15 @@ Remotes.ReqStartGame    = ReqStartGame
 Remotes.RoundReady      = RoundReady
 Remotes.ReqSetLang      = ReqSetLang
 
---==================================================
--- Server-side modules
---==================================================
 local StateHub = require(RS.SharedModules.StateHub)
 local Scoring  = require(RS.SharedModules.Scoring)
-
 local Round        = require(RS.SharedModules.RoundService)
 local PickService  = require(RS.SharedModules.PickService)
 local Reroll       = require(RS.SharedModules.RerollService)
 local Score        = require(RS.SharedModules.ScoreService)
 local ShopService  = require(RS.SharedModules.ShopService)
-
--- ★ P1-1: NavServer を導入（DecideNext の唯一線）
 local NavServer    = require(SSS:WaitForChild("NavServer"))
 
--- （任意）酉ピックのハンドラ群（あれば起動時に Remotes を注入して配線）
 local KitoPickServer do
 	local ok, mod = pcall(function() return require(SSS:WaitForChild("KitoPickServer")) end)
 	if ok and type(mod) == "table" then
@@ -8111,18 +8154,20 @@ local KitoPickServer do
 	end
 end
 
--- ★ DeckRegistry（最新デッキ状態のソース）
 local DeckRegistry do
 	local ok, mod = pcall(function()
-		-- プロジェクト構成に合わせて DeckRegistry の場所を解決
 		return require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("DeckRegistry"))
 	end)
 	DeckRegistry = ok and mod or nil
 end
 
---==================================================
--- Deck Effects（新経路の唯一のデッキ変化窓口）: 起動時に一括登録
---==================================================
+local Balance do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+	end)
+	Balance = ok and mod or { STAGE_START_MONTH = 1 }
+end
+
 local function bootstrapEffects()
 	local ok, err = pcall(function()
 		require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("EffectsRegisterAll"))
@@ -8134,9 +8179,6 @@ local function bootstrapEffects()
 	end
 end
 
---==================================================
--- DEV Remotes（Studio向け：+両 / +役 付与）
---==================================================
 local DevGrantRyo  = ensureRemote("DevGrantRyo")
 local DevGrantRole = ensureRemote("DevGrantRole")
 
@@ -8165,7 +8207,6 @@ end
 
 DevGrantRole.OnServerEvent:Connect(function(plr)
 	local s = StateHub.get(plr); if not s then return end
-
 	takeByPredOrStub(s,
 		function(c) return c.month==9 and ((c.tags and table.find(c.tags,"sake")) or c.name=="盃") end,
 		{month=9, kind="seed", name="盃", tags={"thing","sake"}}
@@ -8179,9 +8220,6 @@ DevGrantRole.OnServerEvent:Connect(function(plr)
 	LOG.debug("DevGrantRole | user=%s total=%s", plr.Name, tostring(total))
 end)
 
---==================================================
--- 言語ユーティリティ（ja/en 正規化）
---==================================================
 local function normLang(v:string?): string?
 	v = tostring(v or ""):lower()
 	if v == "ja" or v == "jp" then return "ja" end
@@ -8189,13 +8227,7 @@ local function normLang(v:string?): string?
 	return nil
 end
 
---==================================================
--- 初期化／バインド
---==================================================
--- ★ Deck Effects 登録（最初に実施）
 bootstrapEffects()
-
--- StateHub / 各サービス紐付け
 StateHub.init(Remotes)
 
 if PickService and typeof(PickService.bind) == "function" then
@@ -8203,19 +8235,16 @@ if PickService and typeof(PickService.bind) == "function" then
 else
 	LOG.warn("PickService.bind が見つかりません")
 end
-
 if Reroll and typeof(Reroll.bind) == "function" then
 	Reroll.bind(Remotes)
 else
 	LOG.warn("Reroll.bind が見つかりません")
 end
-
 if Score and typeof(Score.bind) == "function" then
 	Score.bind(Remotes, { openShop = ShopService and ShopService.open })
 else
 	LOG.warn("Score.bind が見つかりません")
 end
-
 if ShopService and typeof(ShopService.init) == "function" then
 	ShopService.init(
 		function(plr) return StateHub.get(plr) end,
@@ -8224,32 +8253,25 @@ if ShopService and typeof(ShopService.init) == "function" then
 else
 	LOG.warn("ShopService.init が見つかりません")
 end
-
--- ★ 酉ピック（新経路）の配線があれば注入して起動
 if KitoPickServer and typeof(KitoPickServer.bind) == "function" then
 	KitoPickServer.bind(Remotes)
 	LOG.info("[KitoPickServer] ready (handlers wiring)")
 end
 
--- ★ P1-1: NavServer を初期化（DecideNext の唯一線）。依存はここで注入。
 NavServer.init({
 	StateHub    = StateHub,
 	Round       = Round,
 	ShopService = ShopService,
 	SaveService = SaveService,
-	HomeOpen    = HomeOpen,           -- S→C push（NavServerで使用）
-	DecideNext  = Remotes.DecideNext, -- C→S pull（同上）
+	HomeOpen    = HomeOpen,
+	DecideNext  = Remotes.DecideNext,
 })
 
---==================================================
--- Player lifecycle：永続ロード/保存 + 言語ログ
---==================================================
 Players.PlayerAdded:Connect(function(plr)
 	LOG.info("PlayerAdded | begin load profile | user=%s userId=%d", plr.Name, plr.UserId)
 
 	local prof = SaveService.load(plr)
-	LOG.debug(
-		"Profile loaded | user=%s bank=%s year=%s asc=%s clears=%s lang=%s",
+	LOG.debug("Profile loaded | user=%s bank=%s year=%s asc=%s clears=%s lang=%s",
 		plr.Name,
 		tostring(prof and prof.bank), tostring(prof and prof.year),
 		tostring(prof and prof.asc),  tostring(prof and prof.clears),
@@ -8258,25 +8280,77 @@ Players.PlayerAdded:Connect(function(plr)
 
 	local s = StateHub.get(plr) or {}
 	local savedLang = normLang(SaveService.getLang(plr)) or "en"
-
 	s.bank        = prof.bank   or 0
 	s.year        = prof.year   or 0
 	s.totalClears = prof.clears or 0
 	s.lang        = savedLang
-	-- 念のため NEW強制フラグは初期状態では無効化
 	s._forceNewOnNextStart = false
-
 	StateHub.set(plr, s)
 
-	LOG.debug(
-		"State set | user=%s lang=%s bank=%d year=%d clears=%d",
+	LOG.debug("State set | user=%s lang=%s bank=%d year=%d clears=%d",
 		plr.Name, s.lang, s.bank or 0, s.year or 0, s.totalClears or 0
 	)
 
 	local hasSave = SaveService.getActiveRun(plr) ~= nil
-	LOG.info(
-		"HomeOpen → C | user=%s lang=%s hasSave=%s bank=%d year=%d clears=%d",
+	LOG.info("HomeOpen → C | user=%s lang=%s hasSave=%s bank=%d year=%d clears=%d",
 		plr.Name, s.lang, tostring(hasSave), s.bank or 0, s.year or 0, s.totalClears or 0
+	)
+
+	HomeOpen:FireClient(plr, {
+		hasSave = hasSave,
+		bank    = s.bank,
+		year    = s.year,
+		clears  = s.totalClears or 0,
+		lang    = s.lang,
+	})
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+	LOG.info("PlayerRemoving | flush profile | user=%s", plr.Name)
+	SaveService.flush(plr)
+end)
+
+game:BindToClose(function()
+	LOG.info("BindToClose | flushAll begin")
+	pcall(function() SaveService.flushAll() end)
+	LOG.info("BindToClose | flushAll end")
+end)
+
+ReqSetLang.OnServerEvent:Connect(function(plr, lang)
+	local n = normLang(lang)
+	if not n then
+		LOG.warn("ReqSetLang invalid | user=%s from=%s", plr.Name, tostring(lang))
+		return
+	end
+	SaveService.setLang(plr, n)
+	local s = StateHub.get(plr) or {}
+	s.lang = n
+	StateHub.set(plr, s)
+	LOG.info("setLang | saved & state updated | user=%s lang=%s", plr.Name, n)
+end)
+
+local function fireReadySoon(plr)
+	task.delay(0.05, function()
+		Remotes.RoundReady:FireClient(plr)
+	end)
+end
+
+-- 内部用：月→季節（RoundService が 1..4 を要求するため“その場で”算出するだけ）
+local function monthToSeason(m:number): number
+	m = tonumber(m) or 1
+	return ((m - 1) % 4) + 1
+end
+
+local function startNewRun(plr)
+	if SaveService.clearActiveRun then pcall(function() SaveService.clearActiveRun(plr) end) end
+	local s = StateHub.get(plr) or {}
+	s.run = s.run or {}
+	s.run.month = (Balance and Balance.STAGE_START_MONTH) or 1
+	-- ★季節は保持しない（UI/状態から削除）。必要時のみ month→season を都度計算。
+	StateHub.set(plr, s)
+
+	Round.resetRun(plr)
+	fireReadySoon(plr)
 ... (truncated)
 ```
 
@@ -8893,20 +8967,13 @@ local function onDecide(plr: Player, payload:any)
 ### src/server/NavServer.lua
 ```lua
 -- ServerScriptService/NavServer.lua
--- v0.9.7 P1-4  DecideNext 統合 + ラン放棄（abandon）対応
+-- v0.9.9  DecideNext 12-month対応：final-month は HOME 強制
 -- 変更点：
---  - "abandon" を新設。四季のどのタイミングでも受け付け、即座にランを終了して Home へ戻す。
---  - ラン終了時は StageResult を強制クローズし、activeRun を消去し、次回は NEW GAME を強制。
---  - 既存の "home" / "next" の挙動は維持（"home" は従来どおり冬以外は無効）。
---  - "save" は保険として "home" に変換（保存ボタン廃止の互換）。
+--  - 月12の result 中は、どの操作（koikoi/home/その他）でも HOME 一択に強制
+--  - サーバ側で StageResult を明示クローズし、HomeOpen を即発火
+--  - 12月クリア時の +2 両はスコア側で加算済みのため、ここでは追加しない（重複防止）
 
 local RS  = game:GetService("ReplicatedStorage")
-
--- ===== 開発用トグル ===============================================
--- true : つねに「次のステージ」をロック（押してもHOMEに倒す）
--- false: 既存どおり「通算3回クリアで解禁」
-local LOCAL_DEV_NEXT_LOCKED = true
--- ================================================================
 
 -- Logger
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
@@ -8931,7 +8998,7 @@ end
 local Remotes = {
 	HomeOpen    = ensureRemote("HomeOpen"),
 	DecideNext  = ensureRemote("DecideNext"),
-	StageResult = ensureRemote("StageResult"), -- ★ 追加: 強制クローズ用
+	StageResult = ensureRemote("StageResult"), -- クライアント結果モーダルの明示クローズ用
 }
 
 local function normLang(v:string?): string
@@ -8965,11 +9032,11 @@ function NavServer.init(deps: Deps)
 		self:handle(plr, tostring(op or ""))
 	end))
 
-	LOG.info("ready (DecideNext unified)")
+	LOG.info("ready (DecideNext unified / 12-month 2-choice)")
 	return self
 end
 
--- ★ “ランを終了”させるハードリセット（春スナップを新規生成しない）
+-- ★ ラン終了のハードリセット（春スナップを新規生成しない）
 local function endRunAndClean(StateHub, SaveService, plr: Player)
 	local s = StateHub and StateHub.get and StateHub.get(plr)
 	if not s then return end
@@ -8984,11 +9051,11 @@ local function endRunAndClean(StateHub, SaveService, plr: Player)
 	s.stageResult   = nil
 	s.decideLocks   = nil
 	s.mult          = 1.0
-	-- 念のため季節関連も切る（サーバ復元やUIの誤判定を防止）
+	-- 季節系も切ってUIの誤判定を防止
 	s.season        = nil
 	s.round         = nil
 
-	-- 次回開始は必ずNEW（GameInit.startGameAuto で見る）
+	-- 次回開始は必ずNEW（GameInit.startGameAuto で参照）
 	s._forceNewOnNextStart = true
 
 	-- 「続き」用スナップも破棄（DataStore側）
@@ -8996,21 +9063,24 @@ local function endRunAndClean(StateHub, SaveService, plr: Player)
 		pcall(function() SaveService.clearActiveRun(plr) end)
 	end
 
-	-- クライアントの結果モーダルを明示的に閉じさせる（残存対策）
-	-- Client側は {close=true} を受け取ったらモーダルを閉じる実装にしておく
+	-- クライアントの結果モーダルを明示的に閉じる
 	pcall(function()
 		Remotes.StageResult:FireClient(plr, { close = true })
 	end)
 
-	-- クライアントへ最新 state を押し出して視覚的にも“切る”
+	-- クライアントへ最新 state を押し出し視覚的にも終了させる
 	if StateHub and StateHub.pushState then
 		pcall(function() StateHub.pushState(plr) end)
 	end
 end
 
+local function getMonth(s:any): number
+	return tonumber(s and s.run and s.run.month) or 1
+end
+
 function NavServer:handle(plr: Player, op: string)
 	local StateHub    = self.deps.StateHub
-	local Round       = self.deps.Round         -- 参照は残すが "home" では使わない
+	local Round       = self.deps.Round         -- 参照は残すがここでは newRound は呼ばない
 	local ShopService = self.deps.ShopService
 	local SaveService = self.deps.SaveService
 
@@ -9021,16 +9091,38 @@ function NavServer:handle(plr: Player, op: string)
 	end
 
 	local op0 = string.lower(tostring(op or ""))
+	local m   = getMonth(s)
 
 	-- =========================
-	-- ★ 新設："abandon" はいつでも有効（季節を問わず即終了）
+	-- ★ final-month ガード：月12の result 中は「HOME 一択」
 	-- =========================
-	if op0 == "abandon" then
-		LOG.info("handle: ABANDON | user=%s season=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.season), tostring(s.phase))
+	if s.phase == "result" and m >= 12 then
+		LOG.info("handle: %s | user=%s month=%d phase=%s → force HOME (final month)",
+			tostring(op0), tostring(plr and plr.Name or "?"), m, tostring(s.phase))
+
 		endRunAndClean(StateHub, SaveService, plr)
 
 		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = false, -- ★常に New Game
+			hasSave = false, -- NEW GAME を強制
+			bank    = s.bank or 0,
+			year    = s.year or 0,
+			clears  = s.totalClears or 0,
+			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
+		})
+		LOG.info("→ HOME(end-run final) | user=%s hasSave=false bank=%d year=%d clears=%d",
+			tostring(plr and plr.Name or "?"), s.bank or 0, s.year or 0, s.totalClears or 0)
+		return
+	end
+
+	-- =========================
+	-- いつでも有効："abandon"（即終了）
+	-- =========================
+	if op0 == "abandon" then
+		LOG.info("handle: ABANDON | user=%s phase=%s month=%s", tostring(plr and plr.Name or "?"), tostring(s.phase), tostring(s.run and s.run.month))
+		endRunAndClean(StateHub, SaveService, plr)
+
+		Remotes.HomeOpen:FireClient(plr, {
+			hasSave = false, -- NEW GAME を強制
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
@@ -9040,66 +9132,42 @@ function NavServer:handle(plr: Player, op: string)
 		return
 	end
 
-	-- 以降は既存どおり：冬以外では "home"/"next" を受け付けない
-	if (s.season or 1) ~= 4 then
-		LOG.debug("DecideNext ignored (not winter) | user=%s op=%s season=%s", tostring(plr and plr.Name or "?"), tostring(op0), tostring(s.season))
-		return
-	end
-
-	-- 互換: "save" を送ってきてもすべて "home" として扱う（保存機能は廃止）
-	if op0 == "save" then
-		op0 = "home"
-	end
-
-	-- 共通初期化
-	s.mult = 1.0
-
-	-- 解禁判定（既定: 3クリアで "next" 許可）
-	local clears   = tonumber(s.totalClears or 0) or 0
-	local unlocked = (not LOCAL_DEV_NEXT_LOCKED) and (clears >= 3) or false
-
-	if op0 ~= "home" and not unlocked then
-		-- ロック中に "next" を送ってきても HOME へ倒す（改造クライアント対策）
-		op0 = "home"
-	end
-
-	LOG.info(
-		"handle | user=%s op=%s unlocked=%s clears=%d",
-		tostring(plr and plr.Name or "?"), tostring(op0), tostring(unlocked), clears
-	)
-
+	-- =========================
+	-- 2択：home / koikoi
+	-- ※ 季節や解禁の条件は撤廃。9/10/11月などのクリア通知から直接来る想定。
+	-- =========================
 	if op0 == "home" then
-		-- ★ ランを終了（続き無し）→ Home（冬のリザルトからの帰還用）
+		-- ラン終了→Home
+		LOG.info("handle: HOME | user=%s month=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.run and s.run.month), tostring(s.phase))
 		endRunAndClean(StateHub, SaveService, plr)
 
 		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = false, -- ★常に New Game
+			hasSave = false,
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
 			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
 		})
-		LOG.info(
-			"→ HOME(end-run) | user=%s hasSave=false bank=%d year=%d clears=%d",
-			plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0
-		)
+		LOG.info("→ HOME(end-run) | user=%s hasSave=false bank=%d year=%d clears=%d", plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0)
 		return
 
-	elseif op0 == "next" then
-		-- 次の年へ（解禁済のみ到達）
-		s.year = (s.year or 0) + 25
-		if SaveService and typeof(SaveService.bumpYear) == "function" then
-			SaveService.bumpYear(plr, 25)
-		elseif SaveService and typeof(SaveService.setYear) == "function" then
-			SaveService.setYear(plr, s.year)
-		end
+	elseif op0 == "koikoi" or op0 == "continue" then
+		-- 続行：結果モーダルを閉じて屋台を開く（EXへ）
+		LOG.info("handle: KOIKOI | user=%s month=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.run and s.run.month), tostring(s.phase))
+
+		-- まずクライアント側の結果モーダルを閉じる
+		pcall(function()
+			Remotes.StageResult:FireClient(plr, { close = true })
+		end)
+
+		-- 次は屋台へ。ShopService が無い場合は state push のみ。
 		s.phase = "shop"
 		if ShopService and typeof(ShopService.open) == "function" then
-			ShopService.open(plr, s, { reason = "after_winter" })
-			LOG.info("→ NEXT (open shop) | user=%s newYear=%d", plr.Name, s.year or 0)
+			ShopService.open(plr, s, { reason = "after_clear_month" })
+			LOG.info("→ SHOP(open) | user=%s month=%s", plr.Name, tostring(s.run and s.run.month))
 		else
 			if StateHub and StateHub.pushState then StateHub.pushState(plr) end
-			LOG.info("→ NEXT (push state only) | user=%s newYear=%d", plr.Name, s.year or 0)
+			LOG.info("→ SHOP(push only) | user=%s month=%s", plr.Name, tostring(s.run and s.run.month))
 		end
 		return
 	end
@@ -14580,20 +14648,43 @@ return M
 -- SharedModules/Logger.lua
 -- =========================================================
 -- ▼▼▼ ここだけ編集すればOK（保存式・手動切替） ▼▼▼
--- ログレベル: 1=少ない(WARN/ERROR) / 2=そこそこ(INFO以上) / 3=全部(DEBUGまで)
-local USER_VERBOSITY = 2  -- ★ここを 1 / 2 / 3 に変更して保存してください
+-- ログ量: 1=少ない(WARN/ERROR) / 2=そこそこ(INFO以上) / 3=全部(DEBUGまで)
+local USER_VERBOSITY = 2  -- ★ここを 1 / 2 / 3 に変更して保存
+
+-- 「大量に出ているログ」を DEBUG に“降格”するルール
+-- 例: ScoreタグのINFOをDEBUGに落とす → infoToDebugTags = { "Score" }
+--     文言に "P2_roles" を含むINFOをDEBUGへ → infoToDebugContains = { "P2_roles" }
+--     Luaパターンで "[P%d+_.*]" を含むINFOをDEBUGへ → infoToDebugPatterns = { "P%d+_%w+" }
+local USER_DOWNGRADE = {
+	infoToDebugTags      = { "Score" },  -- ←デフォはScoreだけ降格。不要なら消してOK
+	infoToDebugContains  = {
+		-- "P2_roles", "P3_matsuri_kito", "P4_talisman", "P5_omamori",
+	},
+	infoToDebugPatterns  = {
+		-- "P%d+_%w+",             -- 例: P2_xxx/P3_xxx...にマッチ
+		-- "pushState%.begin",     -- 例: StateHubのbegin行を落とす
+	},
+}
 -- ▲▲▲ ここだけ編集すればOK ▲▲▲
 -- =========================================================
 --
 -- 使い方:
 --   local RS = game:GetService("ReplicatedStorage")
 --   local Logger = require(RS.SharedModules.Logger)
---   local LOG = Logger.scope("RunScreen")  -- タグ＝出所名
+--   local LOG = Logger.scope("RunScreen")
 --   LOG.debug("boot %s", tostring(version))
 --
--- ※コードから明示的に変えたい場合は:
---   Logger.setVerbosity(3)  または  Logger.configure({ verbosity = 1 })
---   （↑USER_VERBOSITY より後に呼ぶと、その設定が優先されます）
+-- ※コードから明示的に変えたい場合:
+--   Logger.setVerbosity(3)
+--   Logger.configure({
+--     verbosity = 1,
+--     infoToDebugTags = { "Score", "StateHub" },
+--     infoToDebugContains = { "P2_roles" },
+--     infoToDebugPatterns = { "pushState%%.begin" },
+--   })
+--
+-- 既存APIの互換:
+--   Logger.setLevel/Logger.getLevel, Logger.scope, Logger.configure 等はそのまま
 
 local RunService   = game:GetService("RunService")
 local HttpService  = game:GetService("HttpService")
@@ -14605,14 +14696,14 @@ Logger.WARN  = 30
 Logger.ERROR = 40
 Logger.NONE  = 99
 
--- 1/2/3 を Logger の閾値に変換
+-- 1/2/3 → ログ閾値
 local VERBOSITY_TO_LEVEL = {
 	[1] = Logger.WARN,  -- 少ない: WARN/ERROR
 	[2] = Logger.INFO,  -- そこそこ: INFO/WARN/ERROR
 	[3] = Logger.DEBUG, -- 全部: DEBUG含む
 }
 
--- 初期レベルは USER_VERBOSITY を最優先。未設定/不正なら Studio=DEBUG / 公開=WARN
+-- 初期レベル: USER_VERBOSITY優先。未設定/不正なら Studio=DEBUG / 公開=WARN
 local function _initialLevel()
 	local v = tonumber(USER_VERBOSITY)
 	if v and VERBOSITY_TO_LEVEL[v] then
@@ -14625,16 +14716,42 @@ end
 local _initLevel, _initVerbosity = _initialLevel()
 
 local state = {
-	level = _initLevel,          -- ← 初期レベル
-	verbosity = _initVerbosity,  -- ← 1/2/3（USER_VERBOSITYが有効なら入る）
+	level = _initLevel,          -- 初期レベル
+	verbosity = _initVerbosity,  -- 1/2/3（USER_VERBOSITYが有効なら入る）
 	timePrefix = true,
 	throwOnError = false,        -- ERRORで error() したいなら true
 	enabledTags = nil,           -- nil=全許可 / set型 {"NAV"=true, ...}
 	disabledTags = {},           -- set型
-	dupWindowSec = 0.75,         -- 同一メッセージの抑制ウィンドウ（秒）
+	dupWindowSec = 0.75,         -- 同一メッセージ抑制ウィンドウ（秒）
 	_last = {},                  -- [key]=lastTime
 	sink = nil,                  -- カスタム出力先 (function(level, line))
+
+	-- 降格ルール（初期値はUSER_DOWNGRADEで与える）
+	infoToDebugTags = {},
+	infoToDebugContains = {},
+	infoToDebugPatterns = {},
 }
+
+-- USER_DOWNGRADE を state に反映（テーブルコピー）
+do
+	if type(USER_DOWNGRADE) == "table" then
+		if type(USER_DOWNGRADE.infoToDebugTags) == "table" then
+			for _, t in ipairs(USER_DOWNGRADE.infoToDebugTags) do
+				state.infoToDebugTags[tostring(t)] = true
+			end
+		end
+		if type(USER_DOWNGRADE.infoToDebugContains) == "table" then
+			for _, s in ipairs(USER_DOWNGRADE.infoToDebugContains) do
+				table.insert(state.infoToDebugContains, tostring(s))
+			end
+		end
+		if type(USER_DOWNGRADE.infoToDebugPatterns) == "table" then
+			for _, p in ipairs(USER_DOWNGRADE.infoToDebugPatterns) do
+				table.insert(state.infoToDebugPatterns, tostring(p))
+			end
+		end
+	end
+end
 
 local LVL_NAME = {
 	[Logger.DEBUG] = "D",
@@ -14678,7 +14795,7 @@ local function fmt(msg, ...)
 	if select("#", ...) == 0 then
 		return tostring(msg)
 	end
-	-- string.format が失敗するケース（%記号流入）に強い
+	-- string.format が失敗（%流入等）するケースにも強い
 	local ok, out = pcall(string.format, tostring(msg), ...)
 	if ok then return out end
 	-- フォーマット不可なら素朴に連結
@@ -14692,10 +14809,12 @@ end
 
 local function shouldLog(tag, level)
 	if level < state.level then return false end
-	if state.enabledTags then
-		if not state.enabledTags[tag] then return false end
+	if state.enabledTags and not state.enabledTags[tag] then
+		return false
 	end
-	if state.disabledTags and state.disabledTags[tag] then return false end
+	if state.disabledTags and state.disabledTags[tag] then
+		return false
+	end
 	return true
 end
 
@@ -14738,9 +14857,45 @@ local function dupKey(level, tag, text)
 	return string.format("%d|%s|%s", level, tag, text)
 end
 
+-- INFOをDEBUGへ“降格”するかを判定
+local function maybeDowngrade(level, tag, text)
+	if level ~= Logger.INFO then return level end
+
+	-- タグ指定
+	if state.infoToDebugTags and state.infoToDebugTags[tag] then
+		return Logger.DEBUG
+	end
+
+	-- 含む文字列
+	if state.infoToDebugContains then
+		for _, s in ipairs(state.infoToDebugContains) do
+			if s ~= "" and string.find(text, s, 1, true) then
+				return Logger.DEBUG
+			end
+		end
+	end
+
+	-- Luaパターン
+	if state.infoToDebugPatterns then
+		for _, p in ipairs(state.infoToDebugPatterns) do
+			if p ~= "" and string.find(text, p) then
+				return Logger.DEBUG
+			end
+		end
+	end
+
+	return level
+end
+
 local function log(level, tag, msg, ...)
-	if not shouldLog(tag, level) then return end
+	-- 先に整形（降格で text を使うため）
 	local text = fmt(msg, ...)
+
+	-- 降格判定（主にINFO→DEBUG）
+	level = maybeDowngrade(level, tag, text)
+
+	if not shouldLog(tag, level) then return end
+
 	-- 連打抑制
 	local key = dupKey(level, tag, text)
 	local t = nowMs()
@@ -14790,44 +14945,7 @@ function Logger.configure(opts)
 		state.enabledTags = set
 	end
 	if opts.disableTags then
-		for _, t in ipairs(opts.disableTags) do state.disabledTags[tostring(t)] = true end
-	end
-end
-
-function Logger.setLevel(lvl)
-	state.level = lvl
-	-- 明示的に level を上書きした場合、verbosity の値は保持（混在運用OK）
-end
-
-function Logger.getLevel()
-	return state.level
-end
-
--- タグ別ロガー（推奨）
-function Logger.scope(tag)  -- ← 予約語回避（旧: Logger.for）
-	tag = tostring(tag or "APP")
-	local proxy = {}
-	function proxy.debug(msg, ...) log(Logger.DEBUG, tag, msg, ...) end
-	function proxy.info (msg, ...) log(Logger.INFO , tag, msg, ...) end
-	function proxy.warn (msg, ...) log(Logger.WARN , tag, msg, ...) end
-	function proxy.error(msg, ...) log(Logger.ERROR, tag, msg, ...) end
-	-- printf 風エイリアス
-	function proxy.debugf(...) proxy.debug(...) end
-	function proxy.infof (...) proxy.info (...) end
-	function proxy.warnf (...) proxy.warn (...) end
-	function proxy.errorf(...) proxy.error(...) end
-	return proxy
-end
-Logger.forTag = Logger.scope   -- 互換用の別名
-
--- グローバル呼び出し（あまり推奨しない）
-local ROOT = Logger.scope("APP")
-function Logger.debug(...) ROOT.debug(...) end
-function Logger.info (...) ROOT.info (...) end
-function Logger.warn (...) ROOT.warn (...) end
-function Logger.error(...) ROOT.error(...) end
-
-return Logger
+... (truncated)
 ```
 
 ### src/shared/Modifiers.lua
@@ -15083,7 +15201,7 @@ return Reroll
 
 ### src/shared/RoundService.lua
 ```lua
--- v0.9.1 → v0.9.1-nextdeck
+-- v0.9.1 → v0.9.1-nextdeck (+12-month: month/goal 初期化・保持)
 -- 季節開始ロジック（configSnapshot/外部デッキスナップ → 当季デッキ → ★季節開始スナップ保存）
 local RS = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
@@ -15092,6 +15210,15 @@ local HttpService = game:GetService("HttpService")
 local CardEngine   = require(RS.SharedModules.CardEngine)
 local StateHub     = require(RS.SharedModules.StateHub)
 local RunDeckUtil  = require(RS.SharedModules.RunDeckUtil)
+
+-- ★ 12-month: Balance（目標スコア/開始月 等）
+local Balance do
+	local ok, mod = pcall(function() return require(RS:WaitForChild("Config"):WaitForChild("Balance")) end)
+	Balance = ok and mod or {
+		STAGE_START_MONTH = 1,
+		getGoalForMonth = function(_) return 1 end,
+	}
+end
 
 -- ★ SaveService（サーバ専用：失敗してもゲームは継続）
 local SaveService do
@@ -15121,6 +15248,24 @@ local function ensureRunId(state)
 		state.run.id = HttpService:GenerateGUID(false)
 	end
 	return state.run.id
+end
+
+-- ★ 12-month: 月初の goal を state に設定して即 push
+local function setMonthAndGoal(state, monthOrNil)
+	state.run = state.run or {}
+	if monthOrNil ~= nil then
+		state.run.month = tonumber(monthOrNil) or state.run.month or Balance.STAGE_START_MONTH or 1
+	else
+		state.run.month = state.run.month or Balance.STAGE_START_MONTH or 1
+	end
+	-- 目標スコア（UI/未達判定用）
+	if Balance.getGoalForMonth then
+		state.goal = Balance.getGoalForMonth(state.run.month)
+	elseif Balance.GOAL_BY_MONTH then
+		state.goal = Balance.GOAL_BY_MONTH[state.run.month] or Balance.GOAL_BY_MONTH[1] or 1
+	else
+		state.goal = 1
+	end
 end
 
 -- 次季に繰り越された bright 変換スタックを消化（ラン構成に反映）
@@ -15170,6 +15315,10 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 	local s = StateHub.get(plr) or {}
 	-- ランIDを必ず持たせる（GameInit からの参照用）
 	local runId = ensureRunId(s)
+
+	-- ★ 12-month: month と goal を必ず与える（復帰時は保持、明示指定があれば採用）
+	setMonthAndGoal(s, (s.run and s.run.month) or nil)
+	StateHub.set(plr, s)  -- ここで goal が state に乗る（この後 push でクライアント反映）
 
 	-- 1) ラン構成をロード or 外部スナップで上書き
 	consumeQueuedConversions(s, Random.new())
@@ -15225,6 +15374,10 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 	s.mon         = s.mon or 0
 	s.phase       = "play"
 	s.deckSeed    = seed            -- ★ 復元用に保持
+	-- ★ 12-month: 月初に goal を再確認（他所で month を更新して戻ってきた場合も安全）
+	s.goal        = (Balance.getGoalForMonth and Balance.getGoalForMonth(s.run.month))
+	               or (Balance.GOAL_BY_MONTH and (Balance.GOAL_BY_MONTH[s.run.month] or Balance.GOAL_BY_MONTH[1]))
+	               or 1
 
 	StateHub.set(plr, s)
 	StateHub.pushState(plr)
@@ -15251,6 +15404,9 @@ function Round.resetRun(plr: Player)
 		mult = 1.0, mon = 0, phase = "play",
 		run = { configSnapshot = nil }, -- 次で自動初期化（run.id は newRound 内で自動採番）
 	}
+	-- ★ 12-month: ラン開始時の month/goal を初期化
+	setMonthAndGoal(fresh, Balance and Balance.STAGE_START_MONTH or 1)
+
 	StateHub.set(plr, fresh)
 
 	-- ★ 新ラン開始（newRound 内でスナップも作成される）
@@ -16587,7 +16743,9 @@ return M
 ### src/shared/ScoreService.lua
 ```lua
 -- ReplicatedStorage/SharedModules/ScoreService.lua
--- Confirm（勝負）時の獲得計算と、到達時の遷移制御（春〜秋＝屋台／冬＝分岐）
+-- Confirm（勝負）時の獲得計算と、到達時の遷移制御（12か月一直線版）
+-- 1–8月 達成→屋台 / 9–11月 達成→2択（こいこい/ホーム） / 12月 達成→ワンボタンfinal
+-- 未達はゲームオーバー（ランリセット）
 
 local RS         = game:GetService("ReplicatedStorage")
 local SSS        = game:GetService("ServerScriptService")
@@ -16602,6 +16760,18 @@ end
 -- 依存
 local Scoring  = reqShared("Scoring")
 local StateHub = reqShared("StateHub")
+
+-- Balance（次月ゴールの表示用）
+local Balance do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+	end)
+	if ok and type(mod)=="table" then
+		Balance = mod
+	else
+		Balance = { getGoalForMonth = function(_) return 1 end }
+	end
+end
 
 -- SaveService はサーバ専用。クライアントで誤 require されても落ちないように stub 化
 local SaveService
@@ -16639,10 +16809,7 @@ local openShopFn = nil
 -- RoundService 参照（deps から注入。無ければフォールバック require）
 local RoundRef = nil
 
--- ▼ 開発トグル：二択固定（保存を出さない）＋「次」は常にロック表示
-local DEV_LOCK_NEXT          = true   -- true の間は canNext=false 固定
-local REMOVE_SAVE_BUTTON     = true   -- true なら保存ボタンを送らない（UI二択）
-
+-- 文（mon）リワード計算（従来ロジック維持）
 local function calcMonReward(sum, target, season)
 	-- 目標値は現在使用しないが将来の調整余地として残す
 	local _ = target
@@ -16701,26 +16868,36 @@ function Score.bind(Remotes, deps)
 		s.seasonSum   = (s.seasonSum or 0) + gained
 		s.handsLeft   = (s.handsLeft or 0) - 1
 
-		local season  = tonumber(s.season or 1) or 1
-		local tgt     = StateHub.targetForSeason(season)
+		-- ▼ 月ゴール（数値）— StateHub で Balance を咬ませた値
+		local tgt = (StateHub and StateHub.goalForMonth) and StateHub.goalForMonth(s) or 1
+		local curMonth = tonumber(s.run and s.run.month or 1) or 1
+		local season   = tonumber(s.season or 1) or 1
 
+		--========================
 		-- 未達：手が尽きたら失敗、まだなら続行
+		--========================
 		if (s.seasonSum or 0) < tgt then
 			if (s.handsLeft or 0) <= 0 then
+				-- 失敗：ゲームオーバー（ランリセット）
 				if Remotes.StageResult then
-					-- 失敗パス（UI側は true & table のみ表示する想定）
+					-- 互換：false, sum, target, mult, bank を送る旧経路も維持
 					Remotes.StageResult:FireClient(plr, false, s.seasonSum or 0, tgt, s.mult or 1, s.bank or 0)
 				end
 				local Round = RoundRef or reqShared("RoundService")
 				Round.resetRun(plr)
 			else
+				-- 続行
 				StateHub.pushState(plr)
 			end
 			return
 		end
 
-		-- ===== 達成：春〜秋は屋台へ =====
-		if season < 4 then
+		--========================
+		-- 達成時分岐（1–12月）
+		--========================
+
+		-- 1) 1〜8月：屋台へ（文を付与）
+		if curMonth < 9 then
 			s.phase = "shop"
 			local rewardMon = calcMonReward(s.seasonSum or 0, tgt, season)
 			s.mon = (s.mon or 0) + rewardMon
@@ -16732,90 +16909,72 @@ function Score.bind(Remotes, deps)
 			return
 		end
 
-		-- ===== 冬：クリア分岐 =====
-		s.phase = "result"
+		-- 2) 9〜11月：2両付与 → 2択モーダル（こいこい/ホーム）
+		if curMonth >= 9 and curMonth <= 11 then
+			s.phase = "result"
 
-		-- クリア回数（メモリ）
-		s.totalClears = (s.totalClears or 0) + 1
-		-- ★ 永続にも反映（存在すれば）
-		if typeof(SaveService.bumpClears) == "function" then
-			SaveService.bumpClears(plr, 1)
-		end
-
-		-- 2両ボーナス（メモリ＋永続）
-		local rewardBank = 2
-		s.bank = (s.bank or 0) + rewardBank
-		if typeof(SaveService.addBank) == "function" then
-			SaveService.addBank(plr, rewardBank)
-		end
-
-		s.lastScore = { total = total or 0, roles = roles, detail = detail }
-		StateHub.pushState(plr)
-
-		-- 旧仕様の解禁判定（参照のみ・ログ用）
-		local clears   = tonumber(s.totalClears or 0) or 0
-		local unlocked_by_clears = (clears >= 3)
-		local canNextFinal = (not DEV_LOCK_NEXT) and unlocked_by_clears or false
-		local canSaveFinal = false -- 常に保存は無効（ボタン非表示）
-
-		-- DEBUG: 冬クリア時点のサマリ
-		print(("[Score] winter clear by %s | clears=%d unlocked=%s season=%s sum=%d target=%d bank=%d")
-			:format(
-				plr.Name,
-				clears,
-				tostring(unlocked_by_clears),
-				tostring(season),
-				s.seasonSum or 0,
-				tgt or 0,
-				s.bank or 0
-			))
-
-		if Remotes.StageResult then
-			-- ▼ レガシー（options）と正準（ops）を送る
-			local optsLegacy = {
-				goHome = { enabled = true,  label = "このランを終える" },
-				goNext = { enabled = canNextFinal, label = canNextFinal and "次のステージへ" or "次のステージへ（開発中）" },
-			}
-			-- 保存ボタンは送らない（UI二択）。どうしてもキーが必要なUIなら以下を有効化して enabled=false で送る
-			if not REMOVE_SAVE_BUTTON then
-				optsLegacy.saveQuit = { enabled = false, label = "保存する（無効）" }
+			-- 2両ボーナス
+			local rewardBank = 2
+			s.bank = (s.bank or 0) + rewardBank
+			if typeof(SaveService.addBank) == "function" then
+				SaveService.addBank(plr, rewardBank)
 			end
 
-			local ops = {
-				home = optsLegacy.goHome,
-				next = optsLegacy.goNext,
-			}
-			-- save は送らない
+			s.lastScore = { total = total or 0, roles = roles, detail = detail }
+			StateHub.pushState(plr)
 
-			local payload = {
-				season      = season,
-				seasonSum   = s.seasonSum or 0,
-				target      = tgt,
-				mult        = s.mult or 1,
-				bank        = s.bank or 0,
-				rewardBank  = rewardBank,
-				bankAdded   = rewardBank,
-				clears      = clears,
-
-				-- ▼ UI がこの2フラグを見て分岐する旧実装にも対応
-				canNext     = canNextFinal,   -- ← 開発中は常に false
-				canSave     = canSaveFinal,   -- ← 常に false（保存ボタン出さない）
-
-				message     = (canNextFinal and "冬をクリア！ 2両を獲得。『次のステージ』が解禁済み。") or
-				              "冬をクリア！ 2両を獲得。『次のステージ』は開発中です。",
-
-				options     = optsLegacy, -- 互換（レガシーUI）
-				ops         = ops,        -- 正準（Nav: next('home'|'next')のみ想定）
-				locks       = { nextLocked = not canNextFinal, saveLocked = true },
-				lang        = s.lang,
-			}
-
-			print(("[Score] StageResult payload: canNext=%s canSave=%s")
-				:format(tostring(payload.canNext), tostring(payload.canSave)))
-
-			Remotes.StageResult:FireClient(plr, true, payload)
+			if Remotes.StageResult then
+				local nextM   = math.min(12, curMonth + 1)
+				local nextG   = (Balance and Balance.getGoalForMonth) and Balance.getGoalForMonth(nextM) or nil
+				local payload = {
+					kind        = "two",             -- UI：2択モーダル
+					rewardBank  = rewardBank,        -- +2両
+					nextMonth   = nextM,             -- こいこい先
+					nextGoal    = nextG,             -- その目標
+					message     = ("クリアおめでとう！ +%d両"):format(rewardBank),
+					lang        = s.lang,
+				}
+				-- 互換のため true,payload で送る（旧ハンドラも安全）
+				Remotes.StageResult:FireClient(plr, true, payload)
+			end
+			return
 		end
-		-- 以降の遷移は C→S: Remotes.DecideNext("home"|"next") （NavServer が唯一線）
+
+		-- 3) 12月：2両付与 → ワンボタン（final）で終了へ
+		--    ※ クリア回数(totalClears)は“ラン完走”のこのタイミングだけで +1 する
+		if curMonth >= 12 then
+			s.phase = "result"
+
+			-- 2両ボーナス
+			local rewardBank = 2
+			s.bank = (s.bank or 0) + rewardBank
+			if typeof(SaveService.addBank) == "function" then
+				SaveService.addBank(plr, rewardBank)
+			end
+
+			-- クリア回数（完走）+1
+			s.totalClears = (s.totalClears or 0) + 1
+			if typeof(SaveService.bumpClears) == "function" then
+				SaveService.bumpClears(plr, 1)
+			end
+
+			s.lastScore = { total = total or 0, roles = roles, detail = detail }
+			StateHub.pushState(plr)
+
+			if Remotes.StageResult then
+				local payload = {
+					kind        = "final",               -- UI：ワンボタン
+					titleText   = "12月 クリアおめでとう！",
+					descText    = "このランは終了です。メニューに戻ります。",
+					buttonText  = "ホームへ",
+					rewardBank  = rewardBank,
+					lang        = s.lang,
+				}
+				Remotes.StageResult:FireClient(plr, true, payload)
+			end
+			-- 以降の遷移は C→S: Remotes.DecideNext("home"|"koikoi")（NavServer が唯一線）
+			return
+		end
 	end)
 end
 
@@ -17555,79 +17714,68 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 ```lua
 -- ReplicatedStorage/SharedModules/StateHub.lua
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
--- P0-11: StatePush の payload に goal:number を追加（UI側の文字列パース依存を排除）
--- P1-3: Logger 導入（print/warn を LOG.* に置換）
--- P1-4: ★計測/詳細ログを追加（pushStateの入口～出口、各FireClient、Scoring/RunDeckUtilの例外捕捉）
+-- 12-month版：StatePushは month/goal を正とし、season/seasonStr は送信しない
+-- さらに過去版の計測ログ／Scoring／RunDeckUtil連携など有用部分は維持／統合
 
 local RS = game:GetService("ReplicatedStorage")
 
--- Logger
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("StateHub")
 
--- 依存モジュール
 local Scoring     = require(RS:WaitForChild("SharedModules"):WaitForChild("Scoring"))
-local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil")) -- ★追加
+local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
+
+-- Balance は存在しない環境でも動作するようフォールバック
+local Balance do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+	end)
+	Balance = ok and mod or {
+		STAGE_START_MONTH = 1,
+		getGoalForMonth = function(_) return 1 end,
+	}
+end
 
 local StateHub = {}
 
 --========================
 -- 内部状態（Server専用）
 --========================
-type PlrState = {
-	deck: {any}?,
-	hand: {any}?,
-	board: {any}?,
-	taken: {any}?,
-	dump: {any}?,
+export type PlrState = {
+	deck: {any}?, hand: {any}?, board: {any}?, taken: {any}?, dump: {any}?,
 
-	season: number?,        -- 1=春, 2=夏, 3=秋, 4=冬
-	handsLeft: number?,
-	rerollsLeft: number?,
+	handsLeft: number?, rerollsLeft: number?,
+	seasonSum: number?,  -- 12ヶ月制でもUI表示で使う合計は残す
+	chainCount: number?, -- 連続役数（倍率表示用）
+	mult: number?,       -- 表示用倍率
 
-	seasonSum: number?,     -- 今季の合計(表示用)
-	chainCount: number?,    -- 連続役数
-	mult: number?,          -- 表示用倍率
+	bank: number?,       -- 両（周回通貨）
+	mon: number?,        -- 文（季節通貨的。用語はそのまま）
 
-	bank: number?,          -- 両（周回通貨）
-	mon: number?,           -- 文（季節通貨）
+	phase: string?,      -- "play" / "shop" / "result" / "home"
+	year: number?,       -- 周回年数
+	homeReturns: number?,-- 「ホームへ戻る」回数
 
-	phase: string?,         -- "play" / "shop" / "result"(冬後)
-	year: number?,          -- 周回年数（25年進行で+25）
-	homeReturns: number?,   -- 「ホームへ戻る」回数（アンロック条件用）
+	lang: string?,       -- "ja"/"en"
+	lastScore: any?,     -- 任意デバッグ
 
-	lang: string?,          -- ★任意：言語（"ja"/"en"）
-	lastScore: any?,        -- 任意：デバッグ/結果表示
-
-	run: any?,              -- RunDeckUtil が内部で利用（meta/matsuriLevels 等）
+	run: any?,           -- { month=number, talisman=?, ... }
+	goal: number?,       -- 月ごとの目標（数値）
 }
 
 local stateByPlr : {[Player]: PlrState} = {}
 
 --========================
--- 季節/目標/倍率
+-- Remotes（Server→Client）
 --========================
-local SEASON_NAMES = { [1]="春", [2]="夏", [3]="秋", [4]="冬" }
-local MULT   = {1, 2, 4, 8} -- 春→夏→秋→冬の目標倍率
-local X_BASE = 1            -- 目標の基準値
-
 local Remotes : {
-	StatePush: RemoteEvent?,
-	ScorePush: RemoteEvent?,
-	HandPush:  RemoteEvent?,
-	FieldPush: RemoteEvent?,
-	TakenPush: RemoteEvent?,
+	StatePush: RemoteEvent?, ScorePush: RemoteEvent?,
+	HandPush:  RemoteEvent?, FieldPush: RemoteEvent?, TakenPush: RemoteEvent?,
 } | nil = nil
 
-local function targetForSeason(season:number?): number
-	local idx = tonumber(season) or 1
-	return (MULT[idx] or MULT[#MULT]) * X_BASE
-end
-
-local function seasonName(n:number?): string
-	return SEASON_NAMES[tonumber(n) or 0] or "?"
-end
-
+--========================
+-- 共通ユーティリティ
+--========================
 local function chainMult(n: number?): number
 	local x = tonumber(n) or 0
 	if x <= 1 then return 1.0
@@ -17635,6 +17783,25 @@ local function chainMult(n: number?): number
 	elseif x == 3 then return 2.0
 	else return 3.0 + (x - 4) * 0.5
 	end
+end
+
+local function monthName(n:number?): string
+	local m = tonumber(n) or 0
+	if m < 1 then m = 1 end
+	if m > 12 then m = 12 end
+	return tostring(m) .. "月"
+end
+
+local function goalForMonth(s: PlrState): number
+	local m = (s.run and s.run.month) or Balance.STAGE_START_MONTH or 1
+	if s.goal and type(s.goal)=="number" then return s.goal end
+	if Balance.getGoalForMonth then
+		return Balance.getGoalForMonth(m)
+	end
+	if Balance.GOAL_BY_MONTH then
+		return Balance.GOAL_BY_MONTH[m] or Balance.GOAL_BY_MONTH[1] or 1
+	end
+	return 1
 end
 
 --========================
@@ -17654,26 +17821,13 @@ end
 --========================
 -- 基本API
 --========================
-function StateHub.get(plr: Player): PlrState?
-	return stateByPlr[plr]
-end
-
-function StateHub.set(plr: Player, s: PlrState)
-	stateByPlr[plr] = s
-end
-
-function StateHub.clear(plr: Player)
-	stateByPlr[plr] = nil
-end
-
---（任意）存在チェック／デバッグ用
-function StateHub.exists(plr: Player): boolean
-	return stateByPlr[plr] ~= nil
-end
+function StateHub.get(plr: Player): PlrState? return stateByPlr[plr] end
+function StateHub.set(plr: Player, s: PlrState) stateByPlr[plr] = s end
+function StateHub.clear(plr: Player) stateByPlr[plr] = nil end
+function StateHub.exists(plr: Player): boolean return stateByPlr[plr] ~= nil end
 
 -- サーバ内ユーティリティ：欠損プロパティの安全な既定値
 local function ensureDefaults(s: PlrState)
-	s.season      = s.season or 1
 	s.handsLeft   = s.handsLeft or 0
 	s.rerollsLeft = s.rerollsLeft or 0
 	s.seasonSum   = s.seasonSum or 0
@@ -17688,25 +17842,23 @@ local function ensureDefaults(s: PlrState)
 	s.hand        = s.hand or {}
 	s.board       = s.board or {}
 	s.taken       = s.taken or {}
-	-- lang / run は任意
+	s.run         = s.run or {}
+	s.run.month   = s.run.month or Balance.STAGE_START_MONTH or 1
+	-- goal は getGoalForMonth を優先（Balance 側で月別設定を吸収）
+	s.goal        = s.goal or goalForMonth(s)
 end
 
--- 小さいユーティリティ
-local function safeLen(t:any)
-	return (typeof(t) == "table") and #t or 0
-end
+local function safeLen(t:any) return (typeof(t) == "table") and #t or 0 end
 
 --========================
 -- クライアント送信（状態/得点/札）
 --========================
 function StateHub.pushState(plr: Player)
 	local tAll0 = os.clock()
-
 	if not Remotes then
 		LOG.warn("pushState: Remotes table missing (skip) | u=%s", plr and plr.Name or "?")
 		return
 	end
-
 	local s = stateByPlr[plr]
 	if not s then
 		LOG.warn("pushState: state missing (skip) | u=%s", plr and plr.Name or "?")
@@ -17720,12 +17872,15 @@ function StateHub.pushState(plr: Player)
 	local boardN = safeLen(s.board)
 	local takenN = safeLen(s.taken)
 
-	LOG.info("pushState.begin u=%s phase=%s season=%s(%s) deck=%d hand=%d board=%d taken=%d mon=%s bank=%s",
-		plr and plr.Name or "?", tostring(s.phase), tostring(s.season), seasonName(s.season),
+	local m = (s.run and s.run.month) or Balance.STAGE_START_MONTH or 1
+	local g = goalForMonth(s)
+
+	LOG.info("pushState.begin u=%s phase=%s month=%d goal=%s deck=%d hand=%d board=%d taken=%d mon=%s bank=%s",
+		plr and plr.Name or "?", tostring(s.phase), m, tostring(g),
 		deckN, handN, boardN, takenN, tostring(s.mon), tostring(s.bank)
 	)
 
-	-- サマリー算出（Scoring は state（=s）内の祭事レベルも参照可能）
+	-- サマリー算出（例外安全）
 	local score_t0 = os.clock()
 	local okScore, total, roles, detail = pcall(function()
 		local takenCards = s.taken or {}
@@ -17739,7 +17894,7 @@ function StateHub.pushState(plr: Player)
 		LOG.debug("ScorePush types: %s %s %s (in %.2fms)", typeof(total), typeof(roles), typeof(detail), score_ms)
 	end
 
-	-- 祭事レベル（UI用にフラットで同梱）
+	-- 祭事レベル（UI用）
 	local mats_t0 = os.clock()
 	local okM, matsuriLevels = pcall(function()
 		return RunDeckUtil.getMatsuriLevels(s) or {}
@@ -17750,23 +17905,22 @@ function StateHub.pushState(plr: Player)
 		matsuriLevels = {}
 	end
 
+	--========================
 	-- 状態（HUD/UI用）
-	local goalVal = targetForSeason(s.season) -- ★P0-11: 数値ゴールを一度だけ算出
+	--========================
 	if Remotes.StatePush then
 		local t0 = os.clock()
 		local okSend, err = pcall(function()
 			Remotes.StatePush:FireClient(plr, {
-				-- 基本
-				season      = s.season,
-				seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
-				target      = goalVal,                    -- 既存フィールド（互換維持）
-				goal        = goalVal,                    -- ★追加：UIが直接参照する数値ゴール
+				-- ★ 送るのは month/goal が正。season は送らない。
+				month       = m,
+				monthStr    = monthName(m),
+				goal        = g,
+				target      = g, -- 旧互換が必要なら同値を置く（UI側で未使用なら無視される）
 
-				-- 残り系
+				-- 残り系/表示
 				hands       = s.handsLeft or 0,
 				rerolls     = s.rerollsLeft or 0,
-
-				-- 経済/表示
 				sum         = s.seasonSum or 0,
 				mult        = s.mult or 1.0,
 				bank        = s.bank or 0,
@@ -17777,16 +17931,11 @@ function StateHub.pushState(plr: Player)
 				year        = s.year or 1,
 				homeReturns = s.homeReturns or 0,
 
-				-- 言語（UIで利用）
-				lang        = s.lang,                     -- ★任意
+				lang        = s.lang,
+				matsuri     = matsuriLevels,
 
-				-- 祭事レベル（YakuPanel 等のUIで利用）
-				matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
-
-				-- ▼▼ 追加：Run 側のスナップショット（護符ボード反映用）
-				run         = {                           -- ★追加
-					talisman = (s.run and s.run.talisman) or nil
-				},
+				-- Run 側のスナップショット（護符ボード等のUI用）
+				run         = { talisman = (s.run and s.run.talisman) or nil },
 
 				-- 山/手の残枚数（UIの安全表示用）
 				deckLeft    = deckN,
@@ -17795,8 +17944,8 @@ function StateHub.pushState(plr: Player)
 		end)
 		local ms = (os.clock() - t0) * 1000.0
 		if okSend then
-			LOG.info("pushState.StatePush u=%s season=%s goal=%s phase=%s sent in %.2fms (mats#=%d)",
-				plr and plr.Name or "?", tostring(s.season), tostring(goalVal), tostring(s.phase),
+			LOG.info("pushState.StatePush u=%s month=%d goal=%s phase=%s sent in %.2fms (mats#=%d)",
+				plr and plr.Name or "?", m, tostring(g), tostring(s.phase),
 				ms, (typeof(matsuriLevels)=="table" and #matsuriLevels or -1)
 			)
 		else
@@ -17806,7 +17955,9 @@ function StateHub.pushState(plr: Player)
 		LOG.warn("pushState: StatePush remote missing")
 	end
 
+	--========================
 	-- スコア（リスト/直近役表示）
+	--========================
 	if Remotes.ScorePush then
 		local t0 = os.clock()
 		local okSend, err = pcall(function()
@@ -17827,7 +17978,9 @@ function StateHub.pushState(plr: Player)
 		LOG.warn("pushState: ScorePush remote missing")
 	end
 
+	--========================
 	-- 札（手/場/取り）— 各送信を個別計測
+	--========================
 	if Remotes.HandPush then
 		local t0 = os.clock()
 		local okSend, err = pcall(function() Remotes.HandPush:FireClient(plr, s.hand or {}) end)
@@ -17853,6 +18006,12 @@ function StateHub.pushState(plr: Player)
 	else
 		LOG.warn("pushState: FieldPush remote missing")
 	end
+
+	if Remotes.TakenPush then
+		local t0 = os.clock()
+		local okSend, err = pcall(function() Remotes.TakenPush:FireClient(plr, s.taken or {}) end)
+		local ms = (os.clock() - t0) * 1000.0
+		if okSend then
 ... (truncated)
 ```
 

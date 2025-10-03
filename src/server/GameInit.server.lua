@@ -15,16 +15,13 @@
 --  - ★ v0.9.3-fix: ShopDone 時に DeckRegistry の最新スナップショットを次シーズンへ明示伝播
 --                  （変更されたデッキを直後のシーズンで必ず使用）
 
---==================================================
--- Services
---==================================================
+-- ServerScriptService/GameInit.server.lua
+-- （前略：ヘッダコメントは省略）
+
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
 local SSS     = game:GetService("ServerScriptService")
 
---==================================================
--- Logger
---==================================================
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("GameInit")
 Logger.configure({
@@ -35,14 +32,8 @@ Logger.configure({
 
 LOG.info("boot")
 
---==================================================
--- SaveService（bank/year/clears/lang/activeRun の永続化）
---==================================================
 local SaveService = require(SSS:WaitForChild("SaveService"))
 
---==================================================
--- Remotes 生成（すべてここで先に生やす）
---==================================================
 local function ensureRemote(name: string)
 	local rem = RS:FindFirstChild("Remotes")
 	if not rem then
@@ -59,47 +50,32 @@ local function ensureRemote(name: string)
 	return e
 end
 
--- Core push系
 local Remotes = {
 	HandPush      = ensureRemote("HandPush"),
 	FieldPush     = ensureRemote("FieldPush"),
 	TakenPush     = ensureRemote("TakenPush"),
 	ScorePush     = ensureRemote("ScorePush"),
 	StatePush     = ensureRemote("StatePush"),
-
-	-- 結果/遷移
 	StageResult   = ensureRemote("StageResult"),
 	DecideNext    = ensureRemote("DecideNext"),
-
-	-- 操作（プレイ）
 	ReqPick       = ensureRemote("ReqPick"),
 	Confirm       = ensureRemote("Confirm"),
 	ReqRerollAll  = ensureRemote("ReqRerollAll"),
 	ReqRerollHand = ensureRemote("ReqRerollHand"),
-
-	-- 屋台（ショップ）
 	ShopOpen      = ensureRemote("ShopOpen"),
 	ShopDone      = ensureRemote("ShopDone"),
 	BuyItem       = ensureRemote("BuyItem"),
 	ShopReroll    = ensureRemote("ShopReroll"),
-
-	-- 同期（C→S：再同期要求。実処理は UiResync.server.lua）
 	ReqSyncUI     = ensureRemote("ReqSyncUI"),
-
-	-- ★ 酉UI（新経路）: サーバ→クライアント候補提示 / クライアント→サーバ決定
-	KitoPickStart  = ensureRemote("KitoPickStart"),   -- S→C: 12候補提示
-	KitoPickDecide = ensureRemote("KitoPickDecide"),  -- C→S: 決定/スキップ
+	KitoPickStart  = ensureRemote("KitoPickStart"),
+	KitoPickDecide = ensureRemote("KitoPickDecide"),
 }
-
--- Top/Home 系
-local HomeOpen        = ensureRemote("HomeOpen")        -- S→C: トップを開く
-local ReqStartNewRun  = ensureRemote("ReqStartNewRun")  -- C→S: ★後方互換（NEW強制）
-local ReqContinueRun  = ensureRemote("ReqContinueRun")  -- C→S: ★後方互換（CONTINUE推奨）
-local ReqStartGame    = ensureRemote("ReqStartGame")    -- C→S: ★統合エントリ（NEW or CONTINUE 自動）
-local RoundReady      = ensureRemote("RoundReady")      -- S→C: 新ラウンド準備完了
-local ReqSetLang      = ensureRemote("ReqSetLang")      -- C→S: 言語保存
-
--- Remotes からも参照できるように追加
+local HomeOpen        = ensureRemote("HomeOpen")
+local ReqStartNewRun  = ensureRemote("ReqStartNewRun")
+local ReqContinueRun  = ensureRemote("ReqContinueRun")
+local ReqStartGame    = ensureRemote("ReqStartGame")
+local RoundReady      = ensureRemote("RoundReady")
+local ReqSetLang      = ensureRemote("ReqSetLang")
 Remotes.HomeOpen        = HomeOpen
 Remotes.ReqStartNewRun  = ReqStartNewRun
 Remotes.ReqContinueRun  = ReqContinueRun
@@ -107,22 +83,15 @@ Remotes.ReqStartGame    = ReqStartGame
 Remotes.RoundReady      = RoundReady
 Remotes.ReqSetLang      = ReqSetLang
 
---==================================================
--- Server-side modules
---==================================================
 local StateHub = require(RS.SharedModules.StateHub)
 local Scoring  = require(RS.SharedModules.Scoring)
-
 local Round        = require(RS.SharedModules.RoundService)
 local PickService  = require(RS.SharedModules.PickService)
 local Reroll       = require(RS.SharedModules.RerollService)
 local Score        = require(RS.SharedModules.ScoreService)
 local ShopService  = require(RS.SharedModules.ShopService)
-
--- ★ P1-1: NavServer を導入（DecideNext の唯一線）
 local NavServer    = require(SSS:WaitForChild("NavServer"))
 
--- （任意）酉ピックのハンドラ群（あれば起動時に Remotes を注入して配線）
 local KitoPickServer do
 	local ok, mod = pcall(function() return require(SSS:WaitForChild("KitoPickServer")) end)
 	if ok and type(mod) == "table" then
@@ -132,18 +101,20 @@ local KitoPickServer do
 	end
 end
 
--- ★ DeckRegistry（最新デッキ状態のソース）
 local DeckRegistry do
 	local ok, mod = pcall(function()
-		-- プロジェクト構成に合わせて DeckRegistry の場所を解決
 		return require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("DeckRegistry"))
 	end)
 	DeckRegistry = ok and mod or nil
 end
 
---==================================================
--- Deck Effects（新経路の唯一のデッキ変化窓口）: 起動時に一括登録
---==================================================
+local Balance do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+	end)
+	Balance = ok and mod or { STAGE_START_MONTH = 1 }
+end
+
 local function bootstrapEffects()
 	local ok, err = pcall(function()
 		require(RS:WaitForChild("SharedModules"):WaitForChild("Deck"):WaitForChild("EffectsRegisterAll"))
@@ -155,9 +126,6 @@ local function bootstrapEffects()
 	end
 end
 
---==================================================
--- DEV Remotes（Studio向け：+両 / +役 付与）
---==================================================
 local DevGrantRyo  = ensureRemote("DevGrantRyo")
 local DevGrantRole = ensureRemote("DevGrantRole")
 
@@ -186,7 +154,6 @@ end
 
 DevGrantRole.OnServerEvent:Connect(function(plr)
 	local s = StateHub.get(plr); if not s then return end
-
 	takeByPredOrStub(s,
 		function(c) return c.month==9 and ((c.tags and table.find(c.tags,"sake")) or c.name=="盃") end,
 		{month=9, kind="seed", name="盃", tags={"thing","sake"}}
@@ -200,9 +167,6 @@ DevGrantRole.OnServerEvent:Connect(function(plr)
 	LOG.debug("DevGrantRole | user=%s total=%s", plr.Name, tostring(total))
 end)
 
---==================================================
--- 言語ユーティリティ（ja/en 正規化）
---==================================================
 local function normLang(v:string?): string?
 	v = tostring(v or ""):lower()
 	if v == "ja" or v == "jp" then return "ja" end
@@ -210,13 +174,7 @@ local function normLang(v:string?): string?
 	return nil
 end
 
---==================================================
--- 初期化／バインド
---==================================================
--- ★ Deck Effects 登録（最初に実施）
 bootstrapEffects()
-
--- StateHub / 各サービス紐付け
 StateHub.init(Remotes)
 
 if PickService and typeof(PickService.bind) == "function" then
@@ -224,19 +182,16 @@ if PickService and typeof(PickService.bind) == "function" then
 else
 	LOG.warn("PickService.bind が見つかりません")
 end
-
 if Reroll and typeof(Reroll.bind) == "function" then
 	Reroll.bind(Remotes)
 else
 	LOG.warn("Reroll.bind が見つかりません")
 end
-
 if Score and typeof(Score.bind) == "function" then
 	Score.bind(Remotes, { openShop = ShopService and ShopService.open })
 else
 	LOG.warn("Score.bind が見つかりません")
 end
-
 if ShopService and typeof(ShopService.init) == "function" then
 	ShopService.init(
 		function(plr) return StateHub.get(plr) end,
@@ -245,32 +200,25 @@ if ShopService and typeof(ShopService.init) == "function" then
 else
 	LOG.warn("ShopService.init が見つかりません")
 end
-
--- ★ 酉ピック（新経路）の配線があれば注入して起動
 if KitoPickServer and typeof(KitoPickServer.bind) == "function" then
 	KitoPickServer.bind(Remotes)
 	LOG.info("[KitoPickServer] ready (handlers wiring)")
 end
 
--- ★ P1-1: NavServer を初期化（DecideNext の唯一線）。依存はここで注入。
 NavServer.init({
 	StateHub    = StateHub,
 	Round       = Round,
 	ShopService = ShopService,
 	SaveService = SaveService,
-	HomeOpen    = HomeOpen,           -- S→C push（NavServerで使用）
-	DecideNext  = Remotes.DecideNext, -- C→S pull（同上）
+	HomeOpen    = HomeOpen,
+	DecideNext  = Remotes.DecideNext,
 })
 
---==================================================
--- Player lifecycle：永続ロード/保存 + 言語ログ
---==================================================
 Players.PlayerAdded:Connect(function(plr)
 	LOG.info("PlayerAdded | begin load profile | user=%s userId=%d", plr.Name, plr.UserId)
 
 	local prof = SaveService.load(plr)
-	LOG.debug(
-		"Profile loaded | user=%s bank=%s year=%s asc=%s clears=%s lang=%s",
+	LOG.debug("Profile loaded | user=%s bank=%s year=%s asc=%s clears=%s lang=%s",
 		plr.Name,
 		tostring(prof and prof.bank), tostring(prof and prof.year),
 		tostring(prof and prof.asc),  tostring(prof and prof.clears),
@@ -279,24 +227,19 @@ Players.PlayerAdded:Connect(function(plr)
 
 	local s = StateHub.get(plr) or {}
 	local savedLang = normLang(SaveService.getLang(plr)) or "en"
-
 	s.bank        = prof.bank   or 0
 	s.year        = prof.year   or 0
 	s.totalClears = prof.clears or 0
 	s.lang        = savedLang
-	-- 念のため NEW強制フラグは初期状態では無効化
 	s._forceNewOnNextStart = false
-
 	StateHub.set(plr, s)
 
-	LOG.debug(
-		"State set | user=%s lang=%s bank=%d year=%d clears=%d",
+	LOG.debug("State set | user=%s lang=%s bank=%d year=%d clears=%d",
 		plr.Name, s.lang, s.bank or 0, s.year or 0, s.totalClears or 0
 	)
 
 	local hasSave = SaveService.getActiveRun(plr) ~= nil
-	LOG.info(
-		"HomeOpen → C | user=%s lang=%s hasSave=%s bank=%d year=%d clears=%d",
+	LOG.info("HomeOpen → C | user=%s lang=%s hasSave=%s bank=%d year=%d clears=%d",
 		plr.Name, s.lang, tostring(hasSave), s.bank or 0, s.year or 0, s.totalClears or 0
 	)
 
@@ -305,7 +248,7 @@ Players.PlayerAdded:Connect(function(plr)
 		bank    = s.bank,
 		year    = s.year,
 		clears  = s.totalClears or 0,
-		lang    = s.lang, -- "ja" or "en"
+		lang    = s.lang,
 	})
 end)
 
@@ -320,9 +263,6 @@ game:BindToClose(function()
 	LOG.info("BindToClose | flushAll end")
 end)
 
---==================================================
--- 言語保存（C→S）
---==================================================
 ReqSetLang.OnServerEvent:Connect(function(plr, lang)
 	local n = normLang(lang)
 	if not n then
@@ -330,50 +270,58 @@ ReqSetLang.OnServerEvent:Connect(function(plr, lang)
 		return
 	end
 	SaveService.setLang(plr, n)
-
 	local s = StateHub.get(plr) or {}
 	s.lang = n
 	StateHub.set(plr, s)
-
 	LOG.info("setLang | saved & state updated | user=%s lang=%s", plr.Name, n)
 end)
 
---==================================================
--- ラン開始/続き（RoundReady → RunScreen.requestSync → UiResync）
---==================================================
 local function fireReadySoon(plr)
 	task.delay(0.05, function()
 		Remotes.RoundReady:FireClient(plr)
 	end)
 end
 
+-- 内部用：月→季節（RoundService が 1..4 を要求するため“その場で”算出するだけ）
+local function monthToSeason(m:number): number
+	m = tonumber(m) or 1
+	return ((m - 1) % 4) + 1
+end
+
 local function startNewRun(plr)
-	-- NEW 開始前に続きスナップは必ず破棄
 	if SaveService.clearActiveRun then pcall(function() SaveService.clearActiveRun(plr) end) end
+	local s = StateHub.get(plr) or {}
+	s.run = s.run or {}
+	s.run.month = (Balance and Balance.STAGE_START_MONTH) or 1
+	-- ★季節は保持しない（UI/状態から削除）。必要時のみ month→season を都度計算。
+	StateHub.set(plr, s)
+
 	Round.resetRun(plr)
 	fireReadySoon(plr)
-	LOG.info("startNewRun | user=%s", plr.Name)
+	LOG.info("startNewRun | user=%s month=%s", plr.Name, tostring(s.run.month))
 end
 
 local function continueFromSnapshot(plr, snap:any)
 	local s = StateHub.get(plr) or {}
 	s.bank = tonumber(snap.bank or s.bank or 0) or 0
 	s.mon  = tonumber(snap.mon  or s.mon  or 0) or 0
-	if snap.effects then
-		s.effects = snap.effects
+	if snap.effects then s.effects = snap.effects end
+
+	s.run = s.run or {}
+	if typeof(snap) == "table" and snap.month then
+		s.run.month = tonumber(snap.month) or s.run.month or (Balance and Balance.STAGE_START_MONTH) or 1
+	else
+		s.run.month = s.run.month or (Balance and Balance.STAGE_START_MONTH) or 1
 	end
 	StateHub.set(plr, s)
 
-	local season = tonumber(snap.season or 1) or 1
+	local seasonForRound = monthToSeason(s.run.month)
 
-	-- ★ 復帰時：保存されている deckSnapshot があれば Round へ明示的に渡す
 	local opts = nil
 	if snap.deckSnapshot then
 		opts = { deckSnapshot = snap.deckSnapshot }
 	end
-
-	Round.newRound(plr, season, opts)
-
+	Round.newRound(plr, seasonForRound, opts)
 	fireReadySoon(plr)
 
 	if snap.atShop and ShopService and typeof(ShopService.open)=="function" then
@@ -381,74 +329,47 @@ local function continueFromSnapshot(plr, snap:any)
 			local cur = StateHub.get(plr); if not cur then return end
 			cur.phase = "shop"
 			if snap.shopStock then
-				cur.shop = cur.shop or {}
-				cur.shop.stock = snap.shopStock
+				cur.shop = cur.shop or {}; cur.shop.stock = snap.shopStock
 			end
 			StateHub.set(plr, cur)
 			ShopService.open(plr, cur, { notice = "" })
 		end)
 	end
 
-	LOG.info("continueFromSnapshot | user=%s season=%d atShop=%s", plr.Name, season, tostring(snap.atShop))
+	LOG.info("continueFromSnapshot | user=%s month=%s", plr.Name, tostring((s.run and s.run.month) or "?"))
 end
 
--- ★ 統合：NEW/CNT 自動判定（ラン終了後は強制NEW）
 local function startGameAuto(plr)
 	local s = StateHub.get(plr) or {}
-
-	-- ★ NavServer の endRunAndClean が立てるフラグを最優先
 	if s._forceNewOnNextStart then
 		LOG.info("startGameAuto | force NEW (flag) | user=%s", plr.Name)
-		s._forceNewOnNextStart = false -- 一度使ったら解除
+		s._forceNewOnNextStart = false
 		StateHub.set(plr, s)
 		startNewRun(plr)
 		return
 	end
 
 	local snap = SaveService.getActiveRun(plr)
-	if snap then
-		continueFromSnapshot(plr, snap)
-	else
-		startNewRun(plr)
-	end
+	if snap then continueFromSnapshot(plr, snap) else startNewRun(plr) end
 end
 
--- ★ 新：統合エントリ
-ReqStartGame.OnServerEvent:Connect(function(plr)
-	startGameAuto(plr)
-end)
+ReqStartGame.OnServerEvent:Connect(function(plr) startGameAuto(plr) end)
+ReqStartNewRun.OnServerEvent:Connect(function(plr) startNewRun(plr) end)
+ReqContinueRun.OnServerEvent:Connect(function(plr) startGameAuto(plr) end)
 
--- ★ 旧：後方互換（NEWを強制）
-ReqStartNewRun.OnServerEvent:Connect(function(plr)
-	startNewRun(plr)
-end)
-
--- ★ 旧：後方互換（CONTINUE優先 / 無ければNEW）
-ReqContinueRun.OnServerEvent:Connect(function(plr)
-	startGameAuto(plr)
-end)
-
---==================================================
--- 屋台 → 次シーズン遷移
---==================================================
+-- 屋台 → 次シーズン遷移（※季節は保持しない。月のみ進める）
 Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	local s = StateHub.get(plr); if not s then return end
 	if s.phase ~= "shop" then return end
 
-	-- ★★★★★ ここが本修正の核心 ★★★★★
-	-- ショップでの効果（例：酉の光札化）は DeckRegistry にコミット済み。
-	-- 次シーズン開始前に「今のDeckRegistry」をスナップショット化して newRound に渡す。
-	local nextSeason = (s.season or 1) + 1
 	local deckSnapForNext = nil
-
 	if DeckRegistry and typeof(Round.getRunId) == "function" and typeof(DeckRegistry.dumpSnapshot) == "function" then
-		local runId = Round.getRunId(plr) -- Round 側で管理している現在の runId を取得
+		local runId = Round.getRunId(plr)
 		if runId then
 			local ok, snap = pcall(function() return DeckRegistry.dumpSnapshot(runId) end)
 			if ok and snap then
 				deckSnapForNext = snap
-				LOG.info("[ShopDone] captured latest deck snapshot for next season | run=%s", tostring(runId))
-				-- 任意：復帰用に ActiveRun にも保存しておくと安全
+				LOG.info("[ShopDone] captured latest deck snapshot for next round | run=%s", tostring(runId))
 				if typeof(SaveService.updateActiveRunDeck) == "function" then
 					pcall(function() SaveService.updateActiveRunDeck(plr, snap) end)
 				end
@@ -461,25 +382,22 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	else
 		LOG.warn("[ShopDone] DeckRegistry or Round.getRunId not available (skip snapshot)")
 	end
-	-- ★★★★★ ここまで ★★★★★
 
+	s.run = s.run or {}
+	local prevMonth = tonumber(s.run.month or 1) or 1
+	local nextMonth = math.min(12, prevMonth + 1)
+	s.run.month = nextMonth
 	s.lastScore = nil
-	s.phase = "play"
+	s.phase     = "play"
+	LOG.info("[ShopDone] month++ | user=%s %d -> %d", plr.Name, prevMonth, nextMonth)
 
-	if nextSeason > 4 then
-		-- 冬→春はランリセット（継続プレイのためスナップ維持でOK）
-		Round.resetRun(plr)
-	else
-		-- ★ 修正：次シーズン開始時に明示的に deckSnapshot を渡す
-		local opts = deckSnapForNext and { deckSnapshot = deckSnapForNext } or nil
-		Round.newRound(plr, nextSeason, opts)
-		StateHub.set(plr, s)
-	end
+	local nextSeasonForRound = monthToSeason(nextMonth)
+	local opts = deckSnapForNext and { deckSnapshot = deckSnapForNext } or nil
+	Round.newRound(plr, nextSeasonForRound, opts)
 
+	StateHub.set(plr, s)
 	fireReadySoon(plr)
-	LOG.info("ShopDone → next | user=%s nextSeason=%d", plr.Name, nextSeason)
+	LOG.info("ShopDone → next | user=%s nextMonth=%d", plr.Name, nextMonth)
 end)
 
---==================================================
--- 以降、DecideNext の実装は NavServer に移管済み（ここには置かない）
---==================================================
+-- 以降、DecideNext は NavServer 側

@@ -1,78 +1,67 @@
 -- ReplicatedStorage/SharedModules/StateHub.lua
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
--- P0-11: StatePush の payload に goal:number を追加（UI側の文字列パース依存を排除）
--- P1-3: Logger 導入（print/warn を LOG.* に置換）
--- P1-4: ★計測/詳細ログを追加（pushStateの入口～出口、各FireClient、Scoring/RunDeckUtilの例外捕捉）
+-- 12-month版：StatePushは month/goal を正とし、season/seasonStr は送信しない
+-- さらに過去版の計測ログ／Scoring／RunDeckUtil連携など有用部分は維持／統合
 
 local RS = game:GetService("ReplicatedStorage")
 
--- Logger
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("StateHub")
 
--- 依存モジュール
 local Scoring     = require(RS:WaitForChild("SharedModules"):WaitForChild("Scoring"))
-local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil")) -- ★追加
+local RunDeckUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("RunDeckUtil"))
+
+-- Balance は存在しない環境でも動作するようフォールバック
+local Balance do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+	end)
+	Balance = ok and mod or {
+		STAGE_START_MONTH = 1,
+		getGoalForMonth = function(_) return 1 end,
+	}
+end
 
 local StateHub = {}
 
 --========================
 -- 内部状態（Server専用）
 --========================
-type PlrState = {
-	deck: {any}?,
-	hand: {any}?,
-	board: {any}?,
-	taken: {any}?,
-	dump: {any}?,
+export type PlrState = {
+	deck: {any}?, hand: {any}?, board: {any}?, taken: {any}?, dump: {any}?,
 
-	season: number?,        -- 1=春, 2=夏, 3=秋, 4=冬
-	handsLeft: number?,
-	rerollsLeft: number?,
+	handsLeft: number?, rerollsLeft: number?,
+	seasonSum: number?,  -- 12ヶ月制でもUI表示で使う合計は残す
+	chainCount: number?, -- 連続役数（倍率表示用）
+	mult: number?,       -- 表示用倍率
 
-	seasonSum: number?,     -- 今季の合計(表示用)
-	chainCount: number?,    -- 連続役数
-	mult: number?,          -- 表示用倍率
+	bank: number?,       -- 両（周回通貨）
+	mon: number?,        -- 文（季節通貨的。用語はそのまま）
 
-	bank: number?,          -- 両（周回通貨）
-	mon: number?,           -- 文（季節通貨）
+	phase: string?,      -- "play" / "shop" / "result" / "home"
+	year: number?,       -- 周回年数
+	homeReturns: number?,-- 「ホームへ戻る」回数
 
-	phase: string?,         -- "play" / "shop" / "result"(冬後)
-	year: number?,          -- 周回年数（25年進行で+25）
-	homeReturns: number?,   -- 「ホームへ戻る」回数（アンロック条件用）
+	lang: string?,       -- "ja"/"en"
+	lastScore: any?,     -- 任意デバッグ
 
-	lang: string?,          -- ★任意：言語（"ja"/"en"）
-	lastScore: any?,        -- 任意：デバッグ/結果表示
-
-	run: any?,              -- RunDeckUtil が内部で利用（meta/matsuriLevels 等）
+	run: any?,           -- { month=number, talisman=?, ... }
+	goal: number?,       -- 月ごとの目標（数値）
 }
 
 local stateByPlr : {[Player]: PlrState} = {}
 
 --========================
--- 季節/目標/倍率
+-- Remotes（Server→Client）
 --========================
-local SEASON_NAMES = { [1]="春", [2]="夏", [3]="秋", [4]="冬" }
-local MULT   = {1, 2, 4, 8} -- 春→夏→秋→冬の目標倍率
-local X_BASE = 1            -- 目標の基準値
-
 local Remotes : {
-	StatePush: RemoteEvent?,
-	ScorePush: RemoteEvent?,
-	HandPush:  RemoteEvent?,
-	FieldPush: RemoteEvent?,
-	TakenPush: RemoteEvent?,
+	StatePush: RemoteEvent?, ScorePush: RemoteEvent?,
+	HandPush:  RemoteEvent?, FieldPush: RemoteEvent?, TakenPush: RemoteEvent?,
 } | nil = nil
 
-local function targetForSeason(season:number?): number
-	local idx = tonumber(season) or 1
-	return (MULT[idx] or MULT[#MULT]) * X_BASE
-end
-
-local function seasonName(n:number?): string
-	return SEASON_NAMES[tonumber(n) or 0] or "?"
-end
-
+--========================
+-- 共通ユーティリティ
+--========================
 local function chainMult(n: number?): number
 	local x = tonumber(n) or 0
 	if x <= 1 then return 1.0
@@ -80,6 +69,25 @@ local function chainMult(n: number?): number
 	elseif x == 3 then return 2.0
 	else return 3.0 + (x - 4) * 0.5
 	end
+end
+
+local function monthName(n:number?): string
+	local m = tonumber(n) or 0
+	if m < 1 then m = 1 end
+	if m > 12 then m = 12 end
+	return tostring(m) .. "月"
+end
+
+local function goalForMonth(s: PlrState): number
+	local m = (s.run and s.run.month) or Balance.STAGE_START_MONTH or 1
+	if s.goal and type(s.goal)=="number" then return s.goal end
+	if Balance.getGoalForMonth then
+		return Balance.getGoalForMonth(m)
+	end
+	if Balance.GOAL_BY_MONTH then
+		return Balance.GOAL_BY_MONTH[m] or Balance.GOAL_BY_MONTH[1] or 1
+	end
+	return 1
 end
 
 --========================
@@ -99,26 +107,13 @@ end
 --========================
 -- 基本API
 --========================
-function StateHub.get(plr: Player): PlrState?
-	return stateByPlr[plr]
-end
-
-function StateHub.set(plr: Player, s: PlrState)
-	stateByPlr[plr] = s
-end
-
-function StateHub.clear(plr: Player)
-	stateByPlr[plr] = nil
-end
-
---（任意）存在チェック／デバッグ用
-function StateHub.exists(plr: Player): boolean
-	return stateByPlr[plr] ~= nil
-end
+function StateHub.get(plr: Player): PlrState? return stateByPlr[plr] end
+function StateHub.set(plr: Player, s: PlrState) stateByPlr[plr] = s end
+function StateHub.clear(plr: Player) stateByPlr[plr] = nil end
+function StateHub.exists(plr: Player): boolean return stateByPlr[plr] ~= nil end
 
 -- サーバ内ユーティリティ：欠損プロパティの安全な既定値
 local function ensureDefaults(s: PlrState)
-	s.season      = s.season or 1
 	s.handsLeft   = s.handsLeft or 0
 	s.rerollsLeft = s.rerollsLeft or 0
 	s.seasonSum   = s.seasonSum or 0
@@ -133,25 +128,23 @@ local function ensureDefaults(s: PlrState)
 	s.hand        = s.hand or {}
 	s.board       = s.board or {}
 	s.taken       = s.taken or {}
-	-- lang / run は任意
+	s.run         = s.run or {}
+	s.run.month   = s.run.month or Balance.STAGE_START_MONTH or 1
+	-- goal は getGoalForMonth を優先（Balance 側で月別設定を吸収）
+	s.goal        = s.goal or goalForMonth(s)
 end
 
--- 小さいユーティリティ
-local function safeLen(t:any)
-	return (typeof(t) == "table") and #t or 0
-end
+local function safeLen(t:any) return (typeof(t) == "table") and #t or 0 end
 
 --========================
 -- クライアント送信（状態/得点/札）
 --========================
 function StateHub.pushState(plr: Player)
 	local tAll0 = os.clock()
-
 	if not Remotes then
 		LOG.warn("pushState: Remotes table missing (skip) | u=%s", plr and plr.Name or "?")
 		return
 	end
-
 	local s = stateByPlr[plr]
 	if not s then
 		LOG.warn("pushState: state missing (skip) | u=%s", plr and plr.Name or "?")
@@ -165,12 +158,15 @@ function StateHub.pushState(plr: Player)
 	local boardN = safeLen(s.board)
 	local takenN = safeLen(s.taken)
 
-	LOG.info("pushState.begin u=%s phase=%s season=%s(%s) deck=%d hand=%d board=%d taken=%d mon=%s bank=%s",
-		plr and plr.Name or "?", tostring(s.phase), tostring(s.season), seasonName(s.season),
+	local m = (s.run and s.run.month) or Balance.STAGE_START_MONTH or 1
+	local g = goalForMonth(s)
+
+	LOG.info("pushState.begin u=%s phase=%s month=%d goal=%s deck=%d hand=%d board=%d taken=%d mon=%s bank=%s",
+		plr and plr.Name or "?", tostring(s.phase), m, tostring(g),
 		deckN, handN, boardN, takenN, tostring(s.mon), tostring(s.bank)
 	)
 
-	-- サマリー算出（Scoring は state（=s）内の祭事レベルも参照可能）
+	-- サマリー算出（例外安全）
 	local score_t0 = os.clock()
 	local okScore, total, roles, detail = pcall(function()
 		local takenCards = s.taken or {}
@@ -184,7 +180,7 @@ function StateHub.pushState(plr: Player)
 		LOG.debug("ScorePush types: %s %s %s (in %.2fms)", typeof(total), typeof(roles), typeof(detail), score_ms)
 	end
 
-	-- 祭事レベル（UI用にフラットで同梱）
+	-- 祭事レベル（UI用）
 	local mats_t0 = os.clock()
 	local okM, matsuriLevels = pcall(function()
 		return RunDeckUtil.getMatsuriLevels(s) or {}
@@ -195,23 +191,22 @@ function StateHub.pushState(plr: Player)
 		matsuriLevels = {}
 	end
 
+	--========================
 	-- 状態（HUD/UI用）
-	local goalVal = targetForSeason(s.season) -- ★P0-11: 数値ゴールを一度だけ算出
+	--========================
 	if Remotes.StatePush then
 		local t0 = os.clock()
 		local okSend, err = pcall(function()
 			Remotes.StatePush:FireClient(plr, {
-				-- 基本
-				season      = s.season,
-				seasonStr   = seasonName(s.season),       -- 仕様に沿って季節名も送る
-				target      = goalVal,                    -- 既存フィールド（互換維持）
-				goal        = goalVal,                    -- ★追加：UIが直接参照する数値ゴール
+				-- ★ 送るのは month/goal が正。season は送らない。
+				month       = m,
+				monthStr    = monthName(m),
+				goal        = g,
+				target      = g, -- 旧互換が必要なら同値を置く（UI側で未使用なら無視される）
 
-				-- 残り系
+				-- 残り系/表示
 				hands       = s.handsLeft or 0,
 				rerolls     = s.rerollsLeft or 0,
-
-				-- 経済/表示
 				sum         = s.seasonSum or 0,
 				mult        = s.mult or 1.0,
 				bank        = s.bank or 0,
@@ -222,16 +217,11 @@ function StateHub.pushState(plr: Player)
 				year        = s.year or 1,
 				homeReturns = s.homeReturns or 0,
 
-				-- 言語（UIで利用）
-				lang        = s.lang,                     -- ★任意
+				lang        = s.lang,
+				matsuri     = matsuriLevels,
 
-				-- 祭事レベル（YakuPanel 等のUIで利用）
-				matsuri     = matsuriLevels,              -- ★追加（{ [fid]=lv }）
-
-				-- ▼▼ 追加：Run 側のスナップショット（護符ボード反映用）
-				run         = {                           -- ★追加
-					talisman = (s.run and s.run.talisman) or nil
-				},
+				-- Run 側のスナップショット（護符ボード等のUI用）
+				run         = { talisman = (s.run and s.run.talisman) or nil },
 
 				-- 山/手の残枚数（UIの安全表示用）
 				deckLeft    = deckN,
@@ -240,8 +230,8 @@ function StateHub.pushState(plr: Player)
 		end)
 		local ms = (os.clock() - t0) * 1000.0
 		if okSend then
-			LOG.info("pushState.StatePush u=%s season=%s goal=%s phase=%s sent in %.2fms (mats#=%d)",
-				plr and plr.Name or "?", tostring(s.season), tostring(goalVal), tostring(s.phase),
+			LOG.info("pushState.StatePush u=%s month=%d goal=%s phase=%s sent in %.2fms (mats#=%d)",
+				plr and plr.Name or "?", m, tostring(g), tostring(s.phase),
 				ms, (typeof(matsuriLevels)=="table" and #matsuriLevels or -1)
 			)
 		else
@@ -251,7 +241,9 @@ function StateHub.pushState(plr: Player)
 		LOG.warn("pushState: StatePush remote missing")
 	end
 
+	--========================
 	-- スコア（リスト/直近役表示）
+	--========================
 	if Remotes.ScorePush then
 		local t0 = os.clock()
 		local okSend, err = pcall(function()
@@ -272,7 +264,9 @@ function StateHub.pushState(plr: Player)
 		LOG.warn("pushState: ScorePush remote missing")
 	end
 
+	--========================
 	-- 札（手/場/取り）— 各送信を個別計測
+	--========================
 	if Remotes.HandPush then
 		local t0 = os.clock()
 		local okSend, err = pcall(function() Remotes.HandPush:FireClient(plr, s.hand or {}) end)
@@ -320,8 +314,7 @@ end
 --========================
 -- 共有ユーティリティ（他モジュールから利用）
 --========================
-StateHub.targetForSeason = targetForSeason
-StateHub.seasonName      = seasonName
-StateHub.chainMult       = chainMult
+StateHub.chainMult    = chainMult
+StateHub.goalForMonth = function(s) return goalForMonth(s) end
 
 return StateHub

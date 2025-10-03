@@ -1,4 +1,4 @@
--- v0.9.1 → v0.9.1-nextdeck
+-- v0.9.1 → v0.9.1-nextdeck (+12-month: month/goal 初期化・保持)
 -- 季節開始ロジック（configSnapshot/外部デッキスナップ → 当季デッキ → ★季節開始スナップ保存）
 local RS = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
@@ -7,6 +7,15 @@ local HttpService = game:GetService("HttpService")
 local CardEngine   = require(RS.SharedModules.CardEngine)
 local StateHub     = require(RS.SharedModules.StateHub)
 local RunDeckUtil  = require(RS.SharedModules.RunDeckUtil)
+
+-- ★ 12-month: Balance（目標スコア/開始月 等）
+local Balance do
+	local ok, mod = pcall(function() return require(RS:WaitForChild("Config"):WaitForChild("Balance")) end)
+	Balance = ok and mod or {
+		STAGE_START_MONTH = 1,
+		getGoalForMonth = function(_) return 1 end,
+	}
+end
 
 -- ★ SaveService（サーバ専用：失敗してもゲームは継続）
 local SaveService do
@@ -36,6 +45,24 @@ local function ensureRunId(state)
 		state.run.id = HttpService:GenerateGUID(false)
 	end
 	return state.run.id
+end
+
+-- ★ 12-month: 月初の goal を state に設定して即 push
+local function setMonthAndGoal(state, monthOrNil)
+	state.run = state.run or {}
+	if monthOrNil ~= nil then
+		state.run.month = tonumber(monthOrNil) or state.run.month or Balance.STAGE_START_MONTH or 1
+	else
+		state.run.month = state.run.month or Balance.STAGE_START_MONTH or 1
+	end
+	-- 目標スコア（UI/未達判定用）
+	if Balance.getGoalForMonth then
+		state.goal = Balance.getGoalForMonth(state.run.month)
+	elseif Balance.GOAL_BY_MONTH then
+		state.goal = Balance.GOAL_BY_MONTH[state.run.month] or Balance.GOAL_BY_MONTH[1] or 1
+	else
+		state.goal = 1
+	end
 end
 
 -- 次季に繰り越された bright 変換スタックを消化（ラン構成に反映）
@@ -85,6 +112,10 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 	local s = StateHub.get(plr) or {}
 	-- ランIDを必ず持たせる（GameInit からの参照用）
 	local runId = ensureRunId(s)
+
+	-- ★ 12-month: month と goal を必ず与える（復帰時は保持、明示指定があれば採用）
+	setMonthAndGoal(s, (s.run and s.run.month) or nil)
+	StateHub.set(plr, s)  -- ここで goal が state に乗る（この後 push でクライアント反映）
 
 	-- 1) ラン構成をロード or 外部スナップで上書き
 	consumeQueuedConversions(s, Random.new())
@@ -140,6 +171,10 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 	s.mon         = s.mon or 0
 	s.phase       = "play"
 	s.deckSeed    = seed            -- ★ 復元用に保持
+	-- ★ 12-month: 月初に goal を再確認（他所で month を更新して戻ってきた場合も安全）
+	s.goal        = (Balance.getGoalForMonth and Balance.getGoalForMonth(s.run.month))
+	               or (Balance.GOAL_BY_MONTH and (Balance.GOAL_BY_MONTH[s.run.month] or Balance.GOAL_BY_MONTH[1]))
+	               or 1
 
 	StateHub.set(plr, s)
 	StateHub.pushState(plr)
@@ -166,6 +201,9 @@ function Round.resetRun(plr: Player)
 		mult = 1.0, mon = 0, phase = "play",
 		run = { configSnapshot = nil }, -- 次で自動初期化（run.id は newRound 内で自動採番）
 	}
+	-- ★ 12-month: ラン開始時の month/goal を初期化
+	setMonthAndGoal(fresh, Balance and Balance.STAGE_START_MONTH or 1)
+
 	StateHub.set(plr, fresh)
 
 	-- ★ 新ラン開始（newRound 内でスナップも作成される）

@@ -1,5 +1,7 @@
 -- ReplicatedStorage/SharedModules/ScoreService.lua
--- Confirm（勝負）時の獲得計算と、到達時の遷移制御（春〜秋＝屋台／冬＝分岐）
+-- Confirm（勝負）時の獲得計算と、到達時の遷移制御（12か月一直線版）
+-- 1–8月 達成→屋台 / 9–11月 達成→2択（こいこい/ホーム） / 12月 達成→ワンボタンfinal
+-- 未達はゲームオーバー（ランリセット）
 
 local RS         = game:GetService("ReplicatedStorage")
 local SSS        = game:GetService("ServerScriptService")
@@ -14,6 +16,18 @@ end
 -- 依存
 local Scoring  = reqShared("Scoring")
 local StateHub = reqShared("StateHub")
+
+-- Balance（次月ゴールの表示用）
+local Balance do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
+	end)
+	if ok and type(mod)=="table" then
+		Balance = mod
+	else
+		Balance = { getGoalForMonth = function(_) return 1 end }
+	end
+end
 
 -- SaveService はサーバ専用。クライアントで誤 require されても落ちないように stub 化
 local SaveService
@@ -51,10 +65,7 @@ local openShopFn = nil
 -- RoundService 参照（deps から注入。無ければフォールバック require）
 local RoundRef = nil
 
--- ▼ 開発トグル：二択固定（保存を出さない）＋「次」は常にロック表示
-local DEV_LOCK_NEXT          = true   -- true の間は canNext=false 固定
-local REMOVE_SAVE_BUTTON     = true   -- true なら保存ボタンを送らない（UI二択）
-
+-- 文（mon）リワード計算（従来ロジック維持）
 local function calcMonReward(sum, target, season)
 	-- 目標値は現在使用しないが将来の調整余地として残す
 	local _ = target
@@ -113,26 +124,36 @@ function Score.bind(Remotes, deps)
 		s.seasonSum   = (s.seasonSum or 0) + gained
 		s.handsLeft   = (s.handsLeft or 0) - 1
 
-		local season  = tonumber(s.season or 1) or 1
-		local tgt     = StateHub.targetForSeason(season)
+		-- ▼ 月ゴール（数値）— StateHub で Balance を咬ませた値
+		local tgt = (StateHub and StateHub.goalForMonth) and StateHub.goalForMonth(s) or 1
+		local curMonth = tonumber(s.run and s.run.month or 1) or 1
+		local season   = tonumber(s.season or 1) or 1
 
+		--========================
 		-- 未達：手が尽きたら失敗、まだなら続行
+		--========================
 		if (s.seasonSum or 0) < tgt then
 			if (s.handsLeft or 0) <= 0 then
+				-- 失敗：ゲームオーバー（ランリセット）
 				if Remotes.StageResult then
-					-- 失敗パス（UI側は true & table のみ表示する想定）
+					-- 互換：false, sum, target, mult, bank を送る旧経路も維持
 					Remotes.StageResult:FireClient(plr, false, s.seasonSum or 0, tgt, s.mult or 1, s.bank or 0)
 				end
 				local Round = RoundRef or reqShared("RoundService")
 				Round.resetRun(plr)
 			else
+				-- 続行
 				StateHub.pushState(plr)
 			end
 			return
 		end
 
-		-- ===== 達成：春〜秋は屋台へ =====
-		if season < 4 then
+		--========================
+		-- 達成時分岐（1–12月）
+		--========================
+
+		-- 1) 1〜8月：屋台へ（文を付与）
+		if curMonth < 9 then
 			s.phase = "shop"
 			local rewardMon = calcMonReward(s.seasonSum or 0, tgt, season)
 			s.mon = (s.mon or 0) + rewardMon
@@ -144,90 +165,72 @@ function Score.bind(Remotes, deps)
 			return
 		end
 
-		-- ===== 冬：クリア分岐 =====
-		s.phase = "result"
+		-- 2) 9〜11月：2両付与 → 2択モーダル（こいこい/ホーム）
+		if curMonth >= 9 and curMonth <= 11 then
+			s.phase = "result"
 
-		-- クリア回数（メモリ）
-		s.totalClears = (s.totalClears or 0) + 1
-		-- ★ 永続にも反映（存在すれば）
-		if typeof(SaveService.bumpClears) == "function" then
-			SaveService.bumpClears(plr, 1)
-		end
-
-		-- 2両ボーナス（メモリ＋永続）
-		local rewardBank = 2
-		s.bank = (s.bank or 0) + rewardBank
-		if typeof(SaveService.addBank) == "function" then
-			SaveService.addBank(plr, rewardBank)
-		end
-
-		s.lastScore = { total = total or 0, roles = roles, detail = detail }
-		StateHub.pushState(plr)
-
-		-- 旧仕様の解禁判定（参照のみ・ログ用）
-		local clears   = tonumber(s.totalClears or 0) or 0
-		local unlocked_by_clears = (clears >= 3)
-		local canNextFinal = (not DEV_LOCK_NEXT) and unlocked_by_clears or false
-		local canSaveFinal = false -- 常に保存は無効（ボタン非表示）
-
-		-- DEBUG: 冬クリア時点のサマリ
-		print(("[Score] winter clear by %s | clears=%d unlocked=%s season=%s sum=%d target=%d bank=%d")
-			:format(
-				plr.Name,
-				clears,
-				tostring(unlocked_by_clears),
-				tostring(season),
-				s.seasonSum or 0,
-				tgt or 0,
-				s.bank or 0
-			))
-
-		if Remotes.StageResult then
-			-- ▼ レガシー（options）と正準（ops）を送る
-			local optsLegacy = {
-				goHome = { enabled = true,  label = "このランを終える" },
-				goNext = { enabled = canNextFinal, label = canNextFinal and "次のステージへ" or "次のステージへ（開発中）" },
-			}
-			-- 保存ボタンは送らない（UI二択）。どうしてもキーが必要なUIなら以下を有効化して enabled=false で送る
-			if not REMOVE_SAVE_BUTTON then
-				optsLegacy.saveQuit = { enabled = false, label = "保存する（無効）" }
+			-- 2両ボーナス
+			local rewardBank = 2
+			s.bank = (s.bank or 0) + rewardBank
+			if typeof(SaveService.addBank) == "function" then
+				SaveService.addBank(plr, rewardBank)
 			end
 
-			local ops = {
-				home = optsLegacy.goHome,
-				next = optsLegacy.goNext,
-			}
-			-- save は送らない
+			s.lastScore = { total = total or 0, roles = roles, detail = detail }
+			StateHub.pushState(plr)
 
-			local payload = {
-				season      = season,
-				seasonSum   = s.seasonSum or 0,
-				target      = tgt,
-				mult        = s.mult or 1,
-				bank        = s.bank or 0,
-				rewardBank  = rewardBank,
-				bankAdded   = rewardBank,
-				clears      = clears,
-
-				-- ▼ UI がこの2フラグを見て分岐する旧実装にも対応
-				canNext     = canNextFinal,   -- ← 開発中は常に false
-				canSave     = canSaveFinal,   -- ← 常に false（保存ボタン出さない）
-
-				message     = (canNextFinal and "冬をクリア！ 2両を獲得。『次のステージ』が解禁済み。") or
-				              "冬をクリア！ 2両を獲得。『次のステージ』は開発中です。",
-
-				options     = optsLegacy, -- 互換（レガシーUI）
-				ops         = ops,        -- 正準（Nav: next('home'|'next')のみ想定）
-				locks       = { nextLocked = not canNextFinal, saveLocked = true },
-				lang        = s.lang,
-			}
-
-			print(("[Score] StageResult payload: canNext=%s canSave=%s")
-				:format(tostring(payload.canNext), tostring(payload.canSave)))
-
-			Remotes.StageResult:FireClient(plr, true, payload)
+			if Remotes.StageResult then
+				local nextM   = math.min(12, curMonth + 1)
+				local nextG   = (Balance and Balance.getGoalForMonth) and Balance.getGoalForMonth(nextM) or nil
+				local payload = {
+					kind        = "two",             -- UI：2択モーダル
+					rewardBank  = rewardBank,        -- +2両
+					nextMonth   = nextM,             -- こいこい先
+					nextGoal    = nextG,             -- その目標
+					message     = ("クリアおめでとう！ +%d両"):format(rewardBank),
+					lang        = s.lang,
+				}
+				-- 互換のため true,payload で送る（旧ハンドラも安全）
+				Remotes.StageResult:FireClient(plr, true, payload)
+			end
+			return
 		end
-		-- 以降の遷移は C→S: Remotes.DecideNext("home"|"next") （NavServer が唯一線）
+
+		-- 3) 12月：2両付与 → ワンボタン（final）で終了へ
+		--    ※ クリア回数(totalClears)は“ラン完走”のこのタイミングだけで +1 する
+		if curMonth >= 12 then
+			s.phase = "result"
+
+			-- 2両ボーナス
+			local rewardBank = 2
+			s.bank = (s.bank or 0) + rewardBank
+			if typeof(SaveService.addBank) == "function" then
+				SaveService.addBank(plr, rewardBank)
+			end
+
+			-- クリア回数（完走）+1
+			s.totalClears = (s.totalClears or 0) + 1
+			if typeof(SaveService.bumpClears) == "function" then
+				SaveService.bumpClears(plr, 1)
+			end
+
+			s.lastScore = { total = total or 0, roles = roles, detail = detail }
+			StateHub.pushState(plr)
+
+			if Remotes.StageResult then
+				local payload = {
+					kind        = "final",               -- UI：ワンボタン
+					titleText   = "12月 クリアおめでとう！",
+					descText    = "このランは終了です。メニューに戻ります。",
+					buttonText  = "ホームへ",
+					rewardBank  = rewardBank,
+					lang        = s.lang,
+				}
+				Remotes.StageResult:FireClient(plr, true, payload)
+			end
+			-- 以降の遷移は C→S: Remotes.DecideNext("home"|"koikoi")（NavServer が唯一線）
+			return
+		end
 	end)
 end
 

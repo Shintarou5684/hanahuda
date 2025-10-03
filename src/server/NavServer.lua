@@ -1,18 +1,11 @@
 -- ServerScriptService/NavServer.lua
--- v0.9.7 P1-4  DecideNext 統合 + ラン放棄（abandon）対応
+-- v0.9.9  DecideNext 12-month対応：final-month は HOME 強制
 -- 変更点：
---  - "abandon" を新設。四季のどのタイミングでも受け付け、即座にランを終了して Home へ戻す。
---  - ラン終了時は StageResult を強制クローズし、activeRun を消去し、次回は NEW GAME を強制。
---  - 既存の "home" / "next" の挙動は維持（"home" は従来どおり冬以外は無効）。
---  - "save" は保険として "home" に変換（保存ボタン廃止の互換）。
+--  - 月12の result 中は、どの操作（koikoi/home/その他）でも HOME 一択に強制
+--  - サーバ側で StageResult を明示クローズし、HomeOpen を即発火
+--  - 12月クリア時の +2 両はスコア側で加算済みのため、ここでは追加しない（重複防止）
 
 local RS  = game:GetService("ReplicatedStorage")
-
--- ===== 開発用トグル ===============================================
--- true : つねに「次のステージ」をロック（押してもHOMEに倒す）
--- false: 既存どおり「通算3回クリアで解禁」
-local LOCAL_DEV_NEXT_LOCKED = true
--- ================================================================
 
 -- Logger
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
@@ -37,7 +30,7 @@ end
 local Remotes = {
 	HomeOpen    = ensureRemote("HomeOpen"),
 	DecideNext  = ensureRemote("DecideNext"),
-	StageResult = ensureRemote("StageResult"), -- ★ 追加: 強制クローズ用
+	StageResult = ensureRemote("StageResult"), -- クライアント結果モーダルの明示クローズ用
 }
 
 local function normLang(v:string?): string
@@ -71,11 +64,11 @@ function NavServer.init(deps: Deps)
 		self:handle(plr, tostring(op or ""))
 	end))
 
-	LOG.info("ready (DecideNext unified)")
+	LOG.info("ready (DecideNext unified / 12-month 2-choice)")
 	return self
 end
 
--- ★ “ランを終了”させるハードリセット（春スナップを新規生成しない）
+-- ★ ラン終了のハードリセット（春スナップを新規生成しない）
 local function endRunAndClean(StateHub, SaveService, plr: Player)
 	local s = StateHub and StateHub.get and StateHub.get(plr)
 	if not s then return end
@@ -90,11 +83,11 @@ local function endRunAndClean(StateHub, SaveService, plr: Player)
 	s.stageResult   = nil
 	s.decideLocks   = nil
 	s.mult          = 1.0
-	-- 念のため季節関連も切る（サーバ復元やUIの誤判定を防止）
+	-- 季節系も切ってUIの誤判定を防止
 	s.season        = nil
 	s.round         = nil
 
-	-- 次回開始は必ずNEW（GameInit.startGameAuto で見る）
+	-- 次回開始は必ずNEW（GameInit.startGameAuto で参照）
 	s._forceNewOnNextStart = true
 
 	-- 「続き」用スナップも破棄（DataStore側）
@@ -102,21 +95,24 @@ local function endRunAndClean(StateHub, SaveService, plr: Player)
 		pcall(function() SaveService.clearActiveRun(plr) end)
 	end
 
-	-- クライアントの結果モーダルを明示的に閉じさせる（残存対策）
-	-- Client側は {close=true} を受け取ったらモーダルを閉じる実装にしておく
+	-- クライアントの結果モーダルを明示的に閉じる
 	pcall(function()
 		Remotes.StageResult:FireClient(plr, { close = true })
 	end)
 
-	-- クライアントへ最新 state を押し出して視覚的にも“切る”
+	-- クライアントへ最新 state を押し出し視覚的にも終了させる
 	if StateHub and StateHub.pushState then
 		pcall(function() StateHub.pushState(plr) end)
 	end
 end
 
+local function getMonth(s:any): number
+	return tonumber(s and s.run and s.run.month) or 1
+end
+
 function NavServer:handle(plr: Player, op: string)
 	local StateHub    = self.deps.StateHub
-	local Round       = self.deps.Round         -- 参照は残すが "home" では使わない
+	local Round       = self.deps.Round         -- 参照は残すがここでは newRound は呼ばない
 	local ShopService = self.deps.ShopService
 	local SaveService = self.deps.SaveService
 
@@ -127,16 +123,38 @@ function NavServer:handle(plr: Player, op: string)
 	end
 
 	local op0 = string.lower(tostring(op or ""))
+	local m   = getMonth(s)
 
 	-- =========================
-	-- ★ 新設："abandon" はいつでも有効（季節を問わず即終了）
+	-- ★ final-month ガード：月12の result 中は「HOME 一択」
 	-- =========================
-	if op0 == "abandon" then
-		LOG.info("handle: ABANDON | user=%s season=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.season), tostring(s.phase))
+	if s.phase == "result" and m >= 12 then
+		LOG.info("handle: %s | user=%s month=%d phase=%s → force HOME (final month)",
+			tostring(op0), tostring(plr and plr.Name or "?"), m, tostring(s.phase))
+
 		endRunAndClean(StateHub, SaveService, plr)
 
 		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = false, -- ★常に New Game
+			hasSave = false, -- NEW GAME を強制
+			bank    = s.bank or 0,
+			year    = s.year or 0,
+			clears  = s.totalClears or 0,
+			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
+		})
+		LOG.info("→ HOME(end-run final) | user=%s hasSave=false bank=%d year=%d clears=%d",
+			tostring(plr and plr.Name or "?"), s.bank or 0, s.year or 0, s.totalClears or 0)
+		return
+	end
+
+	-- =========================
+	-- いつでも有効："abandon"（即終了）
+	-- =========================
+	if op0 == "abandon" then
+		LOG.info("handle: ABANDON | user=%s phase=%s month=%s", tostring(plr and plr.Name or "?"), tostring(s.phase), tostring(s.run and s.run.month))
+		endRunAndClean(StateHub, SaveService, plr)
+
+		Remotes.HomeOpen:FireClient(plr, {
+			hasSave = false, -- NEW GAME を強制
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
@@ -146,66 +164,42 @@ function NavServer:handle(plr: Player, op: string)
 		return
 	end
 
-	-- 以降は既存どおり：冬以外では "home"/"next" を受け付けない
-	if (s.season or 1) ~= 4 then
-		LOG.debug("DecideNext ignored (not winter) | user=%s op=%s season=%s", tostring(plr and plr.Name or "?"), tostring(op0), tostring(s.season))
-		return
-	end
-
-	-- 互換: "save" を送ってきてもすべて "home" として扱う（保存機能は廃止）
-	if op0 == "save" then
-		op0 = "home"
-	end
-
-	-- 共通初期化
-	s.mult = 1.0
-
-	-- 解禁判定（既定: 3クリアで "next" 許可）
-	local clears   = tonumber(s.totalClears or 0) or 0
-	local unlocked = (not LOCAL_DEV_NEXT_LOCKED) and (clears >= 3) or false
-
-	if op0 ~= "home" and not unlocked then
-		-- ロック中に "next" を送ってきても HOME へ倒す（改造クライアント対策）
-		op0 = "home"
-	end
-
-	LOG.info(
-		"handle | user=%s op=%s unlocked=%s clears=%d",
-		tostring(plr and plr.Name or "?"), tostring(op0), tostring(unlocked), clears
-	)
-
+	-- =========================
+	-- 2択：home / koikoi
+	-- ※ 季節や解禁の条件は撤廃。9/10/11月などのクリア通知から直接来る想定。
+	-- =========================
 	if op0 == "home" then
-		-- ★ ランを終了（続き無し）→ Home（冬のリザルトからの帰還用）
+		-- ラン終了→Home
+		LOG.info("handle: HOME | user=%s month=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.run and s.run.month), tostring(s.phase))
 		endRunAndClean(StateHub, SaveService, plr)
 
 		Remotes.HomeOpen:FireClient(plr, {
-			hasSave = false, -- ★常に New Game
+			hasSave = false,
 			bank    = s.bank or 0,
 			year    = s.year or 0,
 			clears  = s.totalClears or 0,
 			lang    = normLang(SaveService and SaveService.getLang and SaveService.getLang(plr)),
 		})
-		LOG.info(
-			"→ HOME(end-run) | user=%s hasSave=false bank=%d year=%d clears=%d",
-			plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0
-		)
+		LOG.info("→ HOME(end-run) | user=%s hasSave=false bank=%d year=%d clears=%d", plr.Name, s.bank or 0, s.year or 0, s.totalClears or 0)
 		return
 
-	elseif op0 == "next" then
-		-- 次の年へ（解禁済のみ到達）
-		s.year = (s.year or 0) + 25
-		if SaveService and typeof(SaveService.bumpYear) == "function" then
-			SaveService.bumpYear(plr, 25)
-		elseif SaveService and typeof(SaveService.setYear) == "function" then
-			SaveService.setYear(plr, s.year)
-		end
+	elseif op0 == "koikoi" or op0 == "continue" then
+		-- 続行：結果モーダルを閉じて屋台を開く（EXへ）
+		LOG.info("handle: KOIKOI | user=%s month=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.run and s.run.month), tostring(s.phase))
+
+		-- まずクライアント側の結果モーダルを閉じる
+		pcall(function()
+			Remotes.StageResult:FireClient(plr, { close = true })
+		end)
+
+		-- 次は屋台へ。ShopService が無い場合は state push のみ。
 		s.phase = "shop"
 		if ShopService and typeof(ShopService.open) == "function" then
-			ShopService.open(plr, s, { reason = "after_winter" })
-			LOG.info("→ NEXT (open shop) | user=%s newYear=%d", plr.Name, s.year or 0)
+			ShopService.open(plr, s, { reason = "after_clear_month" })
+			LOG.info("→ SHOP(open) | user=%s month=%s", plr.Name, tostring(s.run and s.run.month))
 		else
 			if StateHub and StateHub.pushState then StateHub.pushState(plr) end
-			LOG.info("→ NEXT (push state only) | user=%s newYear=%d", plr.Name, s.year or 0)
+			LOG.info("→ SHOP(push only) | user=%s month=%s", plr.Name, tostring(s.run and s.run.month))
 		end
 		return
 	end

@@ -1,17 +1,26 @@
 -- StarterPlayerScripts/UI/components/ResultModal.lua
--- ステージ結果モーダル：3択／ワンボタン（final）両対応（Nav統一/ロック無効化対応）
--- v0.9.7-P1-4: Theme 完全デフォルト化（色／角丸／オーバーレイ透過／ボタン配色を Theme 参照に統一）
+-- ステージ結果モーダル：2択（こいこい／ホーム）＋ワンボタン（final）
+-- v0.9.8: 12-month対応／解禁ロジック撤廃／"next","save"削除 → "koikoi","home" に集約
+--         Theme 完全デフォルト化（配色は Theme を参照）
 
 local M = {}
 
 -- 型（Luau）
 type NavIF = { next: (NavIF, string) -> () }
-type Handlers = { home: (() -> ())?, next: (() -> ())?, save: (() -> ())?, final: (() -> ())? }
+type Handlers = { home: (() -> ())?, koikoi: (() -> ())?, final: (() -> ())? }
 type ResultAPI = {
 	hide: (ResultAPI) -> (),
-	show: (ResultAPI, data: { rewardBank: number?, message: string?, clears: number? }?) -> (),
+	-- 2択：こいこい/ホーム（9/10/11/12月のクリア時に利用）
+	show: (ResultAPI, data: {
+		rewardBank: number?,        -- 付与両（既定=2）
+		titleText: string?,         -- タイトル上書き（省略時は自動生成）
+		descText: string?,          -- 説明上書き（省略時は自動生成）
+		nextMonth: number?,         -- こいこい先の月（例: 10）
+		nextGoal: number?,          -- こいこい先の目標スコア
+	}?) -> (),
+	-- ワンボタン（完全終了時 12月想定）
 	showFinal: (ResultAPI, titleText: string?, descText: string?, buttonText: string?, onClick: (() -> ())?) -> (),
-	setLocked: (ResultAPI, boolean, boolean) -> (),
+	setLocked: (ResultAPI, boolean) -> (), -- こいこいボタンのロックだけ提供
 	on: (ResultAPI, Handlers) -> (),
 	bindNav: (ResultAPI, Nav: NavIF) -> (),
 	destroy: (ResultAPI) -> (),
@@ -133,7 +142,7 @@ function M.create(parent: Instance): ResultAPI
 	desc.Text = ""
 	desc.TextColor3 = (Theme.COLORS and Theme.COLORS.TextDefault) or Color3.fromRGB(25,25,25)
 
-	-------------------------------- 3択ボタン行
+	-------------------------------- 2択ボタン行（こいこい／ホーム）
 	local btnRow = Instance.new("Frame")
 	btnRow.Name = "BtnRow"
 	btnRow.Parent = modal
@@ -150,7 +159,7 @@ function M.create(parent: Instance): ResultAPI
 	local function mkBtn(text: string, style: "primary" | "neutral" | "warn" | nil): TextButton
 		local C = Theme.COLORS
 		local b = Instance.new("TextButton")
-		b.Size = UDim2.new(0.31, 0, 1, 0)
+		b.Size = UDim2.new(0.45, 0, 1, 0)
 		b.Text = text
 		b.AutoButtonColor = true
 		b.TextWrapped = true
@@ -181,9 +190,8 @@ function M.create(parent: Instance): ResultAPI
 		return b
 	end
 
-	local btnHome = mkBtn("帰宅する（TOPへ）", "neutral")
-	local btnNext = mkBtn("次のステージへ（+25年＆屋台）", "primary")
-	local btnSave = mkBtn("セーブして終了", "neutral")
+	local btnHome  = mkBtn("ホームへ", "neutral")
+	local btnKoi   = mkBtn("こいこい", "primary") -- テキストは show() 時に上書き
 
 	-------------------------------- ワンボタン（final）
 	local finalBtn = Instance.new("TextButton")
@@ -207,19 +215,15 @@ function M.create(parent: Instance): ResultAPI
 	end
 
 	-------------------------------- ハンドラ
-	local on: Handlers = { home = nil, next = nil, save = nil, final = nil }
+	local on: Handlers = { home = nil, koikoi = nil, final = nil }
 
-	-- クリック結線（ロック中は無視）
+	-- クリック結線（ロック中は無視：こいこいのみロック対象）
 	btnHome.Activated:Connect(function()
 		if on.home then on.home() end
 	end)
-	btnNext.Activated:Connect(function()
-		if btnNext:GetAttribute("locked") then return end
-		if on.next then on.next() end
-	end)
-	btnSave.Activated:Connect(function()
-		if btnSave:GetAttribute("locked") then return end
-		if on.save then on.save() end
+	btnKoi.Activated:Connect(function()
+		if btnKoi:GetAttribute("locked") then return end
+		if on.koikoi then on.koikoi() end
 	end)
 	finalBtn.Activated:Connect(function()
 		if on.final then on.final() end
@@ -236,22 +240,34 @@ function M.create(parent: Instance): ResultAPI
 		modal.Visible = false
 	end
 
-	-- 従来の3択表示
+	-- 2択（9/10/11/12月のクリア時）
+	-- data: { rewardBank?, titleText?, descText?, nextMonth?, nextGoal? }
 	function api:show(data)
-		local add = tonumber(data and data.rewardBank) or 2
+		local add       = tonumber(data and data.rewardBank) or 2
+		local nextMonth = tonumber(data and data.nextMonth) or nil
+		local nextGoal  = tonumber(data and data.nextGoal) or nil
+
+		local titleText = data and data.titleText
+			or ("クリアおめでとう！  +%d両"):format(add)
+
+		local descText = data and data.descText
+			or (nextMonth and nextGoal)
+				and ("このまま こいこい で <b>%d月：目標 %s</b> に挑戦しますか？"):format(nextMonth, tostring(nextGoal))
+				or "このまま こいこい で続けますか？"
+
+		local koiLabel = (nextMonth and nextGoal)
+			and ("こいこい（%d月：目標 %s）"):format(nextMonth, tostring(nextGoal))
+			or "こいこい"
+
 		local C = Theme.COLORS
 		title.TextColor3 = (C and C.TextDefault) or title.TextColor3
 		desc.TextColor3  = (C and C.TextDefault) or desc.TextColor3
 
-		title.Text = ("冬 クリア！ +%d両"):format(add)
-		if data and data.message and data.message ~= "" then
-			desc.Text = data.message
-		else
-			local clears = tonumber(data and data.clears) or 0
-			desc.Text = ("次の行き先を選んでください。（進捗: 通算 %d/3 クリア）"):format(clears)
-		end
+		title.Text = titleText
+		desc.Text  = descText
+		btnKoi.Text = koiLabel
 
-		-- 表示切替：3択オン／ワンボタンオフ
+		-- 表示切替：2択オン／ワンボタンオフ
 		btnRow.Visible = true
 		finalBtn.Visible = false
 
@@ -259,14 +275,14 @@ function M.create(parent: Instance): ResultAPI
 		modal.Visible = true
 	end
 
-	-- 冬（最終）専用：ワンボタン表示
+	-- 完全終了（12月など）：ワンボタン
 	function api:showFinal(titleText: string?, descText: string?, buttonText: string?, onClick: (() -> ())?)
 		title.Text = titleText or "クリアおめでとう！"
 		desc.Text  = descText  or "このランは終了です。メニューに戻ります。"
 		finalBtn.Text = buttonText or "メニューに戻る"
 		on.final = onClick
 
-		-- 表示切替：3択オフ／ワンボタンオン
+		-- 表示切替：2択オフ／ワンボタンオン
 		btnRow.Visible = false
 		finalBtn.Visible = true
 
@@ -274,27 +290,24 @@ function M.create(parent: Instance): ResultAPI
 		modal.Visible = true
 	end
 
-	-- 3択のロック設定
-	function api:setLocked(nextLocked:boolean, saveLocked:boolean)
-		setLockedVisual(btnNext, nextLocked)
-		setLockedVisual(btnSave, saveLocked)
+	-- こいこいボタンのロック設定（救済演出や通信中のガード等に）
+	function api:setLocked(koikoiLocked:boolean)
+		setLockedVisual(btnKoi, koikoiLocked and true or false)
 	end
 
-	-- 3択/ワンボタンのハンドラ設定
+	-- ハンドラ設定
 	function api:on(handlers: Handlers)
-		on.home  = handlers and handlers.home  or on.home
-		on.next  = handlers and handlers.next  or on.next
-		on.save  = handlers and handlers.save  or on.save
-		on.final = handlers and handlers.final or on.final
+		on.home   = handlers and handlers.home   or on.home
+		on.koikoi = handlers and handlers.koikoi or on.koikoi
+		on.final  = handlers and handlers.final  or on.final
 	end
 
 	-- ▼ Nav 糖衣（UI側は self._resultModal:bindNav(self.deps.Nav) だけでOK）
 	function api:bindNav(nav: NavIF)
 		if not nav or type(nav.next) ~= "function" then return end
-		on.home  = function() nav:next("home") end
-		on.next  = function() nav:next("next") end
-		on.save  = function() nav:next("save") end
-		on.final = function() nav:next("home") end
+		on.home   = function() nav:next("home") end
+		on.koikoi = function() nav:next("koikoi") end
+		on.final  = function() nav:next("home") end
 	end
 
 	-- 破棄（画面遷移時のリーク防止）

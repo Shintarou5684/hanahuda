@@ -4,6 +4,37 @@
 
 local Balance = {}
 
+----------------------------------------------------------------
+-- ▼▼ ステージ（12か月一直線）設定 ここから ▼▼
+----------------------------------------------------------------
+-- 月関連の基本パラメータ
+Balance.STAGE_START_MONTH  = 1     -- ラン開始月
+Balance.STAGE_CLEAR_AT     = 9     -- 9月クリアで勝利扱い（その後は任意のEX）
+Balance.STAGE_MONTHS_TOTAL = 12    -- 総月数（EX含めた最終は12月）
+
+-- EX（10〜12月）各月のクリア報酬（両）
+Balance.EX_CLEAR_REWARD_RYO = 2
+
+-- 目標スコア：まずは動作確認用に 1〜12 の連番（後でここだけを調整すればOK）
+Balance.GOAL_BY_MONTH = {
+	[1]=1,  [2]=2,  [3]=3,  [4]=4,  [5]=5,  [6]=6,
+	[7]=7,  [8]=8,  [9]=9,  [10]=10, [11]=11, [12]=12,
+}
+
+-- 後方互換（呼び出し側が小文字を参照しても動くようにエイリアスを提供）
+Balance.goalByMonth = Balance.GOAL_BY_MONTH
+
+-- ヘルパ：月→目標スコア（範囲外はクランプ）
+function Balance.getGoalForMonth(month)
+	if type(month) ~= "number" then return Balance.GOAL_BY_MONTH[1] end
+	if month < 1 then month = 1 end
+	if month > Balance.STAGE_MONTHS_TOTAL then month = Balance.STAGE_MONTHS_TOTAL end
+	return Balance.GOAL_BY_MONTH[month] or Balance.GOAL_BY_MONTH[1]
+end
+----------------------------------------------------------------
+-- ▲▲ ステージ（12か月一直線）設定 ここまで ▲▲
+----------------------------------------------------------------
+
 -- ▼ プールの基本設定
 Balance.KITO_POOL_SIZE      = 12  -- サンプル提示枚数（UIなし時も内部で使用）
 Balance.KITO_POOL_TTL_SEC   = 45  -- セッション有効秒数（開始→決定の猶予）
