@@ -5,6 +5,9 @@
 --  - ★payload=nil の場合は {} を作らず、そのまま nil を維持（既存状態を壊さない）
 --  - current==name では setLang だけ即時反映し、update(nil) で安全に再描画
 --  - それ以外の仕様は従来通り（register/ensure/可視制御など）
+-- v0.9.7-P1-6:
+--  - ★ Remotes.StatePush を購読し、Run 画面（setRerollCounts が定義されている画面）に
+--      リロール残回数（場/手）を即時反映する汎用ハンドラを追加
 
 local Router = {}
 
@@ -25,6 +28,9 @@ local Locale = require(Config:WaitForChild("Locale"))
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("ScreenRouter")
 
+-- Remotes購読コネクション（重複接続防止）
+local _remotesConn : RBXScriptConnection? = nil
+
 --==================================================
 -- ヘルパ：可視状態の安全設定（ScreenGui/GuiObject 両対応）
 --==================================================
@@ -34,6 +40,31 @@ local function setGuiActive(gui: Instance?, active: boolean)
 		gui.Enabled = active
 	elseif gui:IsA("GuiObject") then
 		gui.Visible = active
+	end
+end
+
+--==================================================
+-- 内部：StatePush → アクティブ画面へ反映（リロール残）
+--==================================================
+local function handleStatePush(payload:any)
+	-- 現在の画面インスタンスが setRerollCounts を持っていれば反映
+	local inst = _current and _instances[_current] or nil
+	if not inst then return end
+	local fn = inst.setRerollCounts
+	if type(fn) ~= "function" then return end
+
+	-- 新キー優先 → 旧キーへフォールバック
+	local fieldLeft = payload.rerollField or payload.rerollFieldLeft or payload.rerolls or 0
+	local handLeft  = payload.rerollHand  or payload.rerollHandLeft  or payload.hands   or 0
+	local phase     = payload.phase
+
+	local f = tonumber(fieldLeft or 0) or 0
+	local h = tonumber(handLeft  or 0) or 0
+
+	-- 例外安全で画面側に流す
+	local ok, err = pcall(function() fn(inst, f, h, phase) end)
+	if not ok then
+		LOG.warn("handleStatePush: setRerollCounts failed: %s", tostring(err))
 	end
 end
 
@@ -57,6 +88,20 @@ function Router.setDeps(d)
 		end
 	end
 	LOG.debug("deps set (playerGui=%s)", tostring(_deps and _deps.playerGui))
+
+	-- ★ Remotes.StatePush の購読を（まだなら）張る
+	if _remotesConn then
+		_remotesConn:Disconnect()
+		_remotesConn = nil
+	end
+	local remFolder = RS:FindFirstChild("Remotes")
+	if remFolder and remFolder:FindFirstChild("StatePush") then
+		local ev = remFolder.StatePush
+		_remotesConn = ev.OnClientEvent:Connect(handleStatePush)
+		LOG.info("Remotes.StatePush handler wired")
+	else
+		LOG.warn("Remotes.StatePush not found; reroll counters won't auto-update")
+	end
 end
 
 --==================================================
@@ -182,7 +227,6 @@ function Router.show(arg, payload)
 	end
 
 	-- 2) payload を正規化（※nilのままの場合もある）
-	local rawPayload = payload
 	local p = normalizePayload(payload)
 	-- ログ用の lang ヒント
 	local langHint = (p and p.lang)

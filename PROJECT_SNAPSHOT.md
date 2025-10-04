@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-04 03:10:23
+- Generated: 2025-10-05 03:58:14
 - Max lines/file: 300
 
 ## Folder Tree
@@ -67,6 +67,19 @@ hanahuda
 │   ├── 1203.jpg
 │   └── 1204.jpg
 ├── image
+│   ├── eto
+│   │   ├── eto001.jpg
+│   │   ├── eto002.jpg
+│   │   ├── eto003.jpg
+│   │   ├── eto004.jpg
+│   │   ├── eto005.jpg
+│   │   ├── eto006.jpg
+│   │   ├── eto007.jpg
+│   │   ├── eto008.jpg
+│   │   ├── eto009.jpg
+│   │   ├── eto010.jpg
+│   │   ├── eto011.jpg
+│   │   └── eto012.jpg
 │   ├── mainimage.png
 │   ├── mokume.png
 │   ├── mousen.png
@@ -99,6 +112,7 @@ hanahuda
 │   │       │   └── YakuPanel.lua
 │   │       ├── lib
 │   │       │   ├── FormatUtil.lua
+│   │       │   ├── KitoAssets.lua
 │   │       │   └── UiUtil.lua
 │   │       ├── screens
 │   │       │   ├── HomeScreen.lua
@@ -772,6 +786,66 @@ rojo = "rojo-rbx/rojo@7.4.0"
 [binary file] size=412995 bytes
 ```
 
+### image/eto/eto001.jpg
+```text
+[binary file] size=17302 bytes
+```
+
+### image/eto/eto002.jpg
+```text
+[binary file] size=16735 bytes
+```
+
+### image/eto/eto003.jpg
+```text
+[binary file] size=23751 bytes
+```
+
+### image/eto/eto004.jpg
+```text
+[binary file] size=13287 bytes
+```
+
+### image/eto/eto005.jpg
+```text
+[binary file] size=18992 bytes
+```
+
+### image/eto/eto006.jpg
+```text
+[binary file] size=15683 bytes
+```
+
+### image/eto/eto007.jpg
+```text
+[binary file] size=16321 bytes
+```
+
+### image/eto/eto008.jpg
+```text
+[binary file] size=15751 bytes
+```
+
+### image/eto/eto009.jpg
+```text
+[binary file] size=15623 bytes
+```
+
+### image/eto/eto010.jpg
+```text
+[binary file] size=20087 bytes
+```
+
+### image/eto/eto011.jpg
+```text
+[binary file] size=13339 bytes
+```
+
+### image/eto/eto012.jpg
+```text
+[binary file] size=15355 bytes
+```
+
 ### image/mainimage.png
 ```text
 [binary file] size=2635970 bytes
@@ -817,7 +891,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-04 03:10:23
+- Generated: 2025-10-05 03:58:14
 - Max lines/file: 300
 
 ## Folder Tree
@@ -883,6 +957,19 @@ hanahuda
 │   ├── 1203.jpg
 │   └── 1204.jpg
 ├── image
+│   ├── eto
+│   │   ├── eto001.jpg
+│   │   ├── eto002.jpg
+│   │   ├── eto003.jpg
+│   │   ├── eto004.jpg
+│   │   ├── eto005.jpg
+│   │   ├── eto006.jpg
+│   │   ├── eto007.jpg
+│   │   ├── eto008.jpg
+│   │   ├── eto009.jpg
+│   │   ├── eto010.jpg
+│   │   ├── eto011.jpg
+│   │   └── eto012.jpg
 │   ├── mainimage.png
 │   ├── mokume.png
 │   ├── mousen.png
@@ -915,6 +1002,7 @@ hanahuda
 │   │       │   └── YakuPanel.lua
 │   │       ├── lib
 │   │       │   ├── FormatUtil.lua
+│   │       │   ├── KitoAssets.lua
 │   │       │   └── UiUtil.lua
 │   │       ├── screens
 │   │       │   ├── HomeScreen.lua
@@ -1100,20 +1188,6 @@ Shop 定義の拡張：ShopDefs.sai に祭事アイテム群を追加（価格�
 - Home に**暫定パッチノート**追加（ボタン→モーダル原型）。
 - **採点全取りケース**検証：定義修正前 3268 → 修正後 **3306**。
 - `Locale.setGlobal` の反映範囲を拡張（Home→Run/Shop へ伝播）。
-- **クラシック“文のみ”モード**の下準備。
-
-### v0.9.2 — 2025-09-11
-- NEW/CONTINUE を **START GAME に統合**。旧 CONTINUE 枠は**パッチノート**へ。
-- **言語チップ（EN/JP）**追加：保存言語優先、なければ OS ロケール初期化。
-- `ShopDefs`：**spectral** カテゴリ追加、**黒天**（全祭事 +1）を実装。
-- `ShopEffects` 初期化ディスパッチに `kito_/sai_/spectral_` を追加。
-
-### v0.9.1 — 2025-09-10
-- 採点に**寅（取り札 pts+1/Lv 候補）**を試験導入 → 後日仕様確定。
-- `ShopDefs` に **Kito 基本3種（丑/寅/酉）**を追加。
-
-### v0.9.0 — 2025-09-06
-- **基礎採点**：役→文 / 札→点、総スコア = 文 × 点 を実装。
 ... (truncated)
 ```
 
@@ -3461,6 +3535,7 @@ function M.create(parent: Instance): ResultAPI
 --  - pcall/typeof でガード（落ちないUI）
 --  - Mouse/Keyboard/Gamepad 入力の統一（Hover/Selection/Activated）
 --  - 主要値を Attributes に保存（デバッグやUIテスト用）
+--  - ★ KITO商品（category=="kito"）に限り、effectId="kito.<animal>..." から干支アイコンを表示（厳格）
 
 local RS           = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -3474,6 +3549,16 @@ local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
 
+-- ★ 干支アイコン（厳格: kito.<animal> のみ受理）
+--   このファイルは ui/components にあるので、ui/lib/KitoAssets を参照する
+local KitoAssets do
+	local ok, mod = pcall(function()
+		-- ❗ 修正箇所：components → ui に上がってから lib を探す
+		return require(script.Parent.Parent:WaitForChild("lib"):WaitForChild("KitoAssets"))
+	end)
+	KitoAssets = ok and mod or nil
+end
+
 local M = {}
 
 --========================
@@ -3481,7 +3566,6 @@ local M = {}
 --========================
 local function _safeId(it:any): string
 	local raw = tostring(it and it.id or "Item")
-	-- Roblox Name 制限を軽く満たすため、記号を置換
 	return (raw:gsub("[^%w_%-]", "_"))
 end
 
@@ -3559,12 +3643,33 @@ local function _setAttributes(inst: Instance, it:any, lang:string, mon:number, a
 	inst:SetAttribute("face", _getFaceName(it))
 end
 
+-- ★ 干支アイコン貼付（厳格: kito.<animal> のみ）
+local function _maybeAddKitoIcon(parent: Instance, it:any)
+	if not (parent and parent:IsA("GuiObject")) then return end
+	if not (KitoAssets and it and tostring(it.category) == "kito") then return end
+	local effect = tostring(it.effect or "")
+	local icon = KitoAssets.getIcon(effect) -- 正規 effectId 以外(nil)なら非表示
+	if not icon then return end
+
+	local old = parent:FindFirstChild("KitoIcon")
+	if old then old:Destroy() end
+
+	local img = Instance.new("ImageLabel")
+	img.Name = "KitoIcon"
+	img.Image = icon
+	img.BackgroundTransparency = 1
+	img.ScaleType = Enum.ScaleType.Fit
+	img.Size = UDim2.fromOffset(48, 48)
+	img.Position = UDim2.fromOffset(6, 6)
+	img.ZIndex = (parent.ZIndex or 0) + 1
+	img.Parent = parent
+end
+
 --========================
 -- メイン：カード生成
 --========================
 -- create(parent, nodes, it, lang, mon, handlers={ onBuy=function(it) end })
 function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, handlers)
-	-- 親・入力チェック
 	if not (parent and parent:IsA("GuiObject")) then return nil end
 	lang = tostring(lang or "en")
 	mon  = tonumber(mon or 0) or 0
@@ -3584,7 +3689,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	addCorner(btn, Theme and Theme.PANEL_RADIUS or 10)
 	local stroke = addStroke(btn, _themeColor("PanelStroke", Color3.fromRGB(70,70,80)), 1, 0)
 
-	-- 価格バンド（TextLabel、入力は親へパス）
+	-- 価格バンド
 	local priceBand = Instance.new("TextLabel")
 	priceBand.Name = "Price"
 	priceBand.BackgroundColor3 = _themeColor("BadgeBg", Color3.fromRGB(25,28,36))
@@ -3595,25 +3700,27 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	priceBand.Font = Enum.Font.Gotham
 	priceBand.TextColor3 = Color3.fromRGB(245,245,245)
 	priceBand.ZIndex = 11
-	priceBand.Active = false       -- 入力を自身で取らない
-	priceBand.Selectable = false   -- 選択不可
+	priceBand.Active = false
+	priceBand.Selectable = false
 	priceBand.Parent = btn
 	addStroke(priceBand, _themeColor("BadgeStroke", Color3.fromRGB(60,65,80)), 1, 0.2)
 
-	-- 購入可否の視覚
+	-- 購入可否
 	local affordable = _computeAffordable(mon, it and it.price)
 	if not affordable then
-		local insuff = Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX") -- 例: "（不足）"
-		priceBand.Text = _fmtPrice(it and it.price) .. insuff
+		local insuff = Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX")
+		priceBand.Text = _fmtPrice(it and it.price) + insuff
 		priceBand.BackgroundTransparency = 0.15
-		-- クリックは許可（サーバ側で弾く）…従来方針を維持
 		btn.AutoButtonColor = true
 	end
 
-	-- Attributes（UIテスト/デバッグ向け）
+	-- Attributes
 	_setAttributes(btn, it, lang, mon, affordable)
 
-	-- Hover/Selection 演出（小さく）
+	-- ★ 干支アイコン（KITO商品のみ）
+	_maybeAddKitoIcon(btn, it)
+
+	-- Hover/Selection 演出
 	local ti = TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 	local baseBg = btn.BackgroundColor3
 	local function hoverIn()
@@ -3626,11 +3733,10 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	end
 	btn.MouseEnter:Connect(hoverIn)
 	btn.MouseLeave:Connect(hoverOut)
-	-- TextButton には Focused/FocusLost は無いので SelectionGained/Lost を使用（存在チェック付き）
 	if btn.SelectionGained then btn.SelectionGained:Connect(hoverIn) end
 	if btn.SelectionLost   then btn.SelectionLost  :Connect(hoverOut) end
 
-	-- 説明表示（右の Info パネルへ）
+	-- 説明（右の Info パネルへ）
 	local function showDesc()
 		local title = _title(it, lang)
 		local desc  = _desc(it, lang)
@@ -3648,10 +3754,10 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	btn.MouseEnter:Connect(showDesc)
 	if btn.SelectionGained then btn.SelectionGained:Connect(showDesc) end
 
-	-- 購入（Activated は Mouse/Touch/Gamepad/Keyboard を包括）
+	-- 購入
 	local function doBuy()
 		if not (handlers and typeof(handlers.onBuy)=="function") then return end
-		pcall(function() handlers.onBuy(it) end) -- 失敗してもUIは落とさない
+		pcall(function() handlers.onBuy(it) end)
 	end
 	btn.Activated:Connect(doBuy)
 
@@ -4902,6 +5008,53 @@ end
 return M
 ```
 
+### src/client/ui/lib/KitoAssets.lua
+```lua
+-- src/client/ui/lib/KitoAssets.lua
+-- v1.1.0 干支アイコン（厳格版: kito.<animal> のみ受理）
+
+local M = {}
+
+-- 子→亥（いただいた順）で確定割当
+local ICON = {
+	nezumi = "rbxassetid://138080758976905", -- 子
+	ushi   = "rbxassetid://98072025493160",  -- 丑
+	tora   = "rbxassetid://115144405199625", -- 寅
+	u      = "rbxassetid://120370272971127", -- 卯
+	tatsu  = "rbxassetid://116982196318196", -- 辰
+	mi     = "rbxassetid://74939201459038",  -- 巳
+	uma    = "rbxassetid://115729062347409", -- 午
+	hitsuji= "rbxassetid://75272554575317",  -- 未
+	saru   = "rbxassetid://124239193079274", -- 申
+	tori   = "rbxassetid://124637162606181", -- 酉
+	inu    = "rbxassetid://119847873888690", -- 戌
+	i      = "rbxassetid://127826167495847", -- 亥
+}
+
+-- "kito.<animal>..." の <animal> を厳格抽出（揺らぎ非対応）
+local function parseAnimalStrict(effectId: string): string?
+	if type(effectId) ~= "string" then return nil end
+	local animal = effectId:match("^kito%.([a-z]+)%f[^a-z]?")
+	if animal and ICON[animal] then
+		return animal
+	end
+	return nil
+end
+
+-- effectId（kito.<animal>...）→ rbxassetid
+function M.getIcon(effectId: string): string?
+	local animal = parseAnimalStrict(effectId)
+	return animal and ICON[animal] or nil
+end
+
+-- 直接キー取得（"tora" 等）。存在しなければ nil
+function M.getIconByKey(key: string): string?
+	return ICON[key]
+end
+
+return M
+```
+
 ### src/client/ui/lib/UiUtil.lua
 ```lua
 -- StarterPlayerScripts/UI/lib/UiUtil.lua
@@ -5082,6 +5235,9 @@ return U
 --  - ★payload=nil の場合は {} を作らず、そのまま nil を維持（既存状態を壊さない）
 --  - current==name では setLang だけ即時反映し、update(nil) で安全に再描画
 --  - それ以外の仕様は従来通り（register/ensure/可視制御など）
+-- v0.9.7-P1-6:
+--  - ★ Remotes.StatePush を購読し、Run 画面（setRerollCounts が定義されている画面）に
+--      リロール残回数（場/手）を即時反映する汎用ハンドラを追加
 
 local Router = {}
 
@@ -5102,6 +5258,9 @@ local Locale = require(Config:WaitForChild("Locale"))
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("ScreenRouter")
 
+-- Remotes購読コネクション（重複接続防止）
+local _remotesConn : RBXScriptConnection? = nil
+
 --==================================================
 -- ヘルパ：可視状態の安全設定（ScreenGui/GuiObject 両対応）
 --==================================================
@@ -5111,6 +5270,31 @@ local function setGuiActive(gui: Instance?, active: boolean)
 		gui.Enabled = active
 	elseif gui:IsA("GuiObject") then
 		gui.Visible = active
+	end
+end
+
+--==================================================
+-- 内部：StatePush → アクティブ画面へ反映（リロール残）
+--==================================================
+local function handleStatePush(payload:any)
+	-- 現在の画面インスタンスが setRerollCounts を持っていれば反映
+	local inst = _current and _instances[_current] or nil
+	if not inst then return end
+	local fn = inst.setRerollCounts
+	if type(fn) ~= "function" then return end
+
+	-- 新キー優先 → 旧キーへフォールバック
+	local fieldLeft = payload.rerollField or payload.rerollFieldLeft or payload.rerolls or 0
+	local handLeft  = payload.rerollHand  or payload.rerollHandLeft  or payload.hands   or 0
+	local phase     = payload.phase
+
+	local f = tonumber(fieldLeft or 0) or 0
+	local h = tonumber(handLeft  or 0) or 0
+
+	-- 例外安全で画面側に流す
+	local ok, err = pcall(function() fn(inst, f, h, phase) end)
+	if not ok then
+		LOG.warn("handleStatePush: setRerollCounts failed: %s", tostring(err))
 	end
 end
 
@@ -5134,6 +5318,20 @@ function Router.setDeps(d)
 		end
 	end
 	LOG.debug("deps set (playerGui=%s)", tostring(_deps and _deps.playerGui))
+
+	-- ★ Remotes.StatePush の購読を（まだなら）張る
+	if _remotesConn then
+		_remotesConn:Disconnect()
+		_remotesConn = nil
+	end
+	local remFolder = RS:FindFirstChild("Remotes")
+	if remFolder and remFolder:FindFirstChild("StatePush") then
+		local ev = remFolder.StatePush
+		_remotesConn = ev.OnClientEvent:Connect(handleStatePush)
+		LOG.info("Remotes.StatePush handler wired")
+	else
+		LOG.warn("Remotes.StatePush not found; reroll counters won't auto-update")
+	end
 end
 
 --==================================================
@@ -5259,7 +5457,6 @@ function Router.show(arg, payload)
 	end
 
 	-- 2) payload を正規化（※nilのままの場合もある）
-	local rawPayload = payload
 	local p = normalizePayload(payload)
 	-- ログ用の lang ヒント
 	local langHint = (p and p.lang)
@@ -5331,33 +5528,7 @@ function Router.show(arg, payload)
 	end
 
 	-- 10) 最終的に可視化を担保
-	if inst.gui then setGuiActive(inst.gui, true) end
-end
-
---==================================================
--- 指定画面のメソッド呼び出し（存在すれば）
---==================================================
-function Router.call(name, method, ...)
-	local sc = _instances[name] or ensure(name)
-	local fn = sc and sc[method]
-	if type(fn) == "function" then
-		return fn(sc, ...)
-	end
-end
-
---==================================================
--- 現在アクティブな画面名
---==================================================
-function Router.active()
-	return _current
-end
-
--- 明示的にインスタンスを取得したい場合
-function Router.ensure(name)
-	return (ensure(name))
-end
-
-return Router
+... (truncated)
 ```
 
 ### src/client/ui/screens/HomeScreen.lua
@@ -5676,6 +5847,7 @@ function Home.new(deps)
 --   - 送信前にもクライアント側で eligible を再確認（多重タップ/競合のガード）。
 -- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
 -- ★ P1-7: ShopDefs から祈祷名と説明を引いて上部に表示
+-- ★ 追加: 正規 effectId="kito.<animal>..." から干支アイコンをヘッダに表示（揺らぎ非対応）
 
 local Players    = game:GetService("Players")
 local RS         = game:GetService("ReplicatedStorage")
@@ -5704,11 +5876,25 @@ pcall(function()
 	end
 end)
 
+-- ★ 干支アイコン正本（厳格: kito.<animal> のみ受理）
+local KitoAssets do
+	local ok, mod = pcall(function()
+		-- 本ファイルは "src/client/ui/screens" 配下にあるため、ui/lib へは Parent.Parent.lib で到達
+		return require(script.Parent.Parent:WaitForChild("lib"):WaitForChild("KitoAssets"))
+	end)
+	KitoAssets = ok and mod or nil
+	if not KitoAssets then
+		LOG.warn("KitoAssets not found; header icon will be disabled")
+	end
+end
+
 -- ★ ShopDefs（祈祷の name/desc を引くため）
 local okDefs, ShopDefs = pcall(function()
 	return require(RS:WaitForChild("SharedModules"):WaitForChild("ShopDefs"))
 end)
 
+-- （注）ShopDefs参照は既存互換のまま。effectIdの揺らぎはここでは緩く吸収しているが、
+-- 干支アイコン表示は KitoAssets.getIcon により厳格（kito.<animal> のみ）で行う。
 local function _normId(id)
 	if not id then return nil end
 	id = tostring(id)
@@ -5836,7 +6022,18 @@ local function ensureGui()
 		Size                   = UDim2.new(1, 0, 0, 28),
 	}, panel)
 
-	-- ★ 祈祷名（大きめ・太字）
+	-- ★ 干支アイコン（ヘッダ左上に常設 / 初期は非表示）
+	local headerIcon = make("KitoIcon","ImageLabel",{
+		Image                  = "",
+		BackgroundTransparency = 1,
+		Size                   = UDim2.fromOffset(44,44),
+		Position               = UDim2.new(0, 0, 0, 28+2), -- タイトルの下
+		Visible                = false,
+		ScaleType              = Enum.ScaleType.Fit,
+		ZIndex                 = 2,
+	}, panel)
+
+	-- ★ 祈祷名（大きめ・太字）— アイコン右に寄せる
 	local kitoName = make("KitoName","TextLabel",{
 		Text                   = "",
 		Font                   = Enum.Font.GothamBold,
@@ -5844,7 +6041,7 @@ local function ensureGui()
 		TextColor3             = Color3.fromRGB(236,236,246),
 		BackgroundTransparency = 1,
 		Size                   = UDim2.new(1, 0, 0, 22),
-		Position               = UDim2.new(0, 0, 0, 28+2),
+		Position               = UDim2.new(0, 44 + 8, 0, 28+2), -- アイコン幅44 + 余白8
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, panel)
 
@@ -5937,36 +6134,10 @@ local function ensureGui()
 	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, confirm)
 
 	-- 参照
+	refs.headerIcon = headerIcon
 	refs.kitoName   = kitoName
 	refs.effect     = effect
 	refs.gridHolder = gridHolder
-	refs.scroll     = scroll
-	refs.gridFrame  = gridFrame
-	refs.gridLayout = layout
-	refs.confirm    = confirm
-	refs.skipBtn    = skipBtn
-	refs.pickInfo   = pickInfo
-
-	LOG.info("ensureGui: built gui in %.2fms", (os.clock()-t0)*1000)
-	return ui
-end
-
--- 効果説明の高さに合わせてグリッド領域を再レイアウト
-local function relayoutByEffectHeight()
-	local t0 = os.clock()
-	if not (refs.effect and refs.gridHolder) then return end
-	local nameH     = (refs.kitoName and refs.kitoName.Text ~= "") and 22 or 0
-	local topY      = 28 + 2 + nameH + 6
-	local baseBelow = 84 -- フッタ確保高さ
-	local effect    = refs.effect
-
-	-- 実高さ（TextWrapped=true → TextBounds.Y 利用）
-	local needH = math.max(22, math.ceil(effect.TextBounds.Y))
-	effect.Size = UDim2.new(1, 0, 0, needH)
-
-	local gridTop  = topY + needH + 8
-	refs.gridHolder.Position = UDim2.new(0, 0, 0, gridTop)
-	refs.gridHolder.Size     = UDim2.new(1, 0, 1, -gridTop - baseBelow)
 ... (truncated)
 ```
 
@@ -6215,14 +6386,17 @@ return Patch
 ### src/client/ui/screens/RunScreen.lua
 ```lua
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-9
---  - StageResult の互換受信を強化（{close=true} / (true,data) / data 単体の全対応）
---  - Home等への遷移後にリザルトが残留しないよう、show() 冒頭で明示的に hide / _resultShown リセット
---  - 既存機能・UIは維持
+-- v0.9.7-P2-12
+--  - 公開フック：onState/onHand/onField/onTaken/onScore/onStageResult
+--  - StageResult の互換受信（{close=true} / (true,data) / data 単体）
+--  - Home等への遷移後にリザルト残留防止（show() 冒頭で hide / _resultShown リセット）
 --  - [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
---  - 監視用ログを追加（[LOG] マーク）
---  - ★ サーバ確定の talisman をそのまま描画（クライアントで補完/推測しない）
---  - ★ 追加：ラン放棄（あきらめる）ボタン配線と確認モーダル
+--  - 監視用ログ（[LOG]）
+--  - talisman はサーバ確定値のみ描画（推測しない）
+--  - ラン放棄（あきらめる）ボタン＋確認モーダル
+--  - Router.call 対応の公開メソッド群
+--  - setRerollCounts(field, hand, phase) 実装（ScreenRouter.StatePush フックに対応）
+--  - ★ 情報パネルを簡素化（年/月・所持金・山札のみ表示）
 
 local Run = {}
 Run.__index = Run
@@ -6295,7 +6469,7 @@ local function safeGetGlobalLang()
 end
 
 --==================================================
--- 追加：小さな翻訳ヘルパ（フォールバック付き）
+-- 小さな翻訳ヘルパ（フォールバック付き）
 --==================================================
 local function T(lang, key, jaFallback, enFallback)
 	local txt = nil
@@ -6305,6 +6479,25 @@ local function T(lang, key, jaFallback, enFallback)
 	end
 	if (lang == "ja") then return jaFallback end
 	return enFallback
+end
+
+--==================================================
+-- 情報パネル：シンプル表示（年/月・所持金・山札）
+--==================================================
+local function simpleInfoText(st, lang)
+	-- StatePush 由来の最小セットを安全に読む
+	local year     = tonumber(st and st.year) or 0
+	local month    = tonumber(st and st.month) or 1
+	local mon      = tonumber(st and st.mon) or 0
+	local deckLeft = tonumber(st and st.deckLeft) or 0
+
+	if lang == "ja" then
+		-- 例）1000年　1月\n所持金：0文\n山札：35枚
+		return string.format("%d年　%d月\n所持金：%d文\n山札：%d枚", year, month, mon, deckLeft)
+	else
+		-- 例）Year 1000  Month 1\nCash: 0 Mon\nDeck: 35 cards
+		return string.format("Year %d  Month %d\nCash: %d Mon\nDeck: %d cards", year, month, mon, deckLeft)
+	end
 end
 
 --==================================================
@@ -6318,7 +6511,7 @@ function Run.new(deps)
 	self._resultShown = false
 	self._langConn = nil
 
-	-- 言語初期値（安全取得 → Locale.pick() → "en"）※"jp" は "ja" に正規化
+	-- 言語初期値
 	local initialLang = safeGetGlobalLang()
 	if not initialLang then
 		if type(Locale.pick) == "function" then
@@ -6366,14 +6559,9 @@ function Run.new(deps)
 					self.deps.DecideNext:FireServer("home")
 				end
 			end,
-			next  = function()
+			koikoi  = function()
 				if self.deps and self.deps.DecideNext then
 					self.deps.DecideNext:FireServer("next")
-				end
-			end,
-			save  = function()
-				if self.deps and self.deps.DecideNext then
-					self.deps.DecideNext:FireServer("save")
 				end
 			end,
 			final = function()
@@ -6458,8 +6646,13 @@ function Run.new(deps)
 
 	-- 内部状態
 	self._selectedHandIdx = nil
+	-- ▼ リロール残（Routerの StatePush フック/初期 onState 同期に使う）
+	self._rerollFieldLeft = 0
+	self._rerollHandLeft  = 0
 
-	-- レンダラー適用
+	--========================
+	-- レンダラー適用（内部ローカル関数）
+	--========================
 	local function renderHand(hand)
 		HandRenderer.render(self.handArea, hand, {
 			selectedIndex = self._selectedHandIdx,
@@ -6492,28 +6685,6 @@ function Run.new(deps)
 				end
 			end,
 		})
-	end
-
-	local function renderTaken(cards)
-		TakenRenderer.renderTaken(self.takenBox, cards or {})
-	end
-
-	-- スコア更新
-	local function onScore(total, roles, detail)
-		if typeof(roles) ~= "table" then roles = {} end
-		if typeof(detail) ~= "table" then detail = { mon = 0, pts = 0 } end
-		local mon = tonumber(detail.mon) or 0
-		local pts = tonumber(detail.pts) or 0
-		local tot = tonumber(total) or 0
-		if self._scoreBox then
-			local rolesBody  = Format.rolesToLines(roles, self._lang)
-			local rolesLabel = (self._lang == "en") and "Roles: " or "役："
-			self._scoreBox.Text = self._fmtScore(tot, mon, pts, rolesLabel .. rolesBody)
-		end
-		LOG.debug("score | total=%s mon=%s pts=%s roles#=%d",
-			tostring(tot), tostring(mon), tostring(pts), #roles) -- [LOG]
-	end
-
 ... (truncated)
 ```
 
@@ -6596,6 +6767,13 @@ return M
 ```lua
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
 -- UIビルダーは親付けしない契約（親付けは ScreenRouter の責務）
+-- v0.9.7-P1-7:
+--   - リロールボタン文言を固定化
+--       ja: 「場札入替」 / 「手札入替」
+--       en: "Refresh Board" / "Redraw Hand"
+--     （Locale のキーに依存せず、setLang でも追従）
+-- v0.9.7-P1-6: ★ リロール（場/手）ボタンの左に残回数バッジを追加
+--              （refs.counters.rerollField / refs.counters.rerollHand）＋見た目調整APIを追加
 -- v0.9.7-P1-5: 「あきらめる」ボタンを追加（refs.buttons.giveUp）
 -- v0.9.7-P1-4: Theme完全デフォルト化（色・画像・透過のUI側フォールバック撤去）
 -- v0.9.7-P1-3: Logger導入／言語コードを "ja"/"en" に統一（入力 "jp" は "ja" へ正規化）
@@ -6689,11 +6867,58 @@ local function makeSideBtn(parent: Instance, name: string, text: string, bg: Col
 	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = btn
 	return btn
 end
+
+-- ▼ 左に残回数バッジ＋右に少し細いボタンのセットを生成
+local function makeCounteredButton(parent: Instance, name: string, initialText: string, btnBg: Color3)
+	local holder = Instance.new("Frame")
+	holder.Name = name .. "Holder"
+	holder.Parent = parent
+	holder.Size = UDim2.new(1, 0, 0, 44)
+	holder.BackgroundTransparency = 1
+
+	local _ = makeList(holder, Enum.FillDirection.Horizontal, 6, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+
+	local badge = Instance.new("TextLabel")
+	badge.Name = name .. "Count"
+	badge.Parent = holder
+	badge.Size = UDim2.new(0, 40, 1, 0)
+	badge.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	badge.BackgroundTransparency = 0.25
+	badge.BorderSizePixel = 0
+	badge.Text = "0"
+	badge.Font = Enum.Font.GothamBold
+	badge.TextScaled = true
+	badge.TextColor3 = Color3.new(1,1,1)
+	local badgeCorner = Instance.new("UICorner"); badgeCorner.CornerRadius = UDim.new(0, 8); badgeCorner.Parent = badge
+
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Parent = holder
+	btn.Size = UDim2.new(1, -46, 1, 0) -- 左に40pxバッジ＋6pxパディング
+	btn.AutoButtonColor = true
+	btn.Text = initialText
+	btn.TextScaled = true
+	btn.BackgroundColor3 = btnBg
+	btn.BorderSizePixel = 0
+	local btnCorner = Instance.new("UICorner"); btnCorner.CornerRadius = UDim.new(0, 8); btnCorner.Parent = btn
+
+	return badge, btn, holder
+end
 --=======================================================================
 
 -- 言語：Global → OS 推定（"jp" は "ja" へ正規化）
 local _lang = pickInitialLang()
 LOG.debug("init _lang=%s", tostring(_lang))
+
+-- ▼ 追加：リロールボタンの固定ラベル
+local function rerollLabels(lang: string)
+	lang = tostring(lang or "en"):lower()
+	if lang == "ja" then
+		return { all = "場札入替", hand = "手札入替" }
+	else
+		return { all = "Refresh Board", hand = "Redraw Hand" }
+	end
+end
 
 -- ラベル適用
 local function applyTexts(tRefs)
@@ -6708,17 +6933,23 @@ local function applyTexts(tRefs)
 
 	-- 左カラム：ボタン
 	if tRefs.buttons then
-		if tRefs.buttons.confirm    then tRefs.buttons.confirm.Text    = t("RUN_BTN_CONFIRM") end
-		if tRefs.buttons.rerollAll  then tRefs.buttons.rerollAll.Text  = t("RUN_BTN_REROLL_ALL") end
-		if tRefs.buttons.rerollHand then tRefs.buttons.rerollHand.Text = t("RUN_BTN_REROLL_HAND") end
-		if tRefs.buttons.yaku       then
+		if tRefs.buttons.confirm then
+			tRefs.buttons.confirm.Text = t("RUN_BTN_CONFIRM")
+		end
+
+		-- ★ 固定文言（Localeキーに依存しない）
+		local rl = rerollLabels(_lang)
+		if tRefs.buttons.rerollAll  then tRefs.buttons.rerollAll.Text  = rl.all  end
+		if tRefs.buttons.rerollHand then tRefs.buttons.rerollHand.Text = rl.hand end
+
+		if tRefs.buttons.yaku then
 			local lbl = Locale.t(_lang, "RUN_BTN_YAKU")
 			if not lbl or lbl == "" or lbl == "RUN_BTN_YAKU" then
 				lbl = (_lang == "en") and "Yaku" or "役一覧"
 			end
 			tRefs.buttons.yaku.Text = lbl
 		end
-		-- ★ 新規：あきらめる
+		-- あきらめる
 		if tRefs.buttons.giveUp then
 			local txt = Locale.t(_lang, "RUN_BTN_GIVEUP")
 			if not txt or txt == "" or txt == "RUN_BTN_GIVEUP" then
@@ -6771,7 +7002,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	local BOARD_H    = R.BOARD_H
 	local TUTORIAL_H = R.TUTORIAL_H
 	local HAND_H     = R.HAND_H
-	local ROW_GAP    = 0.035   -- 比率に置きづらい“視覚的間隔”。必要なら Theme.SIZES へ昇格可。
+	local ROW_GAP    = 0.035
 	local COL_GAP    = R.COL_GAP
 
 	local ROOM_BG_IMAGE  = IMAGES.ROOM_BG
@@ -6783,8 +7014,8 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	local COLOR_RIGHT_STROKE   = C.RightPaneStroke
 	local COLOR_PANEL_BG       = C.PanelBg
 	local COLOR_PANEL_STROKE   = C.PanelStroke
-	local COLOR_NOTICE_BG      = C.NoticeBg   or C.PanelBg        -- 未定義なら PanelBg を流用
-	local COLOR_TUTORIAL_BG    = C.TutorialBg or C.PrimaryBtnBg   -- 未定義なら Primary を流用
+	local COLOR_NOTICE_BG      = C.NoticeBg   or C.PanelBg
+	local COLOR_TUTORIAL_BG    = C.TutorialBg or C.PrimaryBtnBg
 	local BTN_PRIMARY_BG       = C.PrimaryBtnBg
 	local BTN_WARN_BG          = C.WarnBtnBg
 	local BTN_YAKU_BG          = C.InfoBtnBg
@@ -6796,7 +7027,6 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	g.IgnoreGuiInset = true
 	g.DisplayOrder = 10
 	g.Enabled = true
-	-- ★ ここで Parent を設定しない（Router が playerGui に付ける）
 
 	-- 背景
 	local roomBG = Instance.new("ImageLabel")
@@ -6835,65 +7065,6 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 
 	-- 3カラム
 	local left = Instance.new("Frame")
-	left.Name = "LeftSidebar"
-	left.Parent = playArea
-	left.BackgroundTransparency = 1
-	left.Size = UDim2.fromScale(LEFT_W, 1 - PAD*2)
-	left.Position = UDim2.fromScale(PAD, PAD)
-	left.ZIndex = 1
-
-	local center = Instance.new("Frame")
-	center.Name = "CenterMain"
-	center.Parent = playArea
-	center.BackgroundTransparency = 1
-	center.Size     = UDim2.fromScale(1 - LEFT_W - RIGHT_W - PAD*2 - COL_GAP*2, 1 - PAD*2)
-	center.Position = UDim2.fromScale(PAD + LEFT_W + COL_GAP, PAD)
-	center.ZIndex = 1
-
-	local rightPane = Instance.new("Frame")
-	rightPane.Name = "RightPane"
-	rightPane.Parent = playArea
-	rightPane.BackgroundColor3 = COLOR_RIGHT_BG
-	rightPane.BackgroundTransparency = T.rightPaneBgT
-	rightPane.Size = UDim2.fromScale(RIGHT_W, 1 - PAD*2)
-	rightPane.Position = UDim2.fromScale(1 - RIGHT_W - PAD, PAD)
-	rightPane.ZIndex = 1
-	addCornerStroke(rightPane, nil, COLOR_RIGHT_STROKE, 1)
-
-	-- Left：情報パネル
-	makeList(left, Enum.FillDirection.Vertical, 8, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
-
-	local infoPanel = makePanel(left, "InfoPanel", Vector2.new(1, 0.14), 1, COLOR_PANEL_BG, COLOR_PANEL_STROKE)
-	local info = UiUtil.makeLabel(infoPanel, "Info", "--", UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), Vector2.new(0,0), COLOR_TEXT)
-	info.TextWrapped = true
-	info.TextScaled = true
-	info.TextXAlignment = Enum.TextXAlignment.Left
-
-	-- 目標（見出しなし）
-	local goalPanel = makePanel(left, "GoalPanel", Vector2.new(1, 0.10), 2, COLOR_PANEL_BG, COLOR_PANEL_STROKE, nil, nil)
-	local goalText = UiUtil.makeLabel(goalPanel, "GoalValue", "—", UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), nil, COLOR_TEXT)
-	goalText.TextScaled = true
-	goalText.TextXAlignment = Enum.TextXAlignment.Left
-
-	-- スコア＋役一覧
-	local scorePanel = makePanel(left, "ScorePanel", Vector2.new(1, 0.26), 3, COLOR_PANEL_BG, COLOR_PANEL_STROKE, nil, nil)
-	local scoreStack = Instance.new("Frame"); scoreStack.Name="ScoreStack"; scoreStack.Parent=scorePanel
-	scoreStack.Size = UDim2.new(1,-12,1,-12); scoreStack.Position = UDim2.new(0,6,0,6); scoreStack.BackgroundTransparency=1
-	makeList(scoreStack, Enum.FillDirection.Vertical, 6, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Top)
-
-	local scoreBox = UiUtil.makeLabel(scoreStack, "ScoreBox", "--", UDim2.new(1,0,0,96), UDim2.new(0,0,0,0), nil, COLOR_TEXT)
-	scoreBox.TextYAlignment = Enum.TextYAlignment.Top
-	scoreBox.TextWrapped = true
-	scoreBox.TextScaled = true
-
-	local btnYaku = makeSideBtn(scoreStack, "OpenYaku", "", BTN_YAKU_BG)
-
-	-- コントロールボタン
-	local controlsPanel = Instance.new("Frame")
-	controlsPanel.Name = "ControlsPanel"
-	controlsPanel.Parent = left
-	controlsPanel.Size = UDim2.fromScale(1, 0)
-	controlsPanel.AutomaticSize = Enum.AutomaticSize.Y
 ... (truncated)
 ```
 
@@ -7272,6 +7443,43 @@ function Balance.getGoalForMonth(month)
 end
 ----------------------------------------------------------------
 -- ▲▲ ステージ（12か月一直線）設定 ここまで ▲▲
+----------------------------------------------------------------
+
+----------------------------------------------------------------
+-- ▼ リロール回数（Run：場/手の分離）
+--   「場のリロール（全体リロール）」と「手札のリロール」の初期回数。
+--   既存の「ハンド3」「リロール5」をそれぞれ hand/field に割当てる。
+----------------------------------------------------------------
+Balance.REROLL_FIELD_INIT = 5  -- 場（Field）のリロール初期回数（旧：リロール5）
+Balance.REROLL_HAND_INIT  = 3  -- 手札（Hand）のリロール初期回数（旧：ハンド3）
+
+-- ※将来、文コストや上限強化を導入する場合は、ここに REROLL_*_COST や
+--   REROLL_*_MAX などのノブを追加してサーバ側ロジックで参照してください。
+----------------------------------------------------------------
+
+----------------------------------------------------------------
+-- ▼ 将来用ノブ（いまは挙動を変えない“空の変数”）
+--   お守り/実績による回数ボーナスは、GameInit 側のフックで合算予定。
+--   いまは空や nil のままなので、挙動は変わりません。
+----------------------------------------------------------------
+-- 上限（未使用なら nil のままでOK）
+Balance.REROLL_FIELD_MAX = nil   -- 例: 9 で上限9、nil なら上限なし
+Balance.REROLL_HAND_MAX  = nil
+
+-- お守りボーナス表（id -> { field=?, hand=? }）
+Balance.OMAMORI_REROLL_BONUS = Balance.OMAMORI_REROLL_BONUS or {
+	-- 例:
+	-- ["omamori_reroll_field_1"] = { field = 1, hand = 0 },
+	-- ["omamori_reroll_hand_1"]  = { field = 0, hand = 1 },
+	-- ["omamori_reroll_both_1"]  = { field = 1, hand = 1 },
+}
+
+-- 実績ボーナス表（id -> { field=?, hand=? }）
+Balance.ACHIEVE_REROLL_BONUS = Balance.ACHIEVE_REROLL_BONUS or {
+	-- 例:
+	-- ["ach_clear_100_runs"] = { field = 1, hand = 0 },
+	-- ["ach_koikoi_master"]  = { field = 0, hand = 1 },
+}
 ----------------------------------------------------------------
 
 -- ▼ プールの基本設定
@@ -8067,6 +8275,7 @@ return Theme
 --              ＋ 酉UI用 Remotes（KitoPickStart/KitoPickDecide）を正式に生やす
 --  - ★ v0.9.3-fix: ShopDone 時に DeckRegistry の最新スナップショットを次シーズンへ明示伝播
 --                  （変更されたデッキを直後のシーズンで必ず使用）
+--  - ★ v0.9.3-reroll-hooks: 場/手リロールの初期化フックを追加（挙動は従来どおり）
 
 -- ServerScriptService/GameInit.server.lua
 -- （前略：ヘッダコメントは省略）
@@ -8165,7 +8374,7 @@ local Balance do
 	local ok, mod = pcall(function()
 		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 	end)
-	Balance = ok and mod or { STAGE_START_MONTH = 1 }
+	Balance = ok and mod or { STAGE_START_MONTH = 1, REROLL_FIELD_INIT = 5, REROLL_HAND_INIT = 3 }
 end
 
 local function bootstrapEffects()
@@ -8267,6 +8476,63 @@ NavServer.init({
 	DecideNext  = Remotes.DecideNext,
 })
 
+-- ────────────────────────────────────────────────────────────
+-- ★ ここから：リロール（場/手）— フック（今は挙動を変えない）
+-- ────────────────────────────────────────────────────────────
+
+-- 旧データ移行：単一カウンタや hand-only を新構造へ寄せる
+local function initOrMigrateReroll(s:any)
+	s.run = s.run or {}
+	if type(s.run.reroll) == "number" then
+		s.run.reroll = {
+			field = tonumber(s.run.reroll) or Balance.REROLL_FIELD_INIT,
+			hand  = Balance.REROLL_HAND_INIT,
+		}
+	end
+	if type(s.run.hand) == "number" then
+		local prevHand = tonumber(s.run.hand) or Balance.REROLL_HAND_INIT
+		s.run.reroll = {
+			field = Balance.REROLL_FIELD_INIT,
+			hand  = prevHand,
+		}
+		s.run.hand = nil
+	end
+	if type(s.run.reroll) ~= "table"
+		or type(s.run.reroll.field) ~= "number"
+		or type(s.run.reroll.hand)  ~= "number" then
+		s.run.reroll = {
+			field = Balance.REROLL_FIELD_INIT,
+			hand  = Balance.REROLL_HAND_INIT,
+		}
+	end
+end
+
+-- 将来実装用：装備/実績のボーナス合算フック（現状は常に 0,0 を返す）
+local function __sumRerollBonusesStub(s:any, Balance:any)
+	-- 例：s.equip.omamori / s.unlocks.achievements を見て
+	--     Balance.OMAMORI_REROLL_BONUS / ACHIEVE_REROLL_BONUS を加算、など
+	return 0, 0
+end
+
+-- ラウンド開始時の初期回数をセット（現状は base=5/3 のまま）
+local function initRerollForNewRound(plr: Player, s:any)
+	initOrMigrateReroll(s)
+
+	local baseField = Balance.REROLL_FIELD_INIT or 5
+	local baseHand  = Balance.REROLL_HAND_INIT  or 3
+
+	local addField, addHand = __sumRerollBonusesStub(s, Balance) -- いまは 0,0
+	local maxField = Balance.REROLL_FIELD_MAX or math.huge
+	local maxHand  = Balance.REROLL_HAND_MAX  or math.huge
+
+	s.run.reroll.field = math.min(maxField, baseField + addField)
+	s.run.reroll.hand  = math.min(maxHand,  baseHand  + addHand)
+
+	StateHub.set(plr, s)
+end
+
+-- ────────────────────────────────────────────────────────────
+
 Players.PlayerAdded:Connect(function(plr)
 	LOG.info("PlayerAdded | begin load profile | user=%s userId=%d", plr.Name, plr.UserId)
 
@@ -8293,64 +8559,6 @@ Players.PlayerAdded:Connect(function(plr)
 
 	local hasSave = SaveService.getActiveRun(plr) ~= nil
 	LOG.info("HomeOpen → C | user=%s lang=%s hasSave=%s bank=%d year=%d clears=%d",
-		plr.Name, s.lang, tostring(hasSave), s.bank or 0, s.year or 0, s.totalClears or 0
-	)
-
-	HomeOpen:FireClient(plr, {
-		hasSave = hasSave,
-		bank    = s.bank,
-		year    = s.year,
-		clears  = s.totalClears or 0,
-		lang    = s.lang,
-	})
-end)
-
-Players.PlayerRemoving:Connect(function(plr)
-	LOG.info("PlayerRemoving | flush profile | user=%s", plr.Name)
-	SaveService.flush(plr)
-end)
-
-game:BindToClose(function()
-	LOG.info("BindToClose | flushAll begin")
-	pcall(function() SaveService.flushAll() end)
-	LOG.info("BindToClose | flushAll end")
-end)
-
-ReqSetLang.OnServerEvent:Connect(function(plr, lang)
-	local n = normLang(lang)
-	if not n then
-		LOG.warn("ReqSetLang invalid | user=%s from=%s", plr.Name, tostring(lang))
-		return
-	end
-	SaveService.setLang(plr, n)
-	local s = StateHub.get(plr) or {}
-	s.lang = n
-	StateHub.set(plr, s)
-	LOG.info("setLang | saved & state updated | user=%s lang=%s", plr.Name, n)
-end)
-
-local function fireReadySoon(plr)
-	task.delay(0.05, function()
-		Remotes.RoundReady:FireClient(plr)
-	end)
-end
-
--- 内部用：月→季節（RoundService が 1..4 を要求するため“その場で”算出するだけ）
-local function monthToSeason(m:number): number
-	m = tonumber(m) or 1
-	return ((m - 1) % 4) + 1
-end
-
-local function startNewRun(plr)
-	if SaveService.clearActiveRun then pcall(function() SaveService.clearActiveRun(plr) end) end
-	local s = StateHub.get(plr) or {}
-	s.run = s.run or {}
-	s.run.month = (Balance and Balance.STAGE_START_MONTH) or 1
-	-- ★季節は保持しない（UI/状態から削除）。必要時のみ month→season を都度計算。
-	StateHub.set(plr, s)
-
-	Round.resetRun(plr)
-	fireReadySoon(plr)
 ... (truncated)
 ```
 
@@ -9181,6 +9389,11 @@ return NavServer
 ### src/server/RemotesInit.server.lua
 ```lua
 -- ServerScriptService/RemotesInit.server.lua
+-- v0.9.9-fix:
+--  - 「この手で勝負」用の Confirm を常設
+--  - 画面遷移系（HomeOpen/DecideNext/StageResult）もここで ensure
+--  - 既存の KITO / Talisman / PlaceOnSlot は従来どおり
+
 local RS = game:GetService("ReplicatedStorage")
 
 local function ensureFolder(parent, name)
@@ -9205,7 +9418,9 @@ end
 
 local remotes = ensureFolder(RS, "Remotes")
 
--- 既存
+--==================================================
+-- 既存（従来どおり）
+--==================================================
 ensureRE(remotes, "PlaceOnSlot")     -- C→S
 ensureRE(remotes, "TalismanPlaced")  -- S→C (ACK)
 
@@ -9213,6 +9428,14 @@ ensureRE(remotes, "TalismanPlaced")  -- S→C (ACK)
 ensureRE(remotes, "KitoPickStart")   -- S→C: 候補提示
 ensureRE(remotes, "KitoPickDecide")  -- C→S: 決定（uid を返す）
 ensureRE(remotes, "KitoPickResult")  -- S→C: 結果トースト等
+
+--==================================================
+-- ★ 追加：Run 進行・遷移系
+--==================================================
+ensureRE(remotes, "Confirm")     -- C→S: 「この手で勝負」
+ensureRE(remotes, "DecideNext")  -- C→S: リザルトからの遷移（"home"/"koikoi"/"abandon" 等）
+ensureRE(remotes, "HomeOpen")    -- S→C: ホーム画面オープン
+ensureRE(remotes, "StageResult") -- S→C: ステージ結果モーダルの表示/クローズ
 
 print("[RemotesInit] Remotes ready →", remotes:GetFullName())
 ```
@@ -15148,51 +15371,122 @@ return M
 ### src/shared/RerollService.lua
 ```lua
 -- ReplicatedStorage/SharedModules/RerollService.lua
+-- 場/手のリロールを分離（SSOT：rerollFieldLeft / rerollHandLeft が唯一の真実）
+-- 旧フィールド（rerollsLeft / handsLeft）には一切読まない・書かない
+
 local RS = game:GetService("ReplicatedStorage")
 local CardEngine = require(RS.SharedModules.CardEngine)
 local StateHub   = require(RS.SharedModules.StateHub)
 
 local Reroll = {}
 
-local function shuffleDeck(deck) CardEngine.shuffle(deck, os.time()) end
+--========================
+-- 内部ヘルパ
+--========================
+local function shuffleDeck(deck)
+	CardEngine.shuffle(deck, os.time())
+end
+
 local function rebuildDeckWith(parts)
 	local deck = {}
-	local function push(list) if list then for i=1,#list do table.insert(deck, list[i]) end end end
+	local function push(list)
+		if list then
+			for i = 1, #list do
+				table.insert(deck, list[i])
+			end
+		end
+	end
 	push(parts.deck); push(parts.hand); push(parts.board); push(parts.dump)
 	return deck
 end
 
+-- 正準カウンタの存在を保証（run.reroll を参考に補完）。旧フィールドは触らない。
+local function ensureRerollCounters(s:any)
+	s.run = s.run or {}
+	s.run.reroll = s.run.reroll or {}
+
+	if s.rerollFieldLeft == nil then
+		local v = tonumber(s.run.reroll.field or 0) or 0
+		s.rerollFieldLeft = v
+	end
+	if s.rerollHandLeft == nil then
+		local v = tonumber(s.run.reroll.hand or 0) or 0
+		s.rerollHandLeft = v
+	end
+
+	s.rerollFieldLeft = tonumber(s.rerollFieldLeft or 0) or 0
+	s.rerollHandLeft  = tonumber(s.rerollHandLeft  or 0) or 0
+
+	-- 正本を run.reroll にも常に反映（セーブ/復帰向け）
+	s.run.reroll.field = s.rerollFieldLeft
+	s.run.reroll.hand  = s.rerollHandLeft
+end
+
+local function decAndSync(s:any, key:string)
+	ensureRerollCounters(s)
+	local v = tonumber(s[key] or 0) or 0
+	if v <= 0 then return false end
+	s[key] = v - 1
+
+	-- 正本→run.reroll へ同期（旧フィールドは同期しない）
+	if key == "rerollFieldLeft" then
+		s.run.reroll.field = s.rerollFieldLeft
+	elseif key == "rerollHandLeft" then
+		s.run.reroll.hand  = s.rerollHandLeft
+	end
+	return true
+end
+
+--========================
+-- 実処理
+--========================
 local function doRerollAll(s)
-	local newDeck = rebuildDeckWith({ deck=s.deck, hand=s.hand, board=s.board, dump=s.dump })
+	-- 盤面（hand/board/dump を山に戻し）から手札5/場8を再配り
+	local newDeck = rebuildDeckWith({ deck = s.deck, hand = s.hand, board = s.board, dump = s.dump })
 	s.hand, s.board, s.dump = {}, {}, {}
 	shuffleDeck(newDeck)
-	for i=1,5 do if #newDeck>0 then table.insert(s.hand,  table.remove(newDeck)) end end
-	for i=1,8 do if #newDeck>0 then table.insert(s.board, table.remove(newDeck)) end end
+	for i = 1, 5 do
+		if #newDeck > 0 then table.insert(s.hand,  table.remove(newDeck)) end
+	end
+	for i = 1, 8 do
+		if #newDeck > 0 then table.insert(s.board, table.remove(newDeck)) end
+	end
 	s.deck = newDeck
 end
 
 local function doRerollHand(s)
-	local newDeck = rebuildDeckWith({ deck=s.deck, hand=s.hand })
+	-- 手札のみを山に戻して引き直す（場はそのまま）
+	local newDeck = rebuildDeckWith({ deck = s.deck, hand = s.hand })
 	s.hand = {}
 	shuffleDeck(newDeck)
-	for i=1,5 do if #newDeck>0 then table.insert(s.hand, table.remove(newDeck)) end end
+	for i = 1, 5 do
+		if #newDeck > 0 then table.insert(s.hand, table.remove(newDeck)) end
+	end
 	s.deck = newDeck
 end
 
-function Reroll.bind(Remotes, sweepFourOnBoardFn) -- sweepはPickServiceの同等処理を使うなら渡さなくてもOK
+--========================
+-- バインド
+--========================
+function Reroll.bind(Remotes, sweepFourOnBoardFn) -- sweep は PickService の同等処理を使うなら渡さなくてもOK
+	-- 場（全体）リロール
 	Remotes.ReqRerollAll.OnServerEvent:Connect(function(plr)
-		local s = StateHub.get(plr); if not s or s.phase~="play" then return end
-		if s.rerollsLeft <= 0 then return end
-		doRerollAll(s); s.rerollsLeft -= 1
+		local s = StateHub.get(plr); if not s or s.phase ~= "play" then return end
+		ensureRerollCounters(s)
+		if not decAndSync(s, "rerollFieldLeft") then return end
+		doRerollAll(s)
 		if sweepFourOnBoardFn then sweepFourOnBoardFn(s) end
-		StateHub.pushState(plr)
+		StateHub.set(plr, s); StateHub.pushState(plr)
 	end)
+
+	-- 手札リロール
 	Remotes.ReqRerollHand.OnServerEvent:Connect(function(plr)
-		local s = StateHub.get(plr); if not s or s.phase~="play" then return end
-		if s.rerollsLeft <= 0 then return end
-		doRerollHand(s); s.rerollsLeft -= 1
+		local s = StateHub.get(plr); if not s or s.phase ~= "play" then return end
+		ensureRerollCounters(s)
+		if not decAndSync(s, "rerollHandLeft") then return end
+		doRerollHand(s)
 		if sweepFourOnBoardFn then sweepFourOnBoardFn(s) end
-		StateHub.pushState(plr)
+		StateHub.set(plr, s); StateHub.pushState(plr)
 	end)
 end
 
@@ -15203,6 +15497,9 @@ return Reroll
 ```lua
 -- v0.9.1 → v0.9.1-nextdeck (+12-month: month/goal 初期化・保持)
 -- 季節開始ロジック（configSnapshot/外部デッキスナップ → 当季デッキ → ★季節開始スナップ保存）
+-- ★ Reroll統一：rerollFieldLeft / rerollHandLeft を唯一の真実（SSOT）とする
+--    旧フィールド（handsLeft / rerollsLeft）への書き込み・同期を完全撤廃
+
 local RS = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
 local HttpService = game:GetService("HttpService")
@@ -15217,6 +15514,9 @@ local Balance do
 	Balance = ok and mod or {
 		STAGE_START_MONTH = 1,
 		getGoalForMonth = function(_) return 1 end,
+		-- フォールバック（分離リロール初期値）
+		REROLL_FIELD_INIT = 5,
+		REROLL_HAND_INIT  = 3,
 	}
 end
 
@@ -15231,8 +15531,7 @@ end
 
 local Round = {}
 
-local MAX_HANDS   = 3
-local MAX_REROLLS = 5
+-- 旧 MAX_HANDS / MAX_REROLLS は廃止。Balance の REROLL_*_INIT を使用。
 
 local function makeSeasonSeed(seasonNum: number?)
 	local guid = HttpService:GenerateGUID(false)
@@ -15250,7 +15549,7 @@ local function ensureRunId(state)
 	return state.run.id
 end
 
--- ★ 12-month: 月初の goal を state に設定して即 push
+-- ★ 12-month: 月初の goal を state に設定
 local function setMonthAndGoal(state, monthOrNil)
 	state.run = state.run or {}
 	if monthOrNil ~= nil then
@@ -15307,6 +15606,23 @@ local function snapshotToConfigDeck(snap)
 	return cfg
 end
 
+-- 内部：分離リロール初期化（場/手）— SSOT
+local function initRerollCounters(state)
+	state.run = state.run or {}
+	-- Balance から初期値
+	local initField = tonumber(Balance.REROLL_FIELD_INIT or 5) or 5
+	local initHand  = tonumber(Balance.REROLL_HAND_INIT  or 3) or 3
+
+	-- ★ 正カウンタ（唯一の真実）
+	state.rerollFieldLeft = initField
+	state.rerollHandLeft  = initHand
+
+	-- ★ セーブ/復帰向けの補助（正本のコピー）
+	state.run.reroll = { field = initField, hand = initHand }
+
+	-- ※ 旧互換フィールド（handsLeft / rerollsLeft）は作らない・触らない
+end
+
 -- 季節開始（1=春, 2=夏, ...）
 -- ★ 第3引数 opts を追加。opts.deckSnapshot があればそれを最優先で当季の構成に使う。
 function Round.newRound(plr: Player, seasonNum: number, opts: any?)
@@ -15318,7 +15634,10 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 
 	-- ★ 12-month: month と goal を必ず与える（復帰時は保持、明示指定があれば採用）
 	setMonthAndGoal(s, (s.run and s.run.month) or nil)
-	StateHub.set(plr, s)  -- ここで goal が state に乗る（この後 push でクライアント反映）
+	-- ★ ラウンド開始ごとにリロール回数を初期化（場/手 分離）
+	initRerollCounters(s)
+
+	StateHub.set(plr, s)  -- ここで goal/リロールが state に乗る（この後 push でクライアント反映）
 
 	-- 1) ラン構成をロード or 外部スナップで上書き
 	consumeQueuedConversions(s, Random.new())
@@ -15365,8 +15684,9 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 	s.taken       = {}
 	s.dump        = {}
 	s.season      = seasonNum
-	s.handsLeft   = MAX_HANDS
-	s.rerollsLeft = MAX_REROLLS
+
+	-- ★ 分離済みカウンタは initRerollCounters 済み（旧フィールドは作らない）
+
 	s.seasonSum   = 0
 	s.chainCount  = 0
 	s.mult        = s.mult or 1.0
@@ -15406,6 +15726,9 @@ function Round.resetRun(plr: Player)
 	}
 	-- ★ 12-month: ラン開始時の month/goal を初期化
 	setMonthAndGoal(fresh, Balance and Balance.STAGE_START_MONTH or 1)
+
+	-- ★ 分離リロールの初期化（SSOT）
+	initRerollCounters(fresh)
 
 	StateHub.set(plr, fresh)
 
@@ -16783,7 +17106,6 @@ do
 		if ok and type(mod) == "table" then
 			SaveService = mod
 		else
-			-- サーバでも見つからない場合は安全スタブ
 			warn("[ScoreService] SaveService not found; using stub")
 			SaveService = {
 				addBank=function()end, setYear=function()end,
@@ -16840,14 +17162,13 @@ function Score.bind(Remotes, deps)
 	Remotes.Confirm.OnServerEvent:Connect(function(plr)
 		local s = StateHub.get(plr)
 		if not s or s.phase ~= "play" then return end
-		if (s.handsLeft or 0) <= 0 then return end
 
 		-- 採点
 		local takenCards = s.taken or {}
 		local total, roles, detail = Scoring.evaluate(takenCards, s)
 		local roleMon = (detail and detail.mon) or 0
 
-		-- 役チェイン
+		-- 役チェイン（役が1つでもあれば伸ばす）
 		local roleCount = 0
 		for _ in pairs(roles or {}) do
 			roleCount += 1
@@ -16855,40 +17176,32 @@ function Score.bind(Remotes, deps)
 		if roleCount > 0 then
 			s.chainCount = (s.chainCount or 0) + 1
 		end
+		local multNow = StateHub.chainMult(s.chainCount or 0)
+		s.mult        = multNow
 
-		local multNow    = StateHub.chainMult(s.chainCount or 0)
-		s.mult           = multNow
-
-		-- 早抜けボーナス
+		-- 早抜けボーナス（山札残り10枚ごとに roleMon 加算）
 		local deckLeft   = #(s.deck or {})
 		local quickBonus = math.floor(math.max(deckLeft, 0) / 10) * roleMon
 
-		-- 今ターンの獲得
-		local gained  = (total or 0) * multNow + quickBonus
-		s.seasonSum   = (s.seasonSum or 0) + gained
-		s.handsLeft   = (s.handsLeft or 0) - 1
+		-- 今ターンの獲得・累計
+		local gained   = (total or 0) * multNow + quickBonus
+		s.seasonSum    = (s.seasonSum or 0) + gained
 
-		-- ▼ 月ゴール（数値）— StateHub で Balance を咬ませた値
-		local tgt = (StateHub and StateHub.goalForMonth) and StateHub.goalForMonth(s) or 1
-		local curMonth = tonumber(s.run and s.run.month or 1) or 1
-		local season   = tonumber(s.season or 1) or 1
+		-- ▼ 月ゴール（StateHub.goalForMonth を正準とする）
+		local tgt       = (StateHub and StateHub.goalForMonth) and StateHub.goalForMonth(s) or 1
+		local curMonth  = tonumber(s.run and s.run.month or 1) or 1
+		local season    = tonumber(s.season or 1) or 1
 
 		--========================
-		-- 未達：手が尽きたら失敗、まだなら続行
+		-- 未達：ゲームオーバー（ランリセット）
 		--========================
 		if (s.seasonSum or 0) < tgt then
-			if (s.handsLeft or 0) <= 0 then
-				-- 失敗：ゲームオーバー（ランリセット）
-				if Remotes.StageResult then
-					-- 互換：false, sum, target, mult, bank を送る旧経路も維持
-					Remotes.StageResult:FireClient(plr, false, s.seasonSum or 0, tgt, s.mult or 1, s.bank or 0)
-				end
-				local Round = RoundRef or reqShared("RoundService")
-				Round.resetRun(plr)
-			else
-				-- 続行
-				StateHub.pushState(plr)
+			if Remotes.StageResult then
+				-- 互換：false, sum, target, mult, bank を送る旧経路も維持
+				Remotes.StageResult:FireClient(plr, false, s.seasonSum or 0, tgt, s.mult or 1, s.bank or 0)
 			end
+			local Round = RoundRef or reqShared("RoundService")
+			Round.resetRun(plr)
 			return
 		end
 
@@ -17246,7 +17559,79 @@ ShopDefs.POOLS = {
 	},
 }
 
-return ShopDefs
+----------------------------------------------------------------
+-- 追加：互換ID → 正規(DOT)ID へ正規化（KITO専用の“揺らぎ吸収”）
+--  - KitoAssets は「kito.<animal>...」のみ受理するため、ここで必ず正規化する
+--  - 非KITO（sai_*, spectral_* 等）は入力をそのまま返す
+----------------------------------------------------------------
+function ShopDefs.toCanonicalEffectId(id) --: string
+	if type(id) ~= "string" or id == "" then return "" end
+	local s = id
+
+	-- 正規（kito. で始まる）ならそのまま
+	if s:match("^kito%.") then
+		return s
+	end
+
+	-- 比較を楽にするため前処理
+	local key = s:lower()
+	key = key:gsub("%s+", "")           -- 空白除去
+	key = key:gsub("\\", "/")           -- 区切り正規化
+	key = key:gsub("%.luau?$", "")      -- 拡張子除去（.lua/.luau）
+	key = key:gsub("^modules?/", "")    -- パスの先頭ノイズ除去
+	key = key:gsub("^effects?/", "")
+	key = key:gsub("^kito/", "")
+	key = key:gsub("^kito_", "kito.")   -- 先頭の kito_ → kito.
+
+	-- 代表的な旧名/別名のマップ（必要に応じて随時追加）
+	local ALIAS = {
+		-- 変換系
+		["kito_tori_brighten"] = "kito.tori_brighten",
+		["tori_brighten"]      = "kito.tori_brighten",
+		["tori.brighten"]      = "kito.tori_brighten",
+
+		["kito_mi_venom"]      = "kito.mi_venom",
+		["mi_venom"]           = "kito.mi_venom",
+
+		["kito_uma_seed"]      = "kito.uma_seed",
+		["uma_seed"]           = "kito.uma_seed",
+
+		["kito_inu_chaff2"]    = "kito.inu_chaff2",
+		["inu_chaff2"]         = "kito.inu_chaff2",
+		["kito_inu_two_chaff"] = "kito.inu_chaff2",
+
+		["kito_i_sake"]        = "kito.i_sake",
+		["i_sake"]             = "kito.i_sake",
+
+		["kito_hitsuji_prune"] = "kito.hitsuji_prune",
+		["hitsuji_prune"]      = "kito.hitsuji_prune",
+
+		["kito_tatsu_copy"]    = "kito.tatsu_copy",
+		["tatsu_copy"]         = "kito.tatsu_copy",
+
+		["kito_usagi_ribbon"]  = "kito.usagi_ribbon",
+		["usagi_ribbon"]       = "kito.usagi_ribbon",
+
+		-- 常駐系
+		["kito_tora"]          = "kito.tora",
+		["tora"]               = "kito.tora",
+		["kito_ushi"]          = "kito.ushi",
+		["ushi"]               = "kito.ushi",
+		["kito_ko"]            = "kito.ko",
+		["ko"]                 = "kito.ko",
+	}
+
+	if ALIAS[key] then
+		return ALIAS[key]
+	end
+
+	-- ここまでで確定できなければ一般形で正規化
+	-- 1) アンダースコア → ドット
+	key = key:gsub("_", ".")
+
+	-- 2) kito. 接頭辞が無ければ付ける（動物名から始まるケースを包含）
+	if not key:find("^kito%.") then
+... (truncated)
 ```
 
 ### src/shared/ShopFormat.lua
@@ -17715,7 +18100,8 @@ local function openFor(plr: Player, s: any, opts: {reward:number?, notice:string
 -- ReplicatedStorage/SharedModules/StateHub.lua
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
 -- 12-month版：StatePushは month/goal を正とし、season/seasonStr は送信しない
--- さらに過去版の計測ログ／Scoring／RunDeckUtil連携など有用部分は維持／統合
+-- ★ Reroll 統一（SSOT）：rerollFieldLeft / rerollHandLeft を唯一の真実とする
+--    旧フィールド（handsLeft / rerollsLeft）には一切依存しない・送らない
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -17744,13 +18130,16 @@ local StateHub = {}
 export type PlrState = {
 	deck: {any}?, hand: {any}?, board: {any}?, taken: {any}?, dump: {any}?,
 
-	handsLeft: number?, rerollsLeft: number?,
-	seasonSum: number?,  -- 12ヶ月制でもUI表示で使う合計は残す
+	-- ▼ 新：場/手で明確に分離（唯一の真実）
+	rerollFieldLeft: number?,    -- 全体/場リロール残数（正）
+	rerollHandLeft:  number?,    -- 手札リロール残数（正）
+
+	seasonSum: number?,  -- UI表示用の合計
 	chainCount: number?, -- 連続役数（倍率表示用）
 	mult: number?,       -- 表示用倍率
 
 	bank: number?,       -- 両（周回通貨）
-	mon: number?,        -- 文（季節通貨的。用語はそのまま）
+	mon: number?,        -- 文（季節通貨）
 
 	phase: string?,      -- "play" / "shop" / "result" / "home"
 	year: number?,       -- 周回年数
@@ -17759,7 +18148,7 @@ export type PlrState = {
 	lang: string?,       -- "ja"/"en"
 	lastScore: any?,     -- 任意デバッグ
 
-	run: any?,           -- { month=number, talisman=?, ... }
+	run: any?,           -- { month=number, reroll={field,hand}, talisman=?, ... }
 	goal: number?,       -- 月ごとの目標（数値）
 }
 
@@ -17826,10 +18215,37 @@ function StateHub.set(plr: Player, s: PlrState) stateByPlr[plr] = s end
 function StateHub.clear(plr: Player) stateByPlr[plr] = nil end
 function StateHub.exists(plr: Player): boolean return stateByPlr[plr] ~= nil end
 
+--========================================
+-- リロール補完：run.reroll から新フィールドを復元
+--========================================
+local function ensureRerollFields(s: PlrState)
+	-- run.reroll から補完（SSOTを守る：旧 handsLeft/rerollsLeft には触れない）
+	if s.run and typeof(s.run.reroll)=="table" then
+		local rr = s.run.reroll
+		if s.rerollFieldLeft == nil and type(rr.field)=="number" then
+			s.rerollFieldLeft = rr.field
+		end
+		if s.rerollHandLeft == nil and type(rr.hand)=="number" then
+			s.rerollHandLeft = rr.hand
+		end
+	end
+
+	-- 既定値（0 クランプ）
+	s.rerollFieldLeft = tonumber(s.rerollFieldLeft or 0) or 0
+	s.rerollHandLeft  = tonumber(s.rerollHandLeft  or 0) or 0
+
+	-- run.reroll にも正の数値を反映（保存系がこちらを読む想定）
+	s.run = s.run or {}
+	s.run.reroll = s.run.reroll or {}
+	s.run.reroll.field = s.rerollFieldLeft
+	s.run.reroll.hand  = s.rerollHandLeft
+end
+
 -- サーバ内ユーティリティ：欠損プロパティの安全な既定値
 local function ensureDefaults(s: PlrState)
-	s.handsLeft   = s.handsLeft or 0
-	s.rerollsLeft = s.rerollsLeft or 0
+	-- リロール（SSOT）を最初に整える
+	ensureRerollFields(s)
+
 	s.seasonSum   = s.seasonSum or 0
 	s.chainCount  = s.chainCount or 0
 	s.mult        = s.mult or 1.0
@@ -17916,11 +18332,12 @@ function StateHub.pushState(plr: Player)
 				month       = m,
 				monthStr    = monthName(m),
 				goal        = g,
-				target      = g, -- 旧互換が必要なら同値を置く（UI側で未使用なら無視される）
+				target      = g, -- 旧互換が必要なら同値を置く（UI側で未使用なら無視）
 
-				-- 残り系/表示
-				hands       = s.handsLeft or 0,
-				rerolls     = s.rerollsLeft or 0,
+				-- ▼ 残り系（SSOT：新キーのみ）
+				rerollFieldLeft = s.rerollFieldLeft or 0,
+				rerollHandLeft  = s.rerollHandLeft  or 0,
+
 				sum         = s.seasonSum or 0,
 				mult        = s.mult or 1.0,
 				bank        = s.bank or 0,
@@ -17935,7 +18352,13 @@ function StateHub.pushState(plr: Player)
 				matsuri     = matsuriLevels,
 
 				-- Run 側のスナップショット（護符ボード等のUI用）
-				run         = { talisman = (s.run and s.run.talisman) or nil },
+				run         = {
+					talisman = (s.run and s.run.talisman) or nil,
+					reroll   = {
+						field = s.rerollFieldLeft or 0,
+						hand  = s.rerollHandLeft  or 0,
+					},
+				},
 
 				-- 山/手の残枚数（UIの安全表示用）
 				deckLeft    = deckN,
@@ -17974,44 +18397,6 @@ function StateHub.pushState(plr: Player)
 		else
 			LOG.warn("pushState.ScorePush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
 		end
-	else
-		LOG.warn("pushState: ScorePush remote missing")
-	end
-
-	--========================
-	-- 札（手/場/取り）— 各送信を個別計測
-	--========================
-	if Remotes.HandPush then
-		local t0 = os.clock()
-		local okSend, err = pcall(function() Remotes.HandPush:FireClient(plr, s.hand or {}) end)
-		local ms = (os.clock() - t0) * 1000.0
-		if okSend then
-			LOG.debug("pushState.HandPush u=%s hand=%d in %.2fms", plr and plr.Name or "?", handN, ms)
-		else
-			LOG.warn("pushState.HandPush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
-		end
-	else
-		LOG.warn("pushState: HandPush remote missing")
-	end
-
-	if Remotes.FieldPush then
-		local t0 = os.clock()
-		local okSend, err = pcall(function() Remotes.FieldPush:FireClient(plr, s.board or {}) end)
-		local ms = (os.clock() - t0) * 1000.0
-		if okSend then
-			LOG.debug("pushState.FieldPush u=%s board=%d in %.2fms", plr and plr.Name or "?", boardN, ms)
-		else
-			LOG.warn("pushState.FieldPush send failed u=%s err=%s", plr and plr.Name or "?", tostring(err))
-		end
-	else
-		LOG.warn("pushState: FieldPush remote missing")
-	end
-
-	if Remotes.TakenPush then
-		local t0 = os.clock()
-		local okSend, err = pcall(function() Remotes.TakenPush:FireClient(plr, s.taken or {}) end)
-		local ms = (os.clock() - t0) * 1000.0
-		if okSend then
 ... (truncated)
 ```
 

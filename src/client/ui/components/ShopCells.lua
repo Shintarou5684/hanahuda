@@ -4,6 +4,7 @@
 --  - pcall/typeof でガード（落ちないUI）
 --  - Mouse/Keyboard/Gamepad 入力の統一（Hover/Selection/Activated）
 --  - 主要値を Attributes に保存（デバッグやUIテスト用）
+--  - ★ KITO商品（category=="kito"）に限り、effectId="kito.<animal>..." から干支アイコンを表示（厳格）
 
 local RS           = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -17,6 +18,16 @@ local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
 
+-- ★ 干支アイコン（厳格: kito.<animal> のみ受理）
+--   このファイルは ui/components にあるので、ui/lib/KitoAssets を参照する
+local KitoAssets do
+	local ok, mod = pcall(function()
+		-- ❗ 修正箇所：components → ui に上がってから lib を探す
+		return require(script.Parent.Parent:WaitForChild("lib"):WaitForChild("KitoAssets"))
+	end)
+	KitoAssets = ok and mod or nil
+end
+
 local M = {}
 
 --========================
@@ -24,7 +35,6 @@ local M = {}
 --========================
 local function _safeId(it:any): string
 	local raw = tostring(it and it.id or "Item")
-	-- Roblox Name 制限を軽く満たすため、記号を置換
 	return (raw:gsub("[^%w_%-]", "_"))
 end
 
@@ -102,12 +112,33 @@ local function _setAttributes(inst: Instance, it:any, lang:string, mon:number, a
 	inst:SetAttribute("face", _getFaceName(it))
 end
 
+-- ★ 干支アイコン貼付（厳格: kito.<animal> のみ）
+local function _maybeAddKitoIcon(parent: Instance, it:any)
+	if not (parent and parent:IsA("GuiObject")) then return end
+	if not (KitoAssets and it and tostring(it.category) == "kito") then return end
+	local effect = tostring(it.effect or "")
+	local icon = KitoAssets.getIcon(effect) -- 正規 effectId 以外(nil)なら非表示
+	if not icon then return end
+
+	local old = parent:FindFirstChild("KitoIcon")
+	if old then old:Destroy() end
+
+	local img = Instance.new("ImageLabel")
+	img.Name = "KitoIcon"
+	img.Image = icon
+	img.BackgroundTransparency = 1
+	img.ScaleType = Enum.ScaleType.Fit
+	img.Size = UDim2.fromOffset(48, 48)
+	img.Position = UDim2.fromOffset(6, 6)
+	img.ZIndex = (parent.ZIndex or 0) + 1
+	img.Parent = parent
+end
+
 --========================
 -- メイン：カード生成
 --========================
 -- create(parent, nodes, it, lang, mon, handlers={ onBuy=function(it) end })
 function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, handlers)
-	-- 親・入力チェック
 	if not (parent and parent:IsA("GuiObject")) then return nil end
 	lang = tostring(lang or "en")
 	mon  = tonumber(mon or 0) or 0
@@ -127,7 +158,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	addCorner(btn, Theme and Theme.PANEL_RADIUS or 10)
 	local stroke = addStroke(btn, _themeColor("PanelStroke", Color3.fromRGB(70,70,80)), 1, 0)
 
-	-- 価格バンド（TextLabel、入力は親へパス）
+	-- 価格バンド
 	local priceBand = Instance.new("TextLabel")
 	priceBand.Name = "Price"
 	priceBand.BackgroundColor3 = _themeColor("BadgeBg", Color3.fromRGB(25,28,36))
@@ -138,25 +169,27 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	priceBand.Font = Enum.Font.Gotham
 	priceBand.TextColor3 = Color3.fromRGB(245,245,245)
 	priceBand.ZIndex = 11
-	priceBand.Active = false       -- 入力を自身で取らない
-	priceBand.Selectable = false   -- 選択不可
+	priceBand.Active = false
+	priceBand.Selectable = false
 	priceBand.Parent = btn
 	addStroke(priceBand, _themeColor("BadgeStroke", Color3.fromRGB(60,65,80)), 1, 0.2)
 
-	-- 購入可否の視覚
+	-- 購入可否
 	local affordable = _computeAffordable(mon, it and it.price)
 	if not affordable then
-		local insuff = Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX") -- 例: "（不足）"
-		priceBand.Text = _fmtPrice(it and it.price) .. insuff
+		local insuff = Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX")
+		priceBand.Text = _fmtPrice(it and it.price) + insuff
 		priceBand.BackgroundTransparency = 0.15
-		-- クリックは許可（サーバ側で弾く）…従来方針を維持
 		btn.AutoButtonColor = true
 	end
 
-	-- Attributes（UIテスト/デバッグ向け）
+	-- Attributes
 	_setAttributes(btn, it, lang, mon, affordable)
 
-	-- Hover/Selection 演出（小さく）
+	-- ★ 干支アイコン（KITO商品のみ）
+	_maybeAddKitoIcon(btn, it)
+
+	-- Hover/Selection 演出
 	local ti = TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 	local baseBg = btn.BackgroundColor3
 	local function hoverIn()
@@ -169,11 +202,10 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	end
 	btn.MouseEnter:Connect(hoverIn)
 	btn.MouseLeave:Connect(hoverOut)
-	-- TextButton には Focused/FocusLost は無いので SelectionGained/Lost を使用（存在チェック付き）
 	if btn.SelectionGained then btn.SelectionGained:Connect(hoverIn) end
 	if btn.SelectionLost   then btn.SelectionLost  :Connect(hoverOut) end
 
-	-- 説明表示（右の Info パネルへ）
+	-- 説明（右の Info パネルへ）
 	local function showDesc()
 		local title = _title(it, lang)
 		local desc  = _desc(it, lang)
@@ -191,10 +223,10 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	btn.MouseEnter:Connect(showDesc)
 	if btn.SelectionGained then btn.SelectionGained:Connect(showDesc) end
 
-	-- 購入（Activated は Mouse/Touch/Gamepad/Keyboard を包括）
+	-- 購入
 	local function doBuy()
 		if not (handlers and typeof(handlers.onBuy)=="function") then return end
-		pcall(function() handlers.onBuy(it) end) -- 失敗してもUIは落とさない
+		pcall(function() handlers.onBuy(it) end)
 	end
 	btn.Activated:Connect(doBuy)
 

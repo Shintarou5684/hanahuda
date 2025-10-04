@@ -1,5 +1,8 @@
 -- v0.9.1 → v0.9.1-nextdeck (+12-month: month/goal 初期化・保持)
 -- 季節開始ロジック（configSnapshot/外部デッキスナップ → 当季デッキ → ★季節開始スナップ保存）
+-- ★ Reroll統一：rerollFieldLeft / rerollHandLeft を唯一の真実（SSOT）とする
+--    旧フィールド（handsLeft / rerollsLeft）への書き込み・同期を完全撤廃
+
 local RS = game:GetService("ReplicatedStorage")
 local SSS = game:GetService("ServerScriptService")
 local HttpService = game:GetService("HttpService")
@@ -14,6 +17,9 @@ local Balance do
 	Balance = ok and mod or {
 		STAGE_START_MONTH = 1,
 		getGoalForMonth = function(_) return 1 end,
+		-- フォールバック（分離リロール初期値）
+		REROLL_FIELD_INIT = 5,
+		REROLL_HAND_INIT  = 3,
 	}
 end
 
@@ -28,8 +34,7 @@ end
 
 local Round = {}
 
-local MAX_HANDS   = 3
-local MAX_REROLLS = 5
+-- 旧 MAX_HANDS / MAX_REROLLS は廃止。Balance の REROLL_*_INIT を使用。
 
 local function makeSeasonSeed(seasonNum: number?)
 	local guid = HttpService:GenerateGUID(false)
@@ -47,7 +52,7 @@ local function ensureRunId(state)
 	return state.run.id
 end
 
--- ★ 12-month: 月初の goal を state に設定して即 push
+-- ★ 12-month: 月初の goal を state に設定
 local function setMonthAndGoal(state, monthOrNil)
 	state.run = state.run or {}
 	if monthOrNil ~= nil then
@@ -104,6 +109,23 @@ local function snapshotToConfigDeck(snap)
 	return cfg
 end
 
+-- 内部：分離リロール初期化（場/手）— SSOT
+local function initRerollCounters(state)
+	state.run = state.run or {}
+	-- Balance から初期値
+	local initField = tonumber(Balance.REROLL_FIELD_INIT or 5) or 5
+	local initHand  = tonumber(Balance.REROLL_HAND_INIT  or 3) or 3
+
+	-- ★ 正カウンタ（唯一の真実）
+	state.rerollFieldLeft = initField
+	state.rerollHandLeft  = initHand
+
+	-- ★ セーブ/復帰向けの補助（正本のコピー）
+	state.run.reroll = { field = initField, hand = initHand }
+
+	-- ※ 旧互換フィールド（handsLeft / rerollsLeft）は作らない・触らない
+end
+
 -- 季節開始（1=春, 2=夏, ...）
 -- ★ 第3引数 opts を追加。opts.deckSnapshot があればそれを最優先で当季の構成に使う。
 function Round.newRound(plr: Player, seasonNum: number, opts: any?)
@@ -115,7 +137,10 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 
 	-- ★ 12-month: month と goal を必ず与える（復帰時は保持、明示指定があれば採用）
 	setMonthAndGoal(s, (s.run and s.run.month) or nil)
-	StateHub.set(plr, s)  -- ここで goal が state に乗る（この後 push でクライアント反映）
+	-- ★ ラウンド開始ごとにリロール回数を初期化（場/手 分離）
+	initRerollCounters(s)
+
+	StateHub.set(plr, s)  -- ここで goal/リロールが state に乗る（この後 push でクライアント反映）
 
 	-- 1) ラン構成をロード or 外部スナップで上書き
 	consumeQueuedConversions(s, Random.new())
@@ -162,8 +187,9 @@ function Round.newRound(plr: Player, seasonNum: number, opts: any?)
 	s.taken       = {}
 	s.dump        = {}
 	s.season      = seasonNum
-	s.handsLeft   = MAX_HANDS
-	s.rerollsLeft = MAX_REROLLS
+
+	-- ★ 分離済みカウンタは initRerollCounters 済み（旧フィールドは作らない）
+
 	s.seasonSum   = 0
 	s.chainCount  = 0
 	s.mult        = s.mult or 1.0
@@ -203,6 +229,9 @@ function Round.resetRun(plr: Player)
 	}
 	-- ★ 12-month: ラン開始時の month/goal を初期化
 	setMonthAndGoal(fresh, Balance and Balance.STAGE_START_MONTH or 1)
+
+	-- ★ 分離リロールの初期化（SSOT）
+	initRerollCounters(fresh)
 
 	StateHub.set(plr, fresh)
 

@@ -39,7 +39,6 @@ do
 		if ok and type(mod) == "table" then
 			SaveService = mod
 		else
-			-- サーバでも見つからない場合は安全スタブ
 			warn("[ScoreService] SaveService not found; using stub")
 			SaveService = {
 				addBank=function()end, setYear=function()end,
@@ -96,14 +95,13 @@ function Score.bind(Remotes, deps)
 	Remotes.Confirm.OnServerEvent:Connect(function(plr)
 		local s = StateHub.get(plr)
 		if not s or s.phase ~= "play" then return end
-		if (s.handsLeft or 0) <= 0 then return end
 
 		-- 採点
 		local takenCards = s.taken or {}
 		local total, roles, detail = Scoring.evaluate(takenCards, s)
 		local roleMon = (detail and detail.mon) or 0
 
-		-- 役チェイン
+		-- 役チェイン（役が1つでもあれば伸ばす）
 		local roleCount = 0
 		for _ in pairs(roles or {}) do
 			roleCount += 1
@@ -111,40 +109,32 @@ function Score.bind(Remotes, deps)
 		if roleCount > 0 then
 			s.chainCount = (s.chainCount or 0) + 1
 		end
+		local multNow = StateHub.chainMult(s.chainCount or 0)
+		s.mult        = multNow
 
-		local multNow    = StateHub.chainMult(s.chainCount or 0)
-		s.mult           = multNow
-
-		-- 早抜けボーナス
+		-- 早抜けボーナス（山札残り10枚ごとに roleMon 加算）
 		local deckLeft   = #(s.deck or {})
 		local quickBonus = math.floor(math.max(deckLeft, 0) / 10) * roleMon
 
-		-- 今ターンの獲得
-		local gained  = (total or 0) * multNow + quickBonus
-		s.seasonSum   = (s.seasonSum or 0) + gained
-		s.handsLeft   = (s.handsLeft or 0) - 1
+		-- 今ターンの獲得・累計
+		local gained   = (total or 0) * multNow + quickBonus
+		s.seasonSum    = (s.seasonSum or 0) + gained
 
-		-- ▼ 月ゴール（数値）— StateHub で Balance を咬ませた値
-		local tgt = (StateHub and StateHub.goalForMonth) and StateHub.goalForMonth(s) or 1
-		local curMonth = tonumber(s.run and s.run.month or 1) or 1
-		local season   = tonumber(s.season or 1) or 1
+		-- ▼ 月ゴール（StateHub.goalForMonth を正準とする）
+		local tgt       = (StateHub and StateHub.goalForMonth) and StateHub.goalForMonth(s) or 1
+		local curMonth  = tonumber(s.run and s.run.month or 1) or 1
+		local season    = tonumber(s.season or 1) or 1
 
 		--========================
-		-- 未達：手が尽きたら失敗、まだなら続行
+		-- 未達：ゲームオーバー（ランリセット）
 		--========================
 		if (s.seasonSum or 0) < tgt then
-			if (s.handsLeft or 0) <= 0 then
-				-- 失敗：ゲームオーバー（ランリセット）
-				if Remotes.StageResult then
-					-- 互換：false, sum, target, mult, bank を送る旧経路も維持
-					Remotes.StageResult:FireClient(plr, false, s.seasonSum or 0, tgt, s.mult or 1, s.bank or 0)
-				end
-				local Round = RoundRef or reqShared("RoundService")
-				Round.resetRun(plr)
-			else
-				-- 続行
-				StateHub.pushState(plr)
+			if Remotes.StageResult then
+				-- 互換：false, sum, target, mult, bank を送る旧経路も維持
+				Remotes.StageResult:FireClient(plr, false, s.seasonSum or 0, tgt, s.mult or 1, s.bank or 0)
 			end
+			local Round = RoundRef or reqShared("RoundService")
+			Round.resetRun(plr)
 			return
 		end
 

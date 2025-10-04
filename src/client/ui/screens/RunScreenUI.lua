@@ -1,5 +1,12 @@
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
 -- UIビルダーは親付けしない契約（親付けは ScreenRouter の責務）
+-- v0.9.7-P1-7:
+--   - リロールボタン文言を固定化
+--       ja: 「場札入替」 / 「手札入替」
+--       en: "Refresh Board" / "Redraw Hand"
+--     （Locale のキーに依存せず、setLang でも追従）
+-- v0.9.7-P1-6: ★ リロール（場/手）ボタンの左に残回数バッジを追加
+--              （refs.counters.rerollField / refs.counters.rerollHand）＋見た目調整APIを追加
 -- v0.9.7-P1-5: 「あきらめる」ボタンを追加（refs.buttons.giveUp）
 -- v0.9.7-P1-4: Theme完全デフォルト化（色・画像・透過のUI側フォールバック撤去）
 -- v0.9.7-P1-3: Logger導入／言語コードを "ja"/"en" に統一（入力 "jp" は "ja" へ正規化）
@@ -93,11 +100,58 @@ local function makeSideBtn(parent: Instance, name: string, text: string, bg: Col
 	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = btn
 	return btn
 end
+
+-- ▼ 左に残回数バッジ＋右に少し細いボタンのセットを生成
+local function makeCounteredButton(parent: Instance, name: string, initialText: string, btnBg: Color3)
+	local holder = Instance.new("Frame")
+	holder.Name = name .. "Holder"
+	holder.Parent = parent
+	holder.Size = UDim2.new(1, 0, 0, 44)
+	holder.BackgroundTransparency = 1
+
+	local _ = makeList(holder, Enum.FillDirection.Horizontal, 6, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Center)
+
+	local badge = Instance.new("TextLabel")
+	badge.Name = name .. "Count"
+	badge.Parent = holder
+	badge.Size = UDim2.new(0, 40, 1, 0)
+	badge.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	badge.BackgroundTransparency = 0.25
+	badge.BorderSizePixel = 0
+	badge.Text = "0"
+	badge.Font = Enum.Font.GothamBold
+	badge.TextScaled = true
+	badge.TextColor3 = Color3.new(1,1,1)
+	local badgeCorner = Instance.new("UICorner"); badgeCorner.CornerRadius = UDim.new(0, 8); badgeCorner.Parent = badge
+
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Parent = holder
+	btn.Size = UDim2.new(1, -46, 1, 0) -- 左に40pxバッジ＋6pxパディング
+	btn.AutoButtonColor = true
+	btn.Text = initialText
+	btn.TextScaled = true
+	btn.BackgroundColor3 = btnBg
+	btn.BorderSizePixel = 0
+	local btnCorner = Instance.new("UICorner"); btnCorner.CornerRadius = UDim.new(0, 8); btnCorner.Parent = btn
+
+	return badge, btn, holder
+end
 --=======================================================================
 
 -- 言語：Global → OS 推定（"jp" は "ja" へ正規化）
 local _lang = pickInitialLang()
 LOG.debug("init _lang=%s", tostring(_lang))
+
+-- ▼ 追加：リロールボタンの固定ラベル
+local function rerollLabels(lang: string)
+	lang = tostring(lang or "en"):lower()
+	if lang == "ja" then
+		return { all = "場札入替", hand = "手札入替" }
+	else
+		return { all = "Refresh Board", hand = "Redraw Hand" }
+	end
+end
 
 -- ラベル適用
 local function applyTexts(tRefs)
@@ -112,17 +166,23 @@ local function applyTexts(tRefs)
 
 	-- 左カラム：ボタン
 	if tRefs.buttons then
-		if tRefs.buttons.confirm    then tRefs.buttons.confirm.Text    = t("RUN_BTN_CONFIRM") end
-		if tRefs.buttons.rerollAll  then tRefs.buttons.rerollAll.Text  = t("RUN_BTN_REROLL_ALL") end
-		if tRefs.buttons.rerollHand then tRefs.buttons.rerollHand.Text = t("RUN_BTN_REROLL_HAND") end
-		if tRefs.buttons.yaku       then
+		if tRefs.buttons.confirm then
+			tRefs.buttons.confirm.Text = t("RUN_BTN_CONFIRM")
+		end
+
+		-- ★ 固定文言（Localeキーに依存しない）
+		local rl = rerollLabels(_lang)
+		if tRefs.buttons.rerollAll  then tRefs.buttons.rerollAll.Text  = rl.all  end
+		if tRefs.buttons.rerollHand then tRefs.buttons.rerollHand.Text = rl.hand end
+
+		if tRefs.buttons.yaku then
 			local lbl = Locale.t(_lang, "RUN_BTN_YAKU")
 			if not lbl or lbl == "" or lbl == "RUN_BTN_YAKU" then
 				lbl = (_lang == "en") and "Yaku" or "役一覧"
 			end
 			tRefs.buttons.yaku.Text = lbl
 		end
-		-- ★ 新規：あきらめる
+		-- あきらめる
 		if tRefs.buttons.giveUp then
 			local txt = Locale.t(_lang, "RUN_BTN_GIVEUP")
 			if not txt or txt == "" or txt == "RUN_BTN_GIVEUP" then
@@ -175,7 +235,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	local BOARD_H    = R.BOARD_H
 	local TUTORIAL_H = R.TUTORIAL_H
 	local HAND_H     = R.HAND_H
-	local ROW_GAP    = 0.035   -- 比率に置きづらい“視覚的間隔”。必要なら Theme.SIZES へ昇格可。
+	local ROW_GAP    = 0.035
 	local COL_GAP    = R.COL_GAP
 
 	local ROOM_BG_IMAGE  = IMAGES.ROOM_BG
@@ -187,8 +247,8 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	local COLOR_RIGHT_STROKE   = C.RightPaneStroke
 	local COLOR_PANEL_BG       = C.PanelBg
 	local COLOR_PANEL_STROKE   = C.PanelStroke
-	local COLOR_NOTICE_BG      = C.NoticeBg   or C.PanelBg        -- 未定義なら PanelBg を流用
-	local COLOR_TUTORIAL_BG    = C.TutorialBg or C.PrimaryBtnBg   -- 未定義なら Primary を流用
+	local COLOR_NOTICE_BG      = C.NoticeBg   or C.PanelBg
+	local COLOR_TUTORIAL_BG    = C.TutorialBg or C.PrimaryBtnBg
 	local BTN_PRIMARY_BG       = C.PrimaryBtnBg
 	local BTN_WARN_BG          = C.WarnBtnBg
 	local BTN_YAKU_BG          = C.InfoBtnBg
@@ -200,7 +260,6 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	g.IgnoreGuiInset = true
 	g.DisplayOrder = 10
 	g.Enabled = true
-	-- ★ ここで Parent を設定しない（Router が playerGui に付ける）
 
 	-- 背景
 	local roomBG = Instance.new("ImageLabel")
@@ -268,7 +327,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	makeList(left, Enum.FillDirection.Vertical, 8, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
 
 	local infoPanel = makePanel(left, "InfoPanel", Vector2.new(1, 0.14), 1, COLOR_PANEL_BG, COLOR_PANEL_STROKE)
-	local info = UiUtil.makeLabel(infoPanel, "Info", "--", UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), Vector2.new(0,0), COLOR_TEXT)
+	local info = UiUtil.makeLabel(infoPanel, "Info", "--", UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), nil, COLOR_TEXT)
 	info.TextWrapped = true
 	info.TextScaled = true
 	info.TextXAlignment = Enum.TextXAlignment.Left
@@ -304,9 +363,12 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	makeList(controlsPanel, Enum.FillDirection.Vertical, 8)
 
 	local btnConfirm    = makeSideBtn(controlsPanel, "Confirm",    "", BTN_PRIMARY_BG)
-	local btnRerollAll  = makeSideBtn(controlsPanel, "RerollAll",  "", BTN_WARN_BG)
-	local btnRerollHand = makeSideBtn(controlsPanel, "RerollHand", "", BTN_WARN_BG)
-	-- ★ 新規：あきらめる（Danger色が無いテーマ想定のため Warn を流用）
+
+	-- ★ リロール2種：左に残回数バッジ＋右に細いボタン
+	local badgeField, btnRerollAll = makeCounteredButton(controlsPanel, "RerollAll",  "", BTN_WARN_BG)
+	local badgeHand,  btnRerollHand = makeCounteredButton(controlsPanel, "RerollHand", "", BTN_WARN_BG)
+
+	-- あきらめる
 	local btnGiveUp     = makeSideBtn(controlsPanel, "GiveUp",     "", BTN_WARN_BG)
 
 	-- Center
@@ -321,13 +383,13 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 
 		local boardWrap = Instance.new("Frame"); boardWrap.Name="BoardWrap"; boardWrap.Parent=boardArea
 		boardWrap.BackgroundTransparency=1; boardWrap.Size=UDim2.fromScale(1,1); boardWrap.ZIndex=2
-		makeList(boardWrap, Enum.FillDirection.Vertical, ROW_GAP)
+		makeList(boardWrap, Enum.FillDirection.Vertical, 0.035)
 
 		local top = Instance.new("Frame"); top.Name="BoardRowTop"; top.Parent=boardWrap; top.BackgroundTransparency=1
-		top.Size=UDim2.fromScale(1,(1-ROW_GAP)*0.5); top.ZIndex=2; makeList(top, Enum.FillDirection.Horizontal, 0.02)
+		top.Size=UDim2.fromScale(1,(1-0.035)*0.5); top.ZIndex=2; makeList(top, Enum.FillDirection.Horizontal, 0.02)
 
 		local bottom = Instance.new("Frame"); bottom.Name="BoardRowBottom"; bottom.Parent=boardWrap; bottom.BackgroundTransparency=1
-		bottom.Size=UDim2.fromScale(1,(1-ROW_GAP)*0.5); bottom.ZIndex=2; makeList(bottom, Enum.FillDirection.Horizontal, 0.02)
+		bottom.Size=UDim2.fromScale(1,(1-0.035)*0.5); bottom.ZIndex=2; makeList(bottom, Enum.FillDirection.Horizontal, 0.02)
 
 		M._boardRowTop, M._boardRowBottom = top, bottom
 	end
@@ -371,7 +433,11 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 			confirm = btnConfirm,
 			rerollAll = btnRerollAll,
 			rerollHand = btnRerollHand,
-			giveUp = btnGiveUp, -- ★ 追加
+			giveUp = btnGiveUp,
+		},
+		counters = {
+			rerollField = badgeField,
+			rerollHand  = badgeHand,
 		},
 	}
 
@@ -400,6 +466,26 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 		else
 			return string.format("Score: %d\n%dMon × %dPts\n%s", score or 0, mons or 0, pts or 0, rolesText or "Roles: --")
 		end
+	end
+
+	-- リロール残の反映とボタン活性制御（外部のStatePushハンドラから呼ぶ）
+	refs.setRerollCounts = function(fieldLeft:number?, handLeft:number?, phase:string?)
+		local f = tonumber(fieldLeft or 0) or 0
+		local h = tonumber(handLeft  or 0) or 0
+		if refs.counters and refs.counters.rerollField then refs.counters.rerollField.Text = tostring(f) end
+		if refs.counters and refs.counters.rerollHand  then refs.counters.rerollHand.Text  = tostring(h) end
+
+		local isPlay = (phase == nil) or (phase == "play")
+		local function applyBtn(btn: TextButton?, left:number)
+			if not btn then return end
+			local enabled = isPlay and (left > 0)
+			btn.Active = enabled
+			btn.AutoButtonColor = enabled
+			btn.TextTransparency = enabled and 0 or 0.5
+			btn.BackgroundTransparency = enabled and 0 or 0.2
+		end
+		applyBtn(refs.buttons.rerollAll,  f)
+		applyBtn(refs.buttons.rerollHand, h)
 	end
 
 	-- 後片付け用

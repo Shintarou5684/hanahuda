@@ -14,6 +14,7 @@
 --              ＋ 酉UI用 Remotes（KitoPickStart/KitoPickDecide）を正式に生やす
 --  - ★ v0.9.3-fix: ShopDone 時に DeckRegistry の最新スナップショットを次シーズンへ明示伝播
 --                  （変更されたデッキを直後のシーズンで必ず使用）
+--  - ★ v0.9.3-reroll-hooks: 場/手リロールの初期化フックを追加（挙動は従来どおり）
 
 -- ServerScriptService/GameInit.server.lua
 -- （前略：ヘッダコメントは省略）
@@ -112,7 +113,7 @@ local Balance do
 	local ok, mod = pcall(function()
 		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
 	end)
-	Balance = ok and mod or { STAGE_START_MONTH = 1 }
+	Balance = ok and mod or { STAGE_START_MONTH = 1, REROLL_FIELD_INIT = 5, REROLL_HAND_INIT = 3 }
 end
 
 local function bootstrapEffects()
@@ -214,6 +215,63 @@ NavServer.init({
 	DecideNext  = Remotes.DecideNext,
 })
 
+-- ────────────────────────────────────────────────────────────
+-- ★ ここから：リロール（場/手）— フック（今は挙動を変えない）
+-- ────────────────────────────────────────────────────────────
+
+-- 旧データ移行：単一カウンタや hand-only を新構造へ寄せる
+local function initOrMigrateReroll(s:any)
+	s.run = s.run or {}
+	if type(s.run.reroll) == "number" then
+		s.run.reroll = {
+			field = tonumber(s.run.reroll) or Balance.REROLL_FIELD_INIT,
+			hand  = Balance.REROLL_HAND_INIT,
+		}
+	end
+	if type(s.run.hand) == "number" then
+		local prevHand = tonumber(s.run.hand) or Balance.REROLL_HAND_INIT
+		s.run.reroll = {
+			field = Balance.REROLL_FIELD_INIT,
+			hand  = prevHand,
+		}
+		s.run.hand = nil
+	end
+	if type(s.run.reroll) ~= "table"
+		or type(s.run.reroll.field) ~= "number"
+		or type(s.run.reroll.hand)  ~= "number" then
+		s.run.reroll = {
+			field = Balance.REROLL_FIELD_INIT,
+			hand  = Balance.REROLL_HAND_INIT,
+		}
+	end
+end
+
+-- 将来実装用：装備/実績のボーナス合算フック（現状は常に 0,0 を返す）
+local function __sumRerollBonusesStub(s:any, Balance:any)
+	-- 例：s.equip.omamori / s.unlocks.achievements を見て
+	--     Balance.OMAMORI_REROLL_BONUS / ACHIEVE_REROLL_BONUS を加算、など
+	return 0, 0
+end
+
+-- ラウンド開始時の初期回数をセット（現状は base=5/3 のまま）
+local function initRerollForNewRound(plr: Player, s:any)
+	initOrMigrateReroll(s)
+
+	local baseField = Balance.REROLL_FIELD_INIT or 5
+	local baseHand  = Balance.REROLL_HAND_INIT  or 3
+
+	local addField, addHand = __sumRerollBonusesStub(s, Balance) -- いまは 0,0
+	local maxField = Balance.REROLL_FIELD_MAX or math.huge
+	local maxHand  = Balance.REROLL_HAND_MAX  or math.huge
+
+	s.run.reroll.field = math.min(maxField, baseField + addField)
+	s.run.reroll.hand  = math.min(maxHand,  baseHand  + addHand)
+
+	StateHub.set(plr, s)
+end
+
+-- ────────────────────────────────────────────────────────────
+
 Players.PlayerAdded:Connect(function(plr)
 	LOG.info("PlayerAdded | begin load profile | user=%s userId=%d", plr.Name, plr.UserId)
 
@@ -294,7 +352,9 @@ local function startNewRun(plr)
 	s.run = s.run or {}
 	s.run.month = (Balance and Balance.STAGE_START_MONTH) or 1
 	-- ★季節は保持しない（UI/状態から削除）。必要時のみ month→season を都度計算。
-	StateHub.set(plr, s)
+
+	-- ★ リロール初期化（将来のボーナス合算フック込み／現状は 5/3 のまま）
+	initRerollForNewRound(plr, s)
 
 	Round.resetRun(plr)
 	fireReadySoon(plr)
@@ -313,6 +373,15 @@ local function continueFromSnapshot(plr, snap:any)
 	else
 		s.run.month = s.run.month or (Balance and Balance.STAGE_START_MONTH) or 1
 	end
+
+	-- ★ スナップに reroll があれば尊重、無ければ初期化（5/3）
+	if typeof(snap) == "table" and typeof(snap.reroll) == "table"
+		and type(snap.reroll.field) == "number" and type(snap.reroll.hand) == "number" then
+		s.run.reroll = { field = snap.reroll.field, hand = snap.reroll.hand }
+	else
+		initRerollForNewRound(plr, s)
+	end
+
 	StateHub.set(plr, s)
 
 	local seasonForRound = monthToSeason(s.run.month)
@@ -390,6 +459,9 @@ Remotes.ShopDone.OnServerEvent:Connect(function(plr: Player)
 	s.lastScore = nil
 	s.phase     = "play"
 	LOG.info("[ShopDone] month++ | user=%s %d -> %d", plr.Name, prevMonth, nextMonth)
+
+	-- ★ 次ラウンド開始時にリロール回数を初期化（現状は 5/3）
+	initRerollForNewRound(plr, s)
 
 	local nextSeasonForRound = monthToSeason(nextMonth)
 	local opts = deckSnapForNext and { deckSnapshot = deckSnapForNext } or nil

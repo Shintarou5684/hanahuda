@@ -1,7 +1,8 @@
 -- ReplicatedStorage/SharedModules/StateHub.lua
 -- サーバ専用：プレイヤー状態を一元管理し、Remotes経由でクライアントへ送信する
 -- 12-month版：StatePushは month/goal を正とし、season/seasonStr は送信しない
--- さらに過去版の計測ログ／Scoring／RunDeckUtil連携など有用部分は維持／統合
+-- ★ Reroll 統一（SSOT）：rerollFieldLeft / rerollHandLeft を唯一の真実とする
+--    旧フィールド（handsLeft / rerollsLeft）には一切依存しない・送らない
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -30,13 +31,16 @@ local StateHub = {}
 export type PlrState = {
 	deck: {any}?, hand: {any}?, board: {any}?, taken: {any}?, dump: {any}?,
 
-	handsLeft: number?, rerollsLeft: number?,
-	seasonSum: number?,  -- 12ヶ月制でもUI表示で使う合計は残す
+	-- ▼ 新：場/手で明確に分離（唯一の真実）
+	rerollFieldLeft: number?,    -- 全体/場リロール残数（正）
+	rerollHandLeft:  number?,    -- 手札リロール残数（正）
+
+	seasonSum: number?,  -- UI表示用の合計
 	chainCount: number?, -- 連続役数（倍率表示用）
 	mult: number?,       -- 表示用倍率
 
 	bank: number?,       -- 両（周回通貨）
-	mon: number?,        -- 文（季節通貨的。用語はそのまま）
+	mon: number?,        -- 文（季節通貨）
 
 	phase: string?,      -- "play" / "shop" / "result" / "home"
 	year: number?,       -- 周回年数
@@ -45,7 +49,7 @@ export type PlrState = {
 	lang: string?,       -- "ja"/"en"
 	lastScore: any?,     -- 任意デバッグ
 
-	run: any?,           -- { month=number, talisman=?, ... }
+	run: any?,           -- { month=number, reroll={field,hand}, talisman=?, ... }
 	goal: number?,       -- 月ごとの目標（数値）
 }
 
@@ -112,10 +116,37 @@ function StateHub.set(plr: Player, s: PlrState) stateByPlr[plr] = s end
 function StateHub.clear(plr: Player) stateByPlr[plr] = nil end
 function StateHub.exists(plr: Player): boolean return stateByPlr[plr] ~= nil end
 
+--========================================
+-- リロール補完：run.reroll から新フィールドを復元
+--========================================
+local function ensureRerollFields(s: PlrState)
+	-- run.reroll から補完（SSOTを守る：旧 handsLeft/rerollsLeft には触れない）
+	if s.run and typeof(s.run.reroll)=="table" then
+		local rr = s.run.reroll
+		if s.rerollFieldLeft == nil and type(rr.field)=="number" then
+			s.rerollFieldLeft = rr.field
+		end
+		if s.rerollHandLeft == nil and type(rr.hand)=="number" then
+			s.rerollHandLeft = rr.hand
+		end
+	end
+
+	-- 既定値（0 クランプ）
+	s.rerollFieldLeft = tonumber(s.rerollFieldLeft or 0) or 0
+	s.rerollHandLeft  = tonumber(s.rerollHandLeft  or 0) or 0
+
+	-- run.reroll にも正の数値を反映（保存系がこちらを読む想定）
+	s.run = s.run or {}
+	s.run.reroll = s.run.reroll or {}
+	s.run.reroll.field = s.rerollFieldLeft
+	s.run.reroll.hand  = s.rerollHandLeft
+end
+
 -- サーバ内ユーティリティ：欠損プロパティの安全な既定値
 local function ensureDefaults(s: PlrState)
-	s.handsLeft   = s.handsLeft or 0
-	s.rerollsLeft = s.rerollsLeft or 0
+	-- リロール（SSOT）を最初に整える
+	ensureRerollFields(s)
+
 	s.seasonSum   = s.seasonSum or 0
 	s.chainCount  = s.chainCount or 0
 	s.mult        = s.mult or 1.0
@@ -202,11 +233,12 @@ function StateHub.pushState(plr: Player)
 				month       = m,
 				monthStr    = monthName(m),
 				goal        = g,
-				target      = g, -- 旧互換が必要なら同値を置く（UI側で未使用なら無視される）
+				target      = g, -- 旧互換が必要なら同値を置く（UI側で未使用なら無視）
 
-				-- 残り系/表示
-				hands       = s.handsLeft or 0,
-				rerolls     = s.rerollsLeft or 0,
+				-- ▼ 残り系（SSOT：新キーのみ）
+				rerollFieldLeft = s.rerollFieldLeft or 0,
+				rerollHandLeft  = s.rerollHandLeft  or 0,
+
 				sum         = s.seasonSum or 0,
 				mult        = s.mult or 1.0,
 				bank        = s.bank or 0,
@@ -221,7 +253,13 @@ function StateHub.pushState(plr: Player)
 				matsuri     = matsuriLevels,
 
 				-- Run 側のスナップショット（護符ボード等のUI用）
-				run         = { talisman = (s.run and s.run.talisman) or nil },
+				run         = {
+					talisman = (s.run and s.run.talisman) or nil,
+					reroll   = {
+						field = s.rerollFieldLeft or 0,
+						hand  = s.rerollHandLeft  or 0,
+					},
+				},
 
 				-- 山/手の残枚数（UIの安全表示用）
 				deckLeft    = deckN,

@@ -226,4 +226,85 @@ ShopDefs.POOLS = {
 	},
 }
 
+----------------------------------------------------------------
+-- 追加：互換ID → 正規(DOT)ID へ正規化（KITO専用の“揺らぎ吸収”）
+--  - KitoAssets は「kito.<animal>...」のみ受理するため、ここで必ず正規化する
+--  - 非KITO（sai_*, spectral_* 等）は入力をそのまま返す
+----------------------------------------------------------------
+function ShopDefs.toCanonicalEffectId(id) --: string
+	if type(id) ~= "string" or id == "" then return "" end
+	local s = id
+
+	-- 正規（kito. で始まる）ならそのまま
+	if s:match("^kito%.") then
+		return s
+	end
+
+	-- 比較を楽にするため前処理
+	local key = s:lower()
+	key = key:gsub("%s+", "")           -- 空白除去
+	key = key:gsub("\\", "/")           -- 区切り正規化
+	key = key:gsub("%.luau?$", "")      -- 拡張子除去（.lua/.luau）
+	key = key:gsub("^modules?/", "")    -- パスの先頭ノイズ除去
+	key = key:gsub("^effects?/", "")
+	key = key:gsub("^kito/", "")
+	key = key:gsub("^kito_", "kito.")   -- 先頭の kito_ → kito.
+
+	-- 代表的な旧名/別名のマップ（必要に応じて随時追加）
+	local ALIAS = {
+		-- 変換系
+		["kito_tori_brighten"] = "kito.tori_brighten",
+		["tori_brighten"]      = "kito.tori_brighten",
+		["tori.brighten"]      = "kito.tori_brighten",
+
+		["kito_mi_venom"]      = "kito.mi_venom",
+		["mi_venom"]           = "kito.mi_venom",
+
+		["kito_uma_seed"]      = "kito.uma_seed",
+		["uma_seed"]           = "kito.uma_seed",
+
+		["kito_inu_chaff2"]    = "kito.inu_chaff2",
+		["inu_chaff2"]         = "kito.inu_chaff2",
+		["kito_inu_two_chaff"] = "kito.inu_chaff2",
+
+		["kito_i_sake"]        = "kito.i_sake",
+		["i_sake"]             = "kito.i_sake",
+
+		["kito_hitsuji_prune"] = "kito.hitsuji_prune",
+		["hitsuji_prune"]      = "kito.hitsuji_prune",
+
+		["kito_tatsu_copy"]    = "kito.tatsu_copy",
+		["tatsu_copy"]         = "kito.tatsu_copy",
+
+		["kito_usagi_ribbon"]  = "kito.usagi_ribbon",
+		["usagi_ribbon"]       = "kito.usagi_ribbon",
+
+		-- 常駐系
+		["kito_tora"]          = "kito.tora",
+		["tora"]               = "kito.tora",
+		["kito_ushi"]          = "kito.ushi",
+		["ushi"]               = "kito.ushi",
+		["kito_ko"]            = "kito.ko",
+		["ko"]                 = "kito.ko",
+	}
+
+	if ALIAS[key] then
+		return ALIAS[key]
+	end
+
+	-- ここまでで確定できなければ一般形で正規化
+	-- 1) アンダースコア → ドット
+	key = key:gsub("_", ".")
+
+	-- 2) kito. 接頭辞が無ければ付ける（動物名から始まるケースを包含）
+	if not key:find("^kito%.") then
+		key = "kito." .. key
+	end
+
+	-- 3) ドットの連続は1つに圧縮
+	key = key:gsub("%.%.+", ".")
+
+	return key
+end
+
 return ShopDefs

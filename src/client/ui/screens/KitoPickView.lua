@@ -7,6 +7,7 @@
 --   - 送信前にもクライアント側で eligible を再確認（多重タップ/競合のガード）。
 -- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
 -- ★ P1-7: ShopDefs から祈祷名と説明を引いて上部に表示
+-- ★ 追加: 正規 effectId="kito.<animal>..." から干支アイコンをヘッダに表示（揺らぎ非対応）
 
 local Players    = game:GetService("Players")
 local RS         = game:GetService("ReplicatedStorage")
@@ -35,11 +36,25 @@ pcall(function()
 	end
 end)
 
+-- ★ 干支アイコン正本（厳格: kito.<animal> のみ受理）
+local KitoAssets do
+	local ok, mod = pcall(function()
+		-- 本ファイルは "src/client/ui/screens" 配下にあるため、ui/lib へは Parent.Parent.lib で到達
+		return require(script.Parent.Parent:WaitForChild("lib"):WaitForChild("KitoAssets"))
+	end)
+	KitoAssets = ok and mod or nil
+	if not KitoAssets then
+		LOG.warn("KitoAssets not found; header icon will be disabled")
+	end
+end
+
 -- ★ ShopDefs（祈祷の name/desc を引くため）
 local okDefs, ShopDefs = pcall(function()
 	return require(RS:WaitForChild("SharedModules"):WaitForChild("ShopDefs"))
 end)
 
+-- （注）ShopDefs参照は既存互換のまま。effectIdの揺らぎはここでは緩く吸収しているが、
+-- 干支アイコン表示は KitoAssets.getIcon により厳格（kito.<animal> のみ）で行う。
 local function _normId(id)
 	if not id then return nil end
 	id = tostring(id)
@@ -167,7 +182,18 @@ local function ensureGui()
 		Size                   = UDim2.new(1, 0, 0, 28),
 	}, panel)
 
-	-- ★ 祈祷名（大きめ・太字）
+	-- ★ 干支アイコン（ヘッダ左上に常設 / 初期は非表示）
+	local headerIcon = make("KitoIcon","ImageLabel",{
+		Image                  = "",
+		BackgroundTransparency = 1,
+		Size                   = UDim2.fromOffset(44,44),
+		Position               = UDim2.new(0, 0, 0, 28+2), -- タイトルの下
+		Visible                = false,
+		ScaleType              = Enum.ScaleType.Fit,
+		ZIndex                 = 2,
+	}, panel)
+
+	-- ★ 祈祷名（大きめ・太字）— アイコン右に寄せる
 	local kitoName = make("KitoName","TextLabel",{
 		Text                   = "",
 		Font                   = Enum.Font.GothamBold,
@@ -175,7 +201,7 @@ local function ensureGui()
 		TextColor3             = Color3.fromRGB(236,236,246),
 		BackgroundTransparency = 1,
 		Size                   = UDim2.new(1, 0, 0, 22),
-		Position               = UDim2.new(0, 0, 0, 28+2),
+		Position               = UDim2.new(0, 44 + 8, 0, 28+2), -- アイコン幅44 + 余白8
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, panel)
 
@@ -268,6 +294,7 @@ local function ensureGui()
 	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, confirm)
 
 	-- 参照
+	refs.headerIcon = headerIcon
 	refs.kitoName   = kitoName
 	refs.effect     = effect
 	refs.gridHolder = gridHolder
@@ -583,6 +610,30 @@ local function openPayload(payload)
 		local item = findKitoByEffectId(current.effectId or payload.effect)
 		if refs.kitoName then
 			refs.kitoName.Text = item and tostring(item.name or "") or ""
+		end
+	end
+
+	-- ★ 干支アイコン（厳格：kito.<animal> のみ）
+	do
+		local icon = nil
+		if KitoAssets then
+			local eff = tostring(current.effectId or payload.effect or "")
+			-- 追加：互換IDを正規（DOT形式）へ
+			local canon = eff
+			if okDefs and ShopDefs and type(ShopDefs.toCanonicalEffectId) == "function" then
+				local okc, res = pcall(ShopDefs.toCanonicalEffectId, eff)
+				canon = okc and (res or eff) or eff
+			end
+			icon = KitoAssets.getIcon(canon) -- 揺らぎ非対応（kito.<animal>...）
+		end
+		if refs.headerIcon then
+			if icon and icon ~= "" then
+				refs.headerIcon.Image = icon
+				refs.headerIcon.Visible = true
+			else
+				refs.headerIcon.Image = ""
+				refs.headerIcon.Visible = false
+			end
 		end
 	end
 

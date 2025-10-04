@@ -1,12 +1,15 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-9
---  - StageResult の互換受信を強化（{close=true} / (true,data) / data 単体の全対応）
---  - Home等への遷移後にリザルトが残留しないよう、show() 冒頭で明示的に hide / _resultShown リセット
---  - 既存機能・UIは維持
+-- v0.9.7-P2-12
+--  - 公開フック：onState/onHand/onField/onTaken/onScore/onStageResult
+--  - StageResult の互換受信（{close=true} / (true,data) / data 単体）
+--  - Home等への遷移後にリザルト残留防止（show() 冒頭で hide / _resultShown リセット）
 --  - [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
---  - 監視用ログを追加（[LOG] マーク）
---  - ★ サーバ確定の talisman をそのまま描画（クライアントで補完/推測しない）
---  - ★ 追加：ラン放棄（あきらめる）ボタン配線と確認モーダル
+--  - 監視用ログ（[LOG]）
+--  - talisman はサーバ確定値のみ描画（推測しない）
+--  - ラン放棄（あきらめる）ボタン＋確認モーダル
+--  - Router.call 対応の公開メソッド群
+--  - setRerollCounts(field, hand, phase) 実装（ScreenRouter.StatePush フックに対応）
+--  - ★ 情報パネルを簡素化（年/月・所持金・山札のみ表示）
 
 local Run = {}
 Run.__index = Run
@@ -79,7 +82,7 @@ local function safeGetGlobalLang()
 end
 
 --==================================================
--- 追加：小さな翻訳ヘルパ（フォールバック付き）
+-- 小さな翻訳ヘルパ（フォールバック付き）
 --==================================================
 local function T(lang, key, jaFallback, enFallback)
 	local txt = nil
@@ -89,6 +92,25 @@ local function T(lang, key, jaFallback, enFallback)
 	end
 	if (lang == "ja") then return jaFallback end
 	return enFallback
+end
+
+--==================================================
+-- 情報パネル：シンプル表示（年/月・所持金・山札）
+--==================================================
+local function simpleInfoText(st, lang)
+	-- StatePush 由来の最小セットを安全に読む
+	local year     = tonumber(st and st.year) or 0
+	local month    = tonumber(st and st.month) or 1
+	local mon      = tonumber(st and st.mon) or 0
+	local deckLeft = tonumber(st and st.deckLeft) or 0
+
+	if lang == "ja" then
+		-- 例）1000年　1月\n所持金：0文\n山札：35枚
+		return string.format("%d年　%d月\n所持金：%d文\n山札：%d枚", year, month, mon, deckLeft)
+	else
+		-- 例）Year 1000  Month 1\nCash: 0 Mon\nDeck: 35 cards
+		return string.format("Year %d  Month %d\nCash: %d Mon\nDeck: %d cards", year, month, mon, deckLeft)
+	end
 end
 
 --==================================================
@@ -102,7 +124,7 @@ function Run.new(deps)
 	self._resultShown = false
 	self._langConn = nil
 
-	-- 言語初期値（安全取得 → Locale.pick() → "en"）※"jp" は "ja" に正規化
+	-- 言語初期値
 	local initialLang = safeGetGlobalLang()
 	if not initialLang then
 		if type(Locale.pick) == "function" then
@@ -150,14 +172,9 @@ function Run.new(deps)
 					self.deps.DecideNext:FireServer("home")
 				end
 			end,
-			next  = function()
+			koikoi  = function()
 				if self.deps and self.deps.DecideNext then
 					self.deps.DecideNext:FireServer("next")
-				end
-			end,
-			save  = function()
-				if self.deps and self.deps.DecideNext then
-					self.deps.DecideNext:FireServer("save")
 				end
 			end,
 			final = function()
@@ -242,8 +259,13 @@ function Run.new(deps)
 
 	-- 内部状態
 	self._selectedHandIdx = nil
+	-- ▼ リロール残（Routerの StatePush フック/初期 onState 同期に使う）
+	self._rerollFieldLeft = 0
+	self._rerollHandLeft  = 0
 
-	-- レンダラー適用
+	--========================
+	-- レンダラー適用（内部ローカル関数）
+	--========================
 	local function renderHand(hand)
 		HandRenderer.render(self.handArea, hand, {
 			selectedIndex = self._selectedHandIdx,
@@ -298,9 +320,12 @@ function Run.new(deps)
 			tostring(tot), tostring(mon), tostring(pts), #roles) -- [LOG]
 	end
 
+	--========================
 	-- 状態更新
+	--========================
 	local function onState(st)
-		self.info.Text = Format.stateLineText(st, self._lang) or ""
+		-- ★ 情報パネル：簡素表示に統一
+		self.info.Text = simpleInfoText(st, self._lang) or ""
 
 		if self.goalText then
 			local g = (typeof(st) == "table") and tonumber(st.goal) or nil
@@ -315,7 +340,7 @@ function Run.new(deps)
 			})
 		end
 
-		-- [FIX-S1] StatePush から護符を即時反映（nilなら何もしない）
+		-- [FIX-S1] 護符を即時反映
 		if self._taliBoard
 			and typeof(st) == "table"
 			and typeof(st.run) == "table"
@@ -328,6 +353,11 @@ function Run.new(deps)
 			LOG.info("state:talisman applied | unlocked=%d slots#=%d", u, cnt) -- [LOG]
 		else
 			LOG.debug("state:talisman not present (skipped)") -- [LOG]
+		end
+
+		-- 残回数のUI即時反映（Router.StatePush フックと同挙動）
+		if typeof(st) == "table" then
+			self:setRerollCounts(st.rerollFieldLeft, st.rerollHandLeft, st.phase)
 		end
 
 		if self._awaitingInitial then
@@ -372,25 +402,22 @@ function Run.new(deps)
 			if typeof(data.ops.save) == "table" then canSave = (data.ops.save.enabled == true) end
 		end
 
-		local nextLocked, saveLocked
+		local nextLocked
 		if typeof(data.locks) == "table" then
 			if typeof(data.locks.nextLocked) == "boolean" then nextLocked = data.locks.nextLocked end
-			if typeof(data.locks.saveLocked) == "boolean" then saveLocked = data.locks.saveLocked end
 		end
 		if nextLocked == nil and canNext ~= nil then nextLocked = (canNext ~= true) end
-		if saveLocked == nil and canSave ~= nil then saveLocked = (canSave ~= true) end
 
 		-- 通算クリア >=3 は強制開放
 		local clears = tonumber(data.clears) or 0
 		if clears >= 3 then
-			nextLocked, saveLocked = false, false
-			canNext, canSave = true, true
+			nextLocked = false
 		end
 
-		LOG.info("result:show | nextLocked=%s saveLocked=%s clears=%d",
-			tostring(nextLocked), tostring(saveLocked), clears) -- [LOG]
+		LOG.info("result:show | nextLocked=%s clears=%d",
+			tostring(nextLocked), clears) -- [LOG]
 
-		local isFinalView = (nextLocked == true and saveLocked == true)
+		local isFinalView = (nextLocked == true)
 		if isFinalView then
 			local lang = self._lang or "en"
 			local ttl  = Locale.t(lang, "RESULT_FINAL_TITLE")
@@ -413,7 +440,7 @@ function Run.new(deps)
 		end
 
 		self._resultModal:show(data)
-		self._resultModal:setLocked(nextLocked == true, saveLocked == true)
+		self._resultModal:setLocked(nextLocked == true)
 	end
 
 	--========================
@@ -564,7 +591,7 @@ function Run.new(deps)
 				if DecideNext then
 					DecideNext:FireServer("abandon")
 				else
-					-- フォールバック（依存注入なしでも動く）
+					-- フォールバック
 					local rem = RS:FindFirstChild("Remotes")
 					local ev  = rem and rem:FindFirstChild("DecideNext")
 					if ev and ev:IsA("RemoteEvent") then
@@ -587,6 +614,16 @@ function Run.new(deps)
 		onStageResult = onStageResult,
 	})
 
+	--===========
+	-- 公開API（Router.call 直叩き用）
+	--===========
+	self.onHand        = function(_, hand)   renderHand(hand) end
+	self.onField       = function(_, field)  renderField(field) end
+	self.onTaken       = function(_, taken)  renderTaken(taken) end
+	self.onScore       = function(_, total, roles, detail) onScore(total, roles, detail) end
+	self.onState       = function(_, st)     onState(st) end
+	self.onStageResult = function(_, a, b, c, d, e) onStageResult(a, b, c, d, e) end
+
 	-- 言語変更イベント購読
 	if typeof(Locale.changed) == "RBXScriptSignal" then
 		self._langConn = Locale.changed:Connect(function(newLang)
@@ -598,7 +635,101 @@ function Run.new(deps)
 	return self
 end
 
+--==================================================
+-- リロール残のUI反映（左側カウンタラベルを優先して更新）
+--==================================================
+-- ラベル解決（ui.buttons に rerollAllCount / rerollHandCount があれば優先。
+-- 無ければボタンの兄弟から「Count」っぽい TextLabel を探索）
+local function _resolveCountLabels(self)
+	if self._resolvedCounterRefs then return self._resolvedCounterRefs end
+
+	local refs = { field = nil, hand = nil }
+
+	local function pickNearbyCountLabel(btn, preferName)
+		if not (btn and btn.Parent) then return nil end
+		-- 1) 名前直指定
+		if preferName and btn.Parent:FindFirstChild(preferName) then
+			local n = btn.Parent:FindFirstChild(preferName)
+			if n:IsA("TextLabel") then return n end
+		end
+		-- 2) 同じ親内の TextLabel から “All/Hand/Count” を含むものを当てる
+		for _, ch in ipairs(btn.Parent:GetChildren()) do
+			if ch ~= btn and ch:IsA("TextLabel") then
+				local nm = string.lower(ch.Name)
+				if string.find(nm, "count") or string.find(nm, "reroll") then
+					return ch
+				end
+			end
+		end
+		return nil
+	end
+
+	local b = self.buttons or {}
+	-- UIBuilder で参照が出ている場合（推奨）
+	if typeof(b.rerollAllCount) == "Instance" and b.rerollAllCount:IsA("TextLabel") then
+		refs.field = b.rerollAllCount
+	end
+	if typeof(b.rerollHandCount) == "Instance" and b.rerollHandCount:IsA("TextLabel") then
+		refs.hand = b.rerollHandCount
+	end
+
+	-- 無ければ探索
+	if not refs.field and b.rerollAll then
+		refs.field = pickNearbyCountLabel(b.rerollAll, "RerollAllCount")
+	end
+	if not refs.hand and b.rerollHand then
+		refs.hand  = pickNearbyCountLabel(b.rerollHand, "RerollHandCount")
+	end
+
+	self._resolvedCounterRefs = refs
+	return refs
+end
+
+function Run:setRerollCounts(fieldLeft: number?, handLeft: number?, phase: string?)
+	local f = tonumber(fieldLeft or self._rerollFieldLeft or 0) or 0
+	local h = tonumber(handLeft  or self._rerollHandLeft  or 0) or 0
+	self._rerollFieldLeft = f
+	self._rerollHandLeft  = h
+
+	-- ラベル解決
+	local refs = _resolveCountLabels(self)
+	local fieldLabel = refs.field
+	local handLabel  = refs.hand
+
+	-- カウンタラベルに反映（存在する場合）
+	if fieldLabel then
+		fieldLabel.Text = tostring(f)
+		fieldLabel.TextTransparency = (f > 0) and 0 or 0.3
+		if fieldLabel:FindFirstChildOfClass("UIStroke") then
+			fieldLabel.UIStroke.Transparency = (f > 0) and 0 or 0.3
+		end
+	end
+	if handLabel then
+		handLabel.Text = tostring(h)
+		handLabel.TextTransparency = (h > 0) and 0 or 0.3
+		if handLabel:FindFirstChildOfClass("UIStroke") then
+			handLabel.UIStroke.Transparency = (h > 0) and 0 or 0.3
+		end
+	end
+
+	-- ボタンの有効/無効だけ制御
+	local b = self.buttons
+	if b and b.rerollAll and b.rerollAll:IsA("TextButton") then
+		b.rerollAll.AutoButtonColor = f > 0
+		b.rerollAll.Active = (f > 0)
+	end
+	if b and b.rerollHand and b.rerollHand:IsA("TextButton") then
+		b.rerollHand.AutoButtonColor = h > 0
+		b.rerollHand.Active = (h > 0)
+	end
+
+	LOG.debug("rerollCounts:update (labels) | field=%d hand=%d", f, h) -- [LOG]
+end
+
+
+--==================================================
 -- 言語切替
+--==================================================
 function Run:setLang(lang)
 	local n = normLangJa(lang)
 	if n ~= "ja" and n ~= "en" then
@@ -667,9 +798,11 @@ function Run:show(payload)
 	end
 
 	self.frame.Visible = true
-	self._remotes:disconnect()
-	LOG.debug("remotes:connect") -- [LOG]
-	self._remotes:connect()
+	if self._remotes then
+		self._remotes:disconnect()
+		LOG.debug("remotes:connect") -- [LOG]
+		self._remotes:connect()
+	end
 end
 
 function Run:requestSync()
@@ -684,13 +817,13 @@ function Run:hide()
 	self.frame.Visible = false
 	self:_closeGiveUpOverlay()
 	LOG.debug("remotes:disconnect (hide)") -- [LOG]
-	self._remotes:disconnect()
+	if self._remotes then self._remotes:disconnect() end
 end
 
 function Run:destroy()
 	LOG.debug("destroy:disconnect remotes & langConn, destroy gui") -- [LOG]
 	self:_closeGiveUpOverlay()
-	self._remotes:disconnect()
+	if self._remotes then self._remotes:disconnect() end
 	if self._langConn then self._langConn:Disconnect() end
 	if self.gui then self.gui:Destroy() end
 end
