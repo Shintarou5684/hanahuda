@@ -1,6 +1,7 @@
 -- StarterPlayerScripts/UI/components/renderers/ShopRenderer.lua
--- v0.9.SIMPLE-10 (diag logging)
+-- v0.9.SIMPLE-11 (diag logging fix)
 --  - 可視0時のダンプ、通常時の items→vis サマリを INFO で出力
+--  - ★ 修正: KITO 入口ログを “it” が有効なスコープ（for ループ内）へ配置し UnknownGlobal を解消
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
@@ -40,11 +41,11 @@ function M.render(self)
 	if not nodes then return end
 
 	--=== Payload 正規化 ===
-	local p       = self._payload or {}
-	local items   = p.items or p.stock or {}
-	local lang    = ShopFormat.normLang(p.lang) or "en"
-	local mon     = tonumber(p.mon or p.totalMon or 0) or 0
-	local rerollCost = tonumber(p.rerollCost or 1) or 1
+	local p         = self._payload or {}
+	local items     = p.items or p.stock or {}
+	local lang      = ShopFormat.normLang(p.lang) or "en"
+	local mon       = tonumber(p.mon or p.totalMon or 0) or 0
+	local rerollCost= tonumber(p.rerollCost or 1) or 1
 
 	--=== 護符ボード（初回マウント） ===
 	if nodes.taliArea and not self._taliBoard then
@@ -70,6 +71,12 @@ function M.render(self)
 	--=== 一時 SoldOut フィルタ ===
 	local vis, hiddenList = {}, {}
 	for _, it in ipairs(items) do
+		-- ★ KITO 入力ログは “it” が存在するこのループ内に置く（UnknownGlobal 修正）
+		if typeof(it) == "table" and tostring(it.category) == "kito" then
+			LOG.info("[kito][in] id=%s effect(raw)=%s name=%s",
+				tostring(it.id or "?"), tostring(it.effect or "<nil>"), tostring(it.name or ""))
+		end
+
 		local id = it and it.id
 		local hidden = false
 		if typeof(self.isItemHidden) == "function" then
@@ -164,7 +171,10 @@ function M.render(self)
 	-- セル配置（先頭3件だけ INFO）
 	for i, it in ipairs(vis) do
 		ShopCells.create(scroll, nodes, it, lang, mon, { onBuy = onBuy })
-		if i <= 3 then LOG.info("cell create #%d | id=%s cat=%s price=%s", i, _id(it), tostring(it and it.category or "?"), tostring(it and it.price or "?")) end
+		if i <= 3 then
+			LOG.info("cell create #%d | id=%s cat=%s price=%s",
+				i, _id(it), tostring(it and it.category or "?"), tostring(it and it.price or "?"))
+		end
 	end
 
 	-- CanvasSize
