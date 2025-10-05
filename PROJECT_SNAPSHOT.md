@@ -1,7 +1,7 @@
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-05 03:58:14
+- Generated: 2025-10-05 19:04:22
 - Max lines/file: 300
 
 ## Folder Tree
@@ -891,7 +891,7 @@ rojo = "rojo-rbx/rojo@7.4.0"
 # Project Snapshot
 
 - Root: `C:\Users\msk_7\Documents\Roblox\hanahuda`
-- Generated: 2025-10-05 03:58:14
+- Generated: 2025-10-05 19:04:22
 - Max lines/file: 300
 
 ## Folder Tree
@@ -2767,8 +2767,9 @@ return M
 ### src/client/ui/components/renderers/ShopRenderer.lua
 ```lua
 -- StarterPlayerScripts/UI/components/renderers/ShopRenderer.lua
--- v0.9.SIMPLE-10 (diag logging)
+-- v0.9.SIMPLE-11 (diag logging fix)
 --  - 可視0時のダンプ、通常時の items→vis サマリを INFO で出力
+--  - ★ 修正: KITO 入口ログを “it” が有効なスコープ（for ループ内）へ配置し UnknownGlobal を解消
 
 local RS = game:GetService("ReplicatedStorage")
 local SharedModules = RS:WaitForChild("SharedModules")
@@ -2808,11 +2809,11 @@ function M.render(self)
 	if not nodes then return end
 
 	--=== Payload 正規化 ===
-	local p       = self._payload or {}
-	local items   = p.items or p.stock or {}
-	local lang    = ShopFormat.normLang(p.lang) or "en"
-	local mon     = tonumber(p.mon or p.totalMon or 0) or 0
-	local rerollCost = tonumber(p.rerollCost or 1) or 1
+	local p         = self._payload or {}
+	local items     = p.items or p.stock or {}
+	local lang      = ShopFormat.normLang(p.lang) or "en"
+	local mon       = tonumber(p.mon or p.totalMon or 0) or 0
+	local rerollCost= tonumber(p.rerollCost or 1) or 1
 
 	--=== 護符ボード（初回マウント） ===
 	if nodes.taliArea and not self._taliBoard then
@@ -2838,6 +2839,12 @@ function M.render(self)
 	--=== 一時 SoldOut フィルタ ===
 	local vis, hiddenList = {}, {}
 	for _, it in ipairs(items) do
+		-- ★ KITO 入力ログは “it” が存在するこのループ内に置く（UnknownGlobal 修正）
+		if typeof(it) == "table" and tostring(it.category) == "kito" then
+			LOG.info("[kito][in] id=%s effect(raw)=%s name=%s",
+				tostring(it.id or "?"), tostring(it.effect or "<nil>"), tostring(it.name or ""))
+		end
+
 		local id = it and it.id
 		local hidden = false
 		if typeof(self.isItemHidden) == "function" then
@@ -2932,7 +2939,10 @@ function M.render(self)
 	-- セル配置（先頭3件だけ INFO）
 	for i, it in ipairs(vis) do
 		ShopCells.create(scroll, nodes, it, lang, mon, { onBuy = onBuy })
-		if i <= 3 then LOG.info("cell create #%d | id=%s cat=%s price=%s", i, _id(it), tostring(it and it.category or "?"), tostring(it and it.price or "?")) end
+		if i <= 3 then
+			LOG.info("cell create #%d | id=%s cat=%s price=%s",
+				i, _id(it), tostring(it and it.category or "?"), tostring(it and it.price or "?"))
+		end
 	end
 
 	-- CanvasSize
@@ -3530,12 +3540,10 @@ function M.create(parent: Instance): ResultAPI
 ### src/client/ui/components/ShopCells.lua
 ```lua
 -- StarterPlayerScripts/UI/components/ShopCells.lua
--- v0.9.I3 ShopCells：ShopFormat/Localeへ完全委譲 + 安全化（TextButton.Focused除去）
---  - 価格/タイトル/説明/カテゴリ表記を ShopFormat/Locale に一元委譲
---  - pcall/typeof でガード（落ちないUI）
---  - Mouse/Keyboard/Gamepad 入力の統一（Hover/Selection/Activated）
---  - 主要値を Attributes に保存（デバッグやUIテスト用）
---  - ★ KITO商品（category=="kito"）に限り、effectId="kito.<animal>..." から干支アイコンを表示（厳格）
+-- v0.9.I5 full-art + text-fallback
+--  - KITO: アイコンが解決できたときはカード全面にフルアート表示
+--  - 非KITO/アイコン未解決: 効果テキスト（ShopFormat.itemTitle）をカードに表示（faceName()にフォールバック）
+--  - 価格バンドは下部固定、従来の診断ログ/安全化は維持
 
 local RS           = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -3544,19 +3552,30 @@ local TweenService = game:GetService("TweenService")
 local SharedModules = RS:WaitForChild("SharedModules")
 local ShopFormat    = require(SharedModules:WaitForChild("ShopFormat"))
 
+-- Logger（診断）
+local Logger = require(SharedModules:WaitForChild("Logger"))
+local LOG    = Logger.scope("ShopCells")
+
 -- Theme & Locale
 local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
 
+-- ★ ShopDefs（互換ID→正規ID）
+local okDefs, ShopDefs = pcall(function()
+	return require(SharedModules:WaitForChild("ShopDefs"))
+end)
+
 -- ★ 干支アイコン（厳格: kito.<animal> のみ受理）
 --   このファイルは ui/components にあるので、ui/lib/KitoAssets を参照する
 local KitoAssets do
 	local ok, mod = pcall(function()
-		-- ❗ 修正箇所：components → ui に上がってから lib を探す
 		return require(script.Parent.Parent:WaitForChild("lib"):WaitForChild("KitoAssets"))
 	end)
 	KitoAssets = ok and mod or nil
+	if not KitoAssets then
+		LOG.warn("[init] KitoAssets not found; KITO icons will be disabled on shop cells")
+	end
 end
 
 local M = {}
@@ -3643,26 +3662,63 @@ local function _setAttributes(inst: Instance, it:any, lang:string, mon:number, a
 	inst:SetAttribute("face", _getFaceName(it))
 end
 
--- ★ 干支アイコン貼付（厳格: kito.<animal> のみ）
-local function _maybeAddKitoIcon(parent: Instance, it:any)
-	if not (parent and parent:IsA("GuiObject")) then return end
-	if not (KitoAssets and it and tostring(it.category) == "kito") then return end
-	local effect = tostring(it.effect or "")
-	local icon = KitoAssets.getIcon(effect) -- 正規 effectId 以外(nil)なら非表示
-	if not icon then return end
+--========================
+-- KITOフルアート背景（診断付き）
+--========================
+-- 成功したら true を返す（＝テキストを消してOK）
+local function _applyKitoFullArt(btn: Instance, priceBand: Instance, it:any): boolean
+	if not (btn and btn:IsA("GuiObject")) then return false end
+	if not it then return false end
+	if tostring(it.category) ~= "kito" then
+		return false
+	end
+	if not KitoAssets then
+		LOG.warn("[kito][skip] id=%s reason=KitoAssets-missing", tostring(it.id or "?"))
+		return false
+	end
 
-	local old = parent:FindFirstChild("KitoIcon")
-	if old then old:Destroy() end
+	local effectRaw = tostring(it.effect or "")
+	local effectCanon = effectRaw
+	if okDefs and ShopDefs and type(ShopDefs.toCanonicalEffectId) == "function" then
+		local ok, canon = pcall(ShopDefs.toCanonicalEffectId, effectRaw)
+		if ok and canon and canon ~= "" then effectCanon = canon end
+	end
+	LOG.info("[kito][canon] id=%s raw=%s -> canon=%s", tostring(it.id or "?"), effectRaw, effectCanon)
 
-	local img = Instance.new("ImageLabel")
-	img.Name = "KitoIcon"
-	img.Image = icon
-	img.BackgroundTransparency = 1
-	img.ScaleType = Enum.ScaleType.Fit
-	img.Size = UDim2.fromOffset(48, 48)
-	img.Position = UDim2.fromOffset(6, 6)
-	img.ZIndex = (parent.ZIndex or 0) + 1
-	img.Parent = parent
+	local icon
+	local okGet, res = pcall(function() return KitoAssets.getIcon(effectCanon) end)
+	if okGet then icon = res else LOG.warn("[kito][icon-error] id=%s err=%s", tostring(it.id or "?"), tostring(res)) end
+	if not icon or icon == "" then
+		LOG.warn("[kito][icon-miss] id=%s canon=%s (no icon)", tostring(it.id or "?"), effectCanon)
+		return false
+	end
+
+	-- 既存の小アイコン破棄（あれば）
+	local oldSmall = btn:FindFirstChild("KitoIcon")
+	if oldSmall then oldSmall:Destroy() end
+
+	-- 既存フルアート破棄してから再生成
+	local oldArt = btn:FindFirstChild("KitoArt")
+	if oldArt then oldArt:Destroy() end
+
+	local art = Instance.new("ImageLabel")
+	art.Name = "KitoArt"
+	art.Image = icon
+	art.BackgroundTransparency = 1
+	art.ScaleType = Enum.ScaleType.Fit
+	-- カード全面（下の価格バンド分だけ高さを差し引く）
+	local priceH = 20
+	if priceBand and priceBand:IsA("GuiObject") then
+		local h = tonumber(priceBand.Size.Y.Offset) or priceH
+		priceH = h
+	end
+	art.Size = UDim2.new(1, 0, 1, -priceH)
+	art.Position = UDim2.new(0, 0, 0, 0)
+	art.ZIndex = (btn.ZIndex or 0) + 1
+	art.Parent = btn
+
+	LOG.info("[kito][full-art] id=%s icon=%s", tostring(it.id or "?"), tostring(icon))
+	return true
 end
 
 --========================
@@ -3678,8 +3734,22 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	-- 本体ボタン（和紙パネル風）
 	local btn = Instance.new("TextButton")
 	btn.Name = _safeId(it)
-	btn.Text = _getFaceName(it)
-	btn.TextSize = 28
+
+	-- ★ まずはテキストで顔を作る（タイトル→faceName フォールバック）
+	local faceText = _title(it, lang)
+	if faceText == "" then faceText = _getFaceName(it) end
+	btn.Text = faceText
+	btn.TextWrapped = true
+	btn.TextScaled  = true
+	do
+		-- 文字サイズの上限（大きすぎ回避）
+		local max = Instance.new("UITextSizeConstraint")
+		max.MaxTextSize = 24
+		max.Parent = btn
+	end
+	btn.TextXAlignment = Enum.TextXAlignment.Center
+	btn.TextYAlignment = Enum.TextYAlignment.Center
+
 	btn.Font = Enum.Font.GothamBold
 	btn.TextColor3 = _themeColor("TextDefault", Color3.fromRGB(240,240,240))
 	btn.BackgroundColor3 = _themeColor("PanelBg", Color3.fromRGB(35,38,46))
@@ -3709,7 +3779,7 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	local affordable = _computeAffordable(mon, it and it.price)
 	if not affordable then
 		local insuff = Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX")
-		priceBand.Text = _fmtPrice(it and it.price) + insuff
+		priceBand.Text = _fmtPrice(it and it.price) .. insuff
 		priceBand.BackgroundTransparency = 0.15
 		btn.AutoButtonColor = true
 	end
@@ -3717,8 +3787,11 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	-- Attributes
 	_setAttributes(btn, it, lang, mon, affordable)
 
-	-- ★ 干支アイコン（KITO商品のみ）
-	_maybeAddKitoIcon(btn, it)
+	-- ★ KITOフルアート適用（成功したときのみテキストを消す）
+	local applied = _applyKitoFullArt(btn, priceBand, it)
+	if applied and btn:IsA("TextButton") then
+		btn.Text = ""
+	end
 
 	-- Hover/Selection 演出
 	local ti = TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
@@ -5010,46 +5083,111 @@ return M
 
 ### src/client/ui/lib/KitoAssets.lua
 ```lua
--- src/client/ui/lib/KitoAssets.lua
--- v1.1.0 干支アイコン（厳格版: kito.<animal> のみ受理）
+-- StarterPlayerScripts/UI/lib/KitoAssets.lua
+-- v1.3.2-diag (ShopDefs S3 DOT 対応)
+--  - animal 抽出を frontier(%f) 非依存に変更（kito.<animal>_... でも確実にヒット）
+--  - 厳格: "kito.<animal>" 始まりのみ受理
+--  - 揺らぎ: ko→nezumi / usagi→u を吸収
+--  - 失敗時は parse-miss / icon-miss を軽量ログ
+
+local RS = game:GetService("ReplicatedStorage")
+
+-- Logger（なければ静かに動く）
+local Logger do
+	local ok, mod = pcall(function()
+		return require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
+	end)
+	Logger = ok and mod or { scope=function() return {info=function()end, warn=function()end} end }
+end
+local LOG = Logger.scope("KitoAssets")
 
 local M = {}
 
--- 子→亥（いただいた順）で確定割当
+-- アイコン割当（提供の定義をそのまま使用）
 local ICON = {
-	nezumi = "rbxassetid://138080758976905", -- 子
+	nezumi = "rbxassetid://138080758976905", -- 子（ねずみ）
 	ushi   = "rbxassetid://98072025493160",  -- 丑
 	tora   = "rbxassetid://115144405199625", -- 寅
-	u      = "rbxassetid://120370272971127", -- 卯
+	u      = "rbxassetid://120370272971127", -- 卯（う・うさぎ）
 	tatsu  = "rbxassetid://116982196318196", -- 辰
-	mi     = "rbxassetid://74939201459038",  -- 巳
+	mi     = "rbxassetid://74939201459038",  -- 巳（み・へび）
 	uma    = "rbxassetid://115729062347409", -- 午
 	hitsuji= "rbxassetid://75272554575317",  -- 未
 	saru   = "rbxassetid://124239193079274", -- 申
 	tori   = "rbxassetid://124637162606181", -- 酉
 	inu    = "rbxassetid://119847873888690", -- 戌
-	i      = "rbxassetid://127826167495847", -- 亥
+	i      = "rbxassetid://127826167495847", -- 亥（い・いのしし）
 }
 
--- "kito.<animal>..." の <animal> を厳格抽出（揺らぎ非対応）
-local function parseAnimalStrict(effectId: string): string?
+-- ShopDefs の animal トークン → ICON キーへの正規化
+--  ko(=子)→nezumi / usagi→u 以外は 1:1
+local ALIAS = {
+	ko      = "nezumi",
+	usagi   = "u",
+
+	-- 1:1（明示）
+	ushi="ushi", tora="tora", u="u", tatsu="tatsu", mi="mi",
+	uma="uma", hitsuji="hitsuji", saru="saru", tori="tori", inu="inu", i="i",
+}
+
+-- 12支ホワイトリスト（安全のため）
+local VALID = {
+	nezumi=true, ushi=true, tora=true, u=true, tatsu=true, mi=true,
+	uma=true, hitsuji=true, saru=true, tori=true, inu=true, i=true,
+	ko=true, usagi=true, -- エイリアス側も受理
+}
+
+-- "kito.<animal>..." の animal を抽出（%f 使わず堅牢に）
+local function parseAnimal(effectId: string): string?
 	if type(effectId) ~= "string" then return nil end
-	local animal = effectId:match("^kito%.([a-z]+)%f[^a-z]?")
-	if animal and ICON[animal] then
-		return animal
+	local s = effectId:lower()
+	local prefix = "kito."
+	if s:sub(1, #prefix) ~= prefix then
+		return nil
 	end
-	return nil
+	-- "kito." 直後から英字のみを animal として抜き出す
+	local rest = s:sub(#prefix + 1)
+	local animal = rest:match("^([a-z]+)")
+	if not animal or animal == "" then
+		LOG.warn("[parse-miss] effect=%s (starts with 'kito.' but animal not parsed)", tostring(effectId))
+		return nil
+	end
+	-- エイリアス正規化
+	local key = ALIAS[animal] or animal
+	-- 知らないキーは弾く（将来拡張時は VALID を更新）
+	if not VALID[key] then
+		LOG.warn("[parse-miss] effect=%s animal=%s (alias=%s) not in VALID", tostring(effectId), tostring(animal), tostring(key))
+		return nil
+	end
+	return key
 end
 
--- effectId（kito.<animal>...）→ rbxassetid
+-- effectId（kito.<animal>...）→ rbxassetid（nil 可）
 function M.getIcon(effectId: string): string?
-	local animal = parseAnimalStrict(effectId)
-	return animal and ICON[animal] or nil
+	local key = parseAnimal(effectId)
+	if not key then
+		-- kito.* 以外 or 解析失敗は静かめに
+		return nil
+	end
+	local asset = ICON[key]
+	if not asset then
+		LOG.warn("[icon-miss] effect=%s animalKey=%s (no ICON mapping)", tostring(effectId), tostring(key))
+	end
+	return asset
 end
 
--- 直接キー取得（"tora" 等）。存在しなければ nil
+-- 直接キー取得（"tora" 等）。エイリアスも受理
 function M.getIconByKey(key: string): string?
-	return ICON[key]
+	if type(key) ~= "string" or key == "" then return nil end
+	local k = ALIAS[key:lower()] or key:lower()
+	return ICON[k]
+end
+
+-- 起動時ダンプ（軽量）
+do
+	local count=0; for _ in pairs(ICON) do count+=1 end
+	local path = nil; pcall(function() path = script and script:GetFullName() end)
+	LOG.info("[boot] v1.3.2-diag | animals=%d | module=%s", count, tostring(path or "<unknown>"))
 end
 
 return M
@@ -7875,6 +8013,26 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+	-- ★ 0.9.7.0（外部向け）
+	{
+		ver  = "v0.9.7.0",
+		date = "2025-10-04",
+		changes = {
+			{
+				ja = "1ゲームの最長を12か月に設定。9月クリアで通常クリア、10月以降はEX扱いになります。",
+				en = "Set a game’s maximum length to 12 months. Clearing September counts as a normal clear; October and beyond are treated as EX."
+			},
+			{
+				ja = "リロールを「ハンド」と「場」に分離し、それぞれ別の回数制限に。UIもそれに合わせて更新しました。",
+				en = "Split Reroll into “Hand” and “Field,” each with its own attempt limit. Updated the UI accordingly."
+			},
+			{
+				ja = "祈祷（干支）のイメージを追加しました。",
+				en = "Added visual images for Kito (zodiac) effects."
+			},
+		}
+	},
+
 	-- ★ 0.9.6.6（外部向け）
 	{
 		ver  = "v0.9.6.6",

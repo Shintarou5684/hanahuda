@@ -22,6 +22,26 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+	-- ★ 0.9.7.0（外部向け）
+	{
+		ver  = "v0.9.7.0",
+		date = "2025-10-04",
+		changes = {
+			{
+				ja = "1ゲームの最長を12か月に設定。9月クリアで通常クリア、10月以降はEX扱いになります。",
+				en = "Set a game’s maximum length to 12 months. Clearing September counts as a normal clear; October and beyond are treated as EX."
+			},
+			{
+				ja = "リロールを「ハンド」と「場」に分離し、それぞれ別の回数制限に。UIもそれに合わせて更新しました。",
+				en = "Split Reroll into “Hand” and “Field,” each with its own attempt limit. Updated the UI accordingly."
+			},
+			{
+				ja = "祈祷（干支）のイメージを追加しました。",
+				en = "Added visual images for Kito (zodiac) effects."
+			},
+		}
+	},
+
 	-- ★ 0.9.6.6（外部向け）
 	{
 		ver  = "v0.9.6.6",
