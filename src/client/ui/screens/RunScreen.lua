@@ -10,6 +10,7 @@
 --  - Router.call 対応の公開メソッド群
 --  - setRerollCounts(field, hand, phase) 実装（ScreenRouter.StatePush フックに対応）
 --  - ★ 情報パネルを簡素化（年/月・所持金・山札のみ表示）
+--  - ★ 追記：MatchHighlighter を導入（手札ホバー/タップ中に同色ハイライト）
 
 local Run = {}
 Run.__index = Run
@@ -45,6 +46,9 @@ local Format     = require(lib:WaitForChild("FormatUtil"))
 local screensDir = script.Parent
 local UIBuilder  = require(screensDir:WaitForChild("RunScreenUI"))
 local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
+
+-- ★ 追加：ハイライト機能（src/client/ui/highlight/MatchHighlighter.lua）
+local MatchHighlighter = require(screensDir.Parent:WaitForChild("highlight"):WaitForChild("MatchHighlighter"))
 
 --==================================================
 -- Lang helpers（最小限）
@@ -123,6 +127,7 @@ function Run.new(deps)
 	self._awaitingInitial = false
 	self._resultShown = false
 	self._langConn = nil
+	self._hlInit = false -- ★ 追加：ハイライト初期化フラグ
 
 	-- 言語初期値
 	local initialLang = safeGetGlobalLang()
@@ -803,6 +808,19 @@ function Run:show(payload)
 		LOG.debug("remotes:connect") -- [LOG]
 		self._remotes:connect()
 	end
+
+	-- ★ 追加：ハイライト初期化（手札/場のコンテナが揃ったあと一度だけ）
+	if not self._hlInit and self.handArea and self.boardRowTop and self.boardRowBottom then
+		local ok, err = pcall(function()
+			MatchHighlighter.init(self.handArea, self.boardRowTop, self.boardRowBottom)
+		end)
+		if ok then
+			self._hlInit = true
+			LOG.info("highlight:init ok") -- [LOG]
+		else
+			LOG.warn("highlight:init failed | %s", tostring(err)) -- [LOG]
+		end
+	end
 end
 
 function Run:requestSync()
@@ -818,11 +836,29 @@ function Run:hide()
 	self:_closeGiveUpOverlay()
 	LOG.debug("remotes:disconnect (hide)") -- [LOG]
 	if self._remotes then self._remotes:disconnect() end
+
+	-- ★ 追加：ハイライト解除（画面を閉じるときに確実に消す）
+	if self._hlInit then
+		local ok, err = pcall(function() MatchHighlighter.shutdown() end)
+		if ok then
+			LOG.info("highlight:shutdown ok (hide)") -- [LOG]
+		else
+			LOG.warn("highlight:shutdown failed (hide) | %s", tostring(err)) -- [LOG]
+		end
+		self._hlInit = false
+	end
 end
 
 function Run:destroy()
 	LOG.debug("destroy:disconnect remotes & langConn, destroy gui") -- [LOG]
 	self:_closeGiveUpOverlay()
+
+	-- ★ 追加：destroy 時も念のため解除
+	if self._hlInit then
+		pcall(function() MatchHighlighter.shutdown() end)
+		self._hlInit = false
+	end
+
 	if self._remotes then self._remotes:disconnect() end
 	if self._langConn then self._langConn:Disconnect() end
 	if self.gui then self.gui:Destroy() end

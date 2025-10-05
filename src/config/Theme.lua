@@ -120,7 +120,9 @@ Theme.COLORS = {
 	NoticeBg           = Color3.fromRGB(240, 246, 255), -- Noticeバー
 	TutorialBg         = Color3.fromRGB(255, 153, 0),   -- Tutorialバー
 	OverlayBg          = Color3.fromRGB(0, 0, 0),       -- Overlay下地
-	HandSelectStroke   = Color3.fromRGB(40, 120, 90),   -- 手札選択枠の色
+
+	-- 既存の“選択枠”系グリーン（これをハイライトにも統一利用）
+	HandSelectStroke   = Color3.fromRGB(40, 120, 90),
 }
 
 Theme.PANEL_RADIUS = 10
@@ -143,5 +145,12 @@ function Theme.colorForKind(kind: string)
 		return Color3.fromRGB(235, 235, 235)
 	end
 end
+
+--==================================================
+-- ハイライト色（統一グリーン）※COLORS.HandSelectStroke を流用
+--==================================================
+Theme.CARD_HL_SELF         = Theme.COLORS.HandSelectStroke
+Theme.CARD_HL_MATCH        = Theme.COLORS.HandSelectStroke
+Theme.CARD_HL_TRANSPARENCY = 0.70
 
 return Theme
