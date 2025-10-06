@@ -1,24 +1,16 @@
--- src/client/ui/screens/KitoPickView.lua
--- 目的: KitoPick の12枚一覧UI・効果説明＋カード画像＆情報表示・確定／スキップ
--- 仕様: KitoPickWires の ClientSignals を購読し、シグナル受信時に Router 経由で表示
--- 方針:
---   - 「選択可否の真実はサーバ」。payload.eligibility を唯一の正として
---     各候補に eligible / reason をマージし、不適格はグレーアウト＆クリック不可。
---   - 送信前にもクライアント側で eligible を再確認（多重タップ/競合のガード）。
--- ★ P1-6: 結果受信後に ScreenRouter で "shop" へ確実に戻す／追跡ログ・計測を追加
--- ★ P1-7: ShopDefs から祈祷名と説明を引いて上部に表示
--- ★ 追加: 正規 effectId="kito.<animal>..." から干支アイコンをヘッダに表示（揺らぎ非対応）
+-- KitoPickView.lua（軽量・Renderer固定・SignalsはWires単一路線）
+-- Cards は Renderer に一元委譲 / VM は必須 / フォールバック削除
 
 local Players    = game:GetService("Players")
 local RS         = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
 local LP         = Players.LocalPlayer
 
--- Remotes
+-- Remotes（送信のみ直結）
 local Remotes  = RS:WaitForChild("Remotes")
 local EvDecide = Remotes:WaitForChild("KitoPickDecide")
 
--- Signals from KitoPickWires（存在しなければ Wires 側で ensure 済み）
+-- Signals（Wires が発火する BindableEvent を購読）
 local ClientSignals = RS:WaitForChild("ClientSignals")
 local SigIncoming   = ClientSignals:WaitForChild("KitoPickIncoming")
 local SigResult     = ClientSignals:WaitForChild("KitoPickResult")
@@ -27,8 +19,8 @@ local SigResult     = ClientSignals:WaitForChild("KitoPickResult")
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
 local LOG    = Logger.scope("KitoPickView")
 
--- Router（ui配下）。無ければ落ちないように pcall
-local UI_ROOT = script.Parent and script.Parent.Parent  -- StarterPlayerScripts/ui
+-- Router
+local UI_ROOT = script.Parent and script.Parent.Parent
 local ScreenRouter = nil
 pcall(function()
 	if UI_ROOT then
@@ -36,10 +28,28 @@ pcall(function()
 	end
 end)
 
--- ★ 干支アイコン正本（厳格: kito.<animal> のみ受理）
+-- Styles
+local Styles do
+	local ok, mod = pcall(function()
+		return require(script.Parent.Parent:WaitForChild("styles"):WaitForChild("KitoPickStyles"))
+	end)
+	Styles = ok and mod or nil
+end
+
+-- ViewModel（純関数置き場・必須）
+local VM = require(script.Parent.Parent:WaitForChild("viewmodels"):WaitForChild("KitoPickVM"))
+local kindToJp     = assert(VM.kindToJp, "KitoPickVM.kindToJp missing")
+local reasonToText = assert(VM.reasonToText, "KitoPickVM.reasonToText missing")
+
+-- Renderer（必須・単一路）
+local KitoPickRenderer = require(script.Parent.Parent
+	:WaitForChild("components")
+	:WaitForChild("renderers")
+	:WaitForChild("KitoPickRenderer"))
+
+-- KitoAssets（干支アイコン）
 local KitoAssets do
 	local ok, mod = pcall(function()
-		-- 本ファイルは "src/client/ui/screens" 配下にあるため、ui/lib へは Parent.Parent.lib で到達
 		return require(script.Parent.Parent:WaitForChild("lib"):WaitForChild("KitoAssets"))
 	end)
 	KitoAssets = ok and mod or nil
@@ -48,13 +58,12 @@ local KitoAssets do
 	end
 end
 
--- ★ ShopDefs（祈祷の name/desc を引くため）
+-- ShopDefs（祈祷名/説明）
 local okDefs, ShopDefs = pcall(function()
 	return require(RS:WaitForChild("SharedModules"):WaitForChild("ShopDefs"))
 end)
 
--- （注）ShopDefs参照は既存互換のまま。effectIdの揺らぎはここでは緩く吸収しているが、
--- 干支アイコン表示は KitoAssets.getIcon により厳格（kito.<animal> のみ）で行う。
+-- Id正規化（. と _ 揺らぎ吸収）
 local function _normId(id)
 	if not id then return nil end
 	id = tostring(id)
@@ -82,55 +91,28 @@ local function pickDesc(item)
 	return item.descJP or item.descEN or ""
 end
 
--- ─────────────────────────────────────────────────────────────
--- 内部状態
--- ─────────────────────────────────────────────────────────────
-local View = {} -- ScreenRouter に登録する公開I/F（このテーブルが「画面インスタンス」扱い）
+-- 画面状態
+local View = {}
 
-local ui         -- ScreenGui
-local refs = {}  -- 参照置き場（ScreenGui にフィールドは生やさない）
+local ui
+local refs = {}
+local renderer  -- { gui/root, renderCard, setCardSelected?, show?, hide? }
+local _uiBuilt = false
 
 local current = {
 	sessionId    = nil,
 	effectId     = nil,
 	targetKind   = "bright",
-	list         = {},     -- [{ uid, code, name, kind, month, image?/imageId?, eligible?, reason? }]
-	eligibility  = {},     -- server map { [uid] = { ok, reason } }（情報保持のみ）
+	list         = {},    -- [{ uid, code, name, kind, month, image?/imageId?, eligible?, reason? }]
+	eligibility  = {},    -- server map { [uid] = { ok, reason } }
 	selectedUid  = nil,
-	busy         = false,  -- 決定/スキップの多重送信防止
+	busy         = false,
 }
 
--- 表示用ラベルマップ
-local KIND_JP = {
-	bright = "光札",
-	ribbon = "短冊",
-	seed   = "タネ",
-	chaff  = "カス",
-}
-local MONTH_JP = { "1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月" }
-
-local function parseMonth(entry)
-	-- Core から渡される month を最優先 → code/uid 先頭2桁を推定
-	local m = tonumber(entry.month or (entry.meta and entry.meta.month))
-	if m and m>=1 and m<=12 then return m end
-	local s = tostring(entry.code or entry.uid or "")
-	local two = string.match(s, "^(%d%d)")
-	if not two then return nil end
-	m = tonumber(two)
-	if m and m>=1 and m<=12 then return m end
-	return nil
-end
-
-local function kindToJp(k)
-	return KIND_JP[tostring(k or "")] or tostring(k or "?")
-end
-
--- ─────────────────────────────────────────────────────────────
--- UI ビルド
--- ─────────────────────────────────────────────────────────────
-local function make(text, className, props, parent)
+--──────────── UI build
+local function make(name, className, props, parent)
 	local inst = Instance.new(className)
-	inst.Name = text
+	inst.Name = name
 	for k,v in pairs(props or {}) do inst[k] = v end
 	inst.Parent = parent
 	return inst
@@ -138,110 +120,114 @@ end
 
 local function ensureGui()
 	local t0 = os.clock()
-	-- 既にあれば Parent ロスト時のみ復旧
-	if ui and ui.Parent then
+
+	-- Rendererコンテナ作成（必須）
+	if not renderer then
+		local inst = KitoPickRenderer.create(Players.LocalPlayer:WaitForChild("PlayerGui"))
+		assert(type(inst) == "table", "KitoPickRenderer.create must return table")
+		renderer = inst
+		ui = renderer.gui or renderer.root
+		assert(ui ~= nil, "KitoPickRenderer must expose 'gui' or 'root'")
+	end
+
+	-- 再利用
+	if ui and ui.Parent and _uiBuilt and (ui:FindFirstChild("Panel", true) ~= nil) then
 		LOG.debug("ensureGui: reuse existing gui (%.2fms)", (os.clock()-t0)*1000)
 		return ui
 	end
-	ui = make("KitoPickGui", "ScreenGui", {
-		ResetOnSpawn    = false,
-		ZIndexBehavior  = Enum.ZIndexBehavior.Global,
-		IgnoreGuiInset  = true,
-		DisplayOrder    = 50,
-		Enabled         = false,  -- ★初期は非表示
-	}, LP:WaitForChild("PlayerGui"))
 
+	-- Styles 短縮
+	local S = Styles and Styles.sizes or {}
+	local C = Styles and Styles.colors or {}
+	local F = Styles and Styles.fontSizes or {}
+	local Z = Styles and Styles.z or {}
+
+	-- 見た目
 	local shade = make("Shade","Frame",{
-		BackgroundColor3       = Color3.new(0,0,0),
-		BackgroundTransparency = 0.35,
+		BackgroundColor3       = C.shade or Color3.new(0,0,0),
+		BackgroundTransparency = S.shadeTransparency or 0.35,
 		Size                   = UDim2.fromScale(1,1)
 	}, ui)
 
 	local panel = make("Panel","Frame",{
 		AnchorPoint         = Vector2.new(0.5,0.5),
-		Position            = UDim2.fromScale(0.5,0.52),
-		Size                = UDim2.fromOffset(880, 560),
-		BackgroundColor3    = Color3.fromRGB(24,24,28),
+		Position            = UDim2.fromScale(0.5, S.panelPosYScale or 0.52),
+		Size                = UDim2.fromOffset(S.panelWidth or 880, S.panelHeight or 560),
+		BackgroundColor3    = C.panelBg or Color3.fromRGB(24,24,28),
 		BorderSizePixel     = 0,
 	}, shade)
-	make("UICorner","UICorner",{CornerRadius=UDim.new(0,18)}, panel)
+	make("UICorner","UICorner",{CornerRadius=UDim.new(0, S.panelCorner or 18)}, panel)
 	make("Padding","UIPadding",{
-		PaddingTop    = UDim.new(0,16),
-		PaddingBottom = UDim.new(0,16),
-		PaddingLeft   = UDim.new(0,16),
-		PaddingRight  = UDim.new(0,16),
+		PaddingTop    = UDim.new(0, S.panelPadding or 16),
+		PaddingBottom = UDim.new(0, S.panelPadding or 16),
+		PaddingLeft   = UDim.new(0, S.panelPadding or 16),
+		PaddingRight  = UDim.new(0, S.panelPadding or 16),
 	}, panel)
 
-	-- タイトル
 	make("Title","TextLabel",{
 		Text                   = "KITO: Pick a card",
 		Font                   = Enum.Font.GothamBold,
-		TextSize               = 22,
-		TextColor3             = Color3.fromRGB(230,230,240),
+		TextSize               = F.title or 22,
+		TextColor3             = C.titleText or Color3.fromRGB(230,230,240),
 		BackgroundTransparency = 1,
-		Size                   = UDim2.new(1, 0, 0, 28),
+		Size                   = UDim2.new(1, 0, 0, S.titleHeight or 28),
 	}, panel)
 
-	-- ★ 干支アイコン（ヘッダ左上に常設 / 初期は非表示）
 	local headerIcon = make("KitoIcon","ImageLabel",{
 		Image                  = "",
 		BackgroundTransparency = 1,
-		Size                   = UDim2.fromOffset(44,44),
-		Position               = UDim2.new(0, 0, 0, 28+2), -- タイトルの下
+		Size                   = UDim2.fromOffset(S.headerIcon or 44, S.headerIcon or 44),
+		Position               = UDim2.new(0, 0, 0, (S.titleHeight or 28) + (S.kitoNameTopGap or 2)),
 		Visible                = false,
 		ScaleType              = Enum.ScaleType.Fit,
-		ZIndex                 = 2,
+		ZIndex                 = Z.headerIcon or 2,
 	}, panel)
 
-	-- ★ 祈祷名（大きめ・太字）— アイコン右に寄せる
 	local kitoName = make("KitoName","TextLabel",{
 		Text                   = "",
 		Font                   = Enum.Font.GothamBold,
-		TextSize               = 20,
-		TextColor3             = Color3.fromRGB(236,236,246),
+		TextSize               = F.kitoName or 20,
+		TextColor3             = C.kitoNameText or Color3.fromRGB(236,236,246),
 		BackgroundTransparency = 1,
-		Size                   = UDim2.new(1, 0, 0, 22),
-		Position               = UDim2.new(0, 44 + 8, 0, 28+2), -- アイコン幅44 + 余白8
+		Size                   = UDim2.new(1, 0, 0, S.kitoNameHeight or 22),
+		Position               = UDim2.new(0, (S.headerIcon or 44) + (S.headerGap or 8), 0, (S.titleHeight or 28) + (S.kitoNameTopGap or 2)),
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, panel)
 
-	-- 効果説明（可変長）— ShopDefs の desc を入れる
 	local effect = make("Effect","TextLabel",{
 		Text                   = "",
 		Font                   = Enum.Font.Gotham,
 		TextWrapped            = true,
-		TextSize               = 18,
-		TextColor3             = Color3.fromRGB(200,200,210),
+		TextSize               = F.effect or 18,
+		TextColor3             = C.effectText or Color3.fromRGB(200,200,210),
 		BackgroundTransparency = 1,
-		Size                   = UDim2.new(1, 0, 0, 1), -- 高さは後で調整
-		Position               = UDim2.new(0, 0, 0, 28+2 + 22 + 6), -- 祈祷名の分だけ下げる
+		Size                   = UDim2.new(1, 0, 0, 1),
+		Position               = UDim2.new(0, 0, 0, (S.titleHeight or 28) + (S.kitoNameTopGap or 2) + (S.kitoNameHeight or 22) + (S.effectTopGap or 6)),
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, panel)
 
 	local gridHolder = make("GridHolder","Frame",{
 		BackgroundTransparency = 1,
-		Position               = UDim2.new(0, 0, 0, 28 + 6 + 40 + 8), -- 仮（effect 実高さで後更新）
-		Size                   = UDim2.new(1, 0, 1, -(28+6+40+8) - 84),
+		Position               = UDim2.new(0, 0, 0, (S.titleHeight or 28) + (S.effectTopGap or 6) + (S.effectInitHeight or 40) + (S.effectBelowGap or 8)),
+		Size                   = UDim2.new(1, 0, 1, -((S.titleHeight or 28)+(S.effectTopGap or 6)+(S.effectInitHeight or 40)+(S.effectBelowGap or 8)) - (S.footerHeightReserve or 84)),
 	}, panel)
 
 	local scroll = make("Scroll","ScrollingFrame",{
 		BackgroundTransparency = 1,
 		CanvasSize             = UDim2.new(),
-		ScrollBarThickness     = 6,
+		ScrollBarThickness     = S.scrollBar or 6,
 		BorderSizePixel        = 0,
 		Size                   = UDim2.new(1,0,1,0),
 	}, gridHolder)
 
-	-- レイアウト専用コンテナ（固定）
 	local gridFrame = make("Grid","Frame",{
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1,0,1,0),
 	}, scroll)
 
-	-- 画像＋情報カード用
 	local layout = make("UIGrid","UIGridLayout",{
-		CellPadding          = UDim2.fromOffset(12,12),
-		CellSize             = UDim2.fromOffset(180, 160),
+		CellPadding          = UDim2.fromOffset(S.gridGap or 12, S.gridGap or 12),
+		CellSize             = UDim2.fromOffset(S.gridCellW or 180, S.gridCellH or 160),
 		HorizontalAlignment  = Enum.HorizontalAlignment.Left,
 		SortOrder            = Enum.SortOrder.LayoutOrder,
 	}, gridFrame)
@@ -249,51 +235,48 @@ local function ensureGui()
 	local footer = make("Footer","Frame",{
 		BackgroundTransparency = 1,
 		AnchorPoint            = Vector2.new(0.5,1),
-		Position               = UDim2.new(0.5,0,1,-8),
-		Size                   = UDim2.new(1, -16, 0, 52),
+		Position               = UDim2.new(0.5,0,1,-(S.footerBottomGap or 8)),
+		Size                   = UDim2.new(1, -16, 0, S.footerHeight or 52),
 	}, panel)
 
 	local pickInfo = make("PickInfo","TextLabel",{
 		Text                   = "Select 1 card",
 		Font                   = Enum.Font.Gotham,
-		TextSize               = 18,
-		TextColor3             = Color3.fromRGB(200,200,210),
+		TextSize               = F.pickInfo or 18,
+		TextColor3             = C.pickInfoText or Color3.fromRGB(200,200,210),
 		BackgroundTransparency = 1,
-		Size                   = UDim2.new(1, -360, 1, 0),
+		Size                   = UDim2.new(1, -(S.pickInfoRightReserve or 360), 1, 0),
 		TextXAlignment         = Enum.TextXAlignment.Left,
 	}, footer)
 
-	-- Skip
 	local skipBtn = make("Skip","TextButton",{
 		Text                   = "Skip",
 		Font                   = Enum.Font.GothamBold,
-		TextSize               = 20,
-		TextColor3             = Color3.fromRGB(230,230,240),
+		TextSize               = F.btn or 20,
+		TextColor3             = C.skipText or Color3.fromRGB(230,230,240),
 		AutoButtonColor        = true,
-		BackgroundColor3       = Color3.fromRGB(70,70,78),
+		BackgroundColor3       = C.skipBg or Color3.fromRGB(70,70,78),
 		BackgroundTransparency = 0.05,
-		Size                   = UDim2.fromOffset(140, 44),
+		Size                   = UDim2.fromOffset(S.btnSkipW or 140, S.btnH or 44),
 		AnchorPoint            = Vector2.new(1,0.5),
-		Position               = UDim2.new(1, -176, 0.5, 0),
+		Position               = UDim2.new(1, -(S.btnConfirmW or 160) - (S.btnGap or 16), 0.5, 0),
 	}, footer)
-	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, skipBtn)
+	make("UICorner","UICorner",{CornerRadius=UDim.new(0, S.btnCorner or 10)}, skipBtn)
 
-	-- Confirm
 	local confirm = make("Confirm","TextButton",{
 		Text                   = "Confirm",
 		Font                   = Enum.Font.GothamBold,
-		TextSize               = 20,
-		TextColor3             = Color3.fromRGB(16,16,20),
+		TextSize               = F.btn or 20,
+		TextColor3             = C.confirmText or Color3.fromRGB(16,16,20),
 		AutoButtonColor        = true,
-		BackgroundColor3       = Color3.fromRGB(120,200,120),
+		BackgroundColor3       = C.confirmBg or Color3.fromRGB(120,200,120),
 		BackgroundTransparency = 0.0,
-		Size                   = UDim2.fromOffset(160, 44),
+		Size                   = UDim2.fromOffset(S.btnConfirmW or 160, S.btnH or 44),
 		AnchorPoint            = Vector2.new(1,0.5),
-		Position               = UDim2.new(1, -8, 0.5, 0),
+		Position               = UDim2.new(1, -(S.btnRightGap or 8), 0.5, 0),
 	}, footer)
-	make("UICorner","UICorner",{CornerRadius=UDim.new(0,10)}, confirm)
+	make("UICorner","UICorner",{CornerRadius=UDim.new(0, S.btnCorner or 10)}, confirm)
 
-	-- 参照
 	refs.headerIcon = headerIcon
 	refs.kitoName   = kitoName
 	refs.effect     = effect
@@ -305,176 +288,26 @@ local function ensureGui()
 	refs.skipBtn    = skipBtn
 	refs.pickInfo   = pickInfo
 
-	LOG.info("ensureGui: built gui in %.2fms", (os.clock()-t0)*1000)
+	_uiBuilt = true
+	LOG.info("ensureGui: built gui in %.2fms (renderer=on)", (os.clock()-t0)*1000)
 	return ui
 end
 
--- 効果説明の高さに合わせてグリッド領域を再レイアウト
+-- 効果説明に合わせてグリッド再配置
 local function relayoutByEffectHeight()
-	local t0 = os.clock()
 	if not (refs.effect and refs.gridHolder) then return end
-	local nameH     = (refs.kitoName and refs.kitoName.Text ~= "") and 22 or 0
-	local topY      = 28 + 2 + nameH + 6
-	local baseBelow = 84 -- フッタ確保高さ
+	local S = Styles and Styles.sizes or {}
+	local nameH     = (refs.kitoName and refs.kitoName.Text ~= "") and (S.kitoNameHeight or 22) or 0
+	local topY      = (S.titleHeight or 28) + (S.kitoNameTopGap or 2) + nameH + (S.effectTopGap or 6)
+	local baseBelow = S.footerHeightReserve or 84
 	local effect    = refs.effect
 
-	-- 実高さ（TextWrapped=true → TextBounds.Y 利用）
-	local needH = math.max(22, math.ceil(effect.TextBounds.Y))
+	local needH = math.max(S.effectMinHeight or 22, math.ceil(effect.TextBounds.Y))
 	effect.Size = UDim2.new(1, 0, 0, needH)
 
-	local gridTop  = topY + needH + 8
+	local gridTop  = topY + needH + (S.effectBelowGap or 8)
 	refs.gridHolder.Position = UDim2.new(0, 0, 0, gridTop)
 	refs.gridHolder.Size     = UDim2.new(1, 0, 1, -gridTop - baseBelow)
-	LOG.debug("relayoutByEffectHeight: nameH=%d effectH=%d in %.2fms", nameH, needH, (os.clock()-t0)*1000)
-end
-
--- 画像ソースを決定（rbxassetid:// またはそのまま文字列）
-local function resolveImage(entry)
-	if entry.image and type(entry.image) == "string" and #entry.image>0 then
-		return entry.image
-	end
-	if entry.imageId then
-		return "rbxassetid://" .. tostring(entry.imageId)
-	end
-	return nil
-end
-
--- カードの選択見た目（UIStroke で選択枠）
-local function setCardSelected(btn: Instance, sel: boolean)
-	if not btn or not btn:IsA("TextButton") then return end
-	btn.BackgroundColor3 = sel and Color3.fromRGB(70,110,210) or Color3.fromRGB(40,42,54)
-	local stroke = btn:FindFirstChild("SelStroke")
-	if stroke and stroke:IsA("UIStroke") then
-		stroke.Enabled = sel
-	end
-end
-
--- 理由の日本語化（簡易）
-local function reasonToText(reason: string?): string?
-	local map = {
-		["already-applied"]     = "既に適用済みです",
-		["already-bright"]      = "すでに光札です",
-		["already-chaff"]       = "すでにカス札です",
-		["month-has-no-bright"] = "この月に光札はありません",
-		["not-eligible"]        = "対象外です",
-		["same-target"]         = "同一カードは選べません",
-		["no-check"]            = "対象外（サーバ判定なし）",
-	}
-	return map[tostring(reason or "")] or nil
-end
-
--- 「対象外」オーバーレイ（eligible=false 用）
-local function makeIneligibleOverlay(parent, reason)
-	local mask = Instance.new("Frame")
-	mask.Name = "IneligibleMask"
-	mask.BackgroundColor3 = Color3.new(0,0,0)
-	mask.BackgroundTransparency = 0.45
-	mask.BorderSizePixel = 0
-	mask.Size = UDim2.fromScale(1,1)
-	mask.ZIndex = 5
-	mask.Parent = parent
-
-	local tag = Instance.new("TextLabel")
-	tag.BackgroundTransparency = 1
-	tag.Size = UDim2.fromScale(1,0)
-	tag.Position = UDim2.fromScale(0,0.45)
-	tag.Text = "対象外"
-	tag.Font = Enum.Font.GothamBold
-	tag.TextSize = 18
-	tag.TextColor3 = Color3.fromRGB(230,230,240)
-	tag.ZIndex = 6
-	tag.Parent = mask
-
-	if reason and reason ~= "" then
-		local sub = Instance.new("TextLabel")
-		sub.BackgroundTransparency = 1
-		sub.Size = UDim2.fromScale(1,0)
-		sub.Position = UDim2.fromScale(0,0.65)
-		sub.Text = reasonToText(reason) or tostring(reason)
-		sub.Font = Enum.Font.Gotham
-		sub.TextSize = 14
-		sub.TextColor3 = Color3.fromRGB(220,220,230)
-		sub.ZIndex = 6
-		sub.Parent = mask
-	end
-end
-
--- カードボタン作成（画像＋情報）
-local function makeCard(entry)
-	local card = Instance.new("TextButton")
-	card.Name                   = entry.uid
-	card.AutoButtonColor        = true
-	card.BackgroundColor3       = Color3.fromRGB(40,42,54)
-	card.BackgroundTransparency = 0.05
-	card.BorderSizePixel        = 0
-	card.Size                   = UDim2.fromOffset(180, 160)
-	card.Text                   = ""
-	Instance.new("UICorner", card).CornerRadius = UDim.new(0,12)
-
-	-- 選択枠（非表示で用意）
-	local stroke = Instance.new("UIStroke")
-	stroke.Name = "SelStroke"
-	stroke.Thickness = 2
-	stroke.Color = Color3.fromRGB(90,130,230)
-	stroke.Enabled = false
-	stroke.Parent = card
-
-	-- 画像
-	local img = Instance.new("ImageLabel")
-	img.Name                   = "Thumb"
-	img.Size                   = UDim2.fromOffset(180, 112)
-	img.Position               = UDim2.new(0,0,0,0)
-	img.BackgroundTransparency = 1
-	img.BorderSizePixel        = 0
-	img.ScaleType              = Enum.ScaleType.Fit
-	img.Parent                 = card
-	local src = resolveImage(entry)
-	if src then
-		img.Image = src
-	else
-		img.BackgroundTransparency = 0
-		img.BackgroundColor3 = Color3.fromRGB(55,57,69)
-		img.Image = ""
-	end
-
-	-- 名称
-	local nameLabel = Instance.new("TextLabel")
-	nameLabel.Name                   = "Name"
-	nameLabel.Text                   = tostring(entry.name or entry.code or entry.uid or "?")
-	nameLabel.Font                   = Enum.Font.Gotham
-	nameLabel.TextSize               = 16
-	nameLabel.TextColor3             = Color3.fromRGB(232,232,240)
-	nameLabel.BackgroundTransparency = 1
-	nameLabel.Size                   = UDim2.new(1, -10, 0, 18)
-	nameLabel.Position               = UDim2.new(0, 6, 0, 116)
-	nameLabel.TextXAlignment         = Enum.TextXAlignment.Left
-	nameLabel.Parent = card
-
-	-- 情報（例: 11月 / タネ）
-	local monthNum = parseMonth(entry)
-	local infoText = ((monthNum and MONTH_JP[monthNum]) or "?月") .. " / " .. kindToJp(entry.kind)
-	local info = Instance.new("TextLabel")
-	info.Name                    = "Info"
-	info.Text                    = infoText
-	info.Font                    = Enum.Font.Gotham
-	info.TextSize                = 14
-	info.TextColor3              = Color3.fromRGB(210,210,220)
-	info.BackgroundTransparency  = 1
-	info.Size                    = UDim2.new(1, -10, 0, 16)
-	info.Position                = UDim2.new(0, 6, 0, 136)
-	info.TextXAlignment          = Enum.TextXAlignment.Left
-	info.Parent = card
-
-	-- ★ サーバの真実: eligible を尊重
-	local canPick = (entry.eligible ~= false)
-	card:SetAttribute("canPick", canPick)
-	card:SetAttribute("reason", entry.reason or "")
-	if not canPick then
-		card.AutoButtonColor = false
-		makeIneligibleOverlay(card, entry.reason)
-	end
-
-	return card
 end
 
 local function setConfirmEnabled(enabled)
@@ -485,105 +318,92 @@ local function setConfirmEnabled(enabled)
 	refs.confirm.BackgroundTransparency = enabled and 0.0 or 0.4
 end
 
--- リスト再描画（選択ハイライトのみ）
+--──────────── 描画（カード生成は Renderer のみ）
 local function rebuildList()
-	local t0 = os.clock()
 	if not ui then return end
 
-	-- 既存カードだけ消す（レイアウトは保持）
 	for _, c in ipairs(refs.gridFrame:GetChildren()) do
-		if c:IsA("TextButton") then
-			c:Destroy()
-		end
+		if not c:IsA("UIGridLayout") then c:Destroy() end
 	end
 
 	local ineligible = 0
 	for _, ent in ipairs(current.list or {}) do
 		if ent.eligible == false then ineligible += 1 end
-		local b = makeCard(ent)
-		b.Parent = refs.gridFrame
-		setCardSelected(b, ent.uid == current.selectedUid)
-		b.MouseButton1Click:Connect(function()
-			if current.busy then
-				LOG.debug("click ignored (busy) uid=%s", tostring(ent.uid))
-				return
+
+		local b = renderer.renderCard(refs.gridFrame, ent)
+		if b then
+			b:SetAttribute("uid", tostring(ent.uid))
+			b:SetAttribute("canPick", ent.eligible ~= false)
+			b:SetAttribute("reason", ent.reason or "")
+
+			if type(renderer.setCardSelected) == "function" then
+				renderer.setCardSelected(b, ent.uid == current.selectedUid)
 			end
 
-			-- ★ eligible=false はクリック無効（通知のみ）
-			if b:GetAttribute("canPick") == false then
-				local reason = b:GetAttribute("reason")
-				local ok, err = pcall(function()
-					StarterGui:SetCore("SendNotification", {
-						Title = "KITO",
-						Text = (reasonToText(reason) or "対象外のカードです"),
-						Duration = 2,
-					})
+			if b:IsA("GuiButton") then
+				b.MouseButton1Click:Connect(function()
+					if current.busy then
+						LOG.debug("click ignored (busy) uid=%s", tostring(ent.uid))
+						return
+					end
+					if b:GetAttribute("canPick") == false then
+						local reason = b:GetAttribute("reason")
+						pcall(function()
+							StarterGui:SetCore("SendNotification", {
+								Title = "KITO",
+								Text  = reasonToText(reason) or "対象外のカードです",
+								Duration = 2,
+							})
+						end)
+						LOG.debug("click blocked (ineligible) uid=%s reason=%s", tostring(ent.uid), tostring(reason))
+						return
+					end
+
+					if current.selectedUid == ent.uid then
+						current.selectedUid = nil
+					else
+						current.selectedUid = ent.uid
+					end
+
+					for _, c2 in ipairs(refs.gridFrame:GetChildren()) do
+						if c2:IsA("GuiObject") and type(renderer.setCardSelected)=="function" then
+							renderer.setCardSelected(c2, c2:GetAttribute("uid") == current.selectedUid)
+						end
+					end
+					setConfirmEnabled(current.selectedUid ~= nil and not current.busy)
+					LOG.debug("selected uid=%s", tostring(current.selectedUid))
 				end)
-				if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
-				LOG.debug("click blocked (ineligible) uid=%s reason=%s", tostring(ent.uid), tostring(reason))
-				return
 			end
-
-			-- 切り替え選択
-			if current.selectedUid == ent.uid then
-				current.selectedUid = nil
-			else
-				current.selectedUid = ent.uid
-			end
-			-- すべてのボタンの見た目更新
-			for _, c in ipairs(refs.gridFrame:GetChildren()) do
-				if c:IsA("TextButton") then
-					setCardSelected(c, c.Name == current.selectedUid)
-				end
-			end
-			setConfirmEnabled(current.selectedUid ~= nil and not current.busy)
-			LOG.debug("selected uid=%s", tostring(current.selectedUid))
-		end)
+		end
 	end
 
-	-- Canvas 自動調整
 	task.defer(function()
-		local t1 = os.clock()
 		local content = refs.gridLayout.AbsoluteContentSize
 		refs.scroll.CanvasSize = UDim2.fromOffset(content.X, content.Y)
-		LOG.debug("rebuildList: CanvasSize set to (%d,%d) in %.2fms",
-			content.X, content.Y, (os.clock()-t1)*1000)
 	end)
 
-	LOG.info("rebuildList: items=%d ineligible=%d selected=%s in %.2fms",
-		#(current.list or {}), ineligible, tostring(current.selectedUid or "-"),
-		(os.clock()-t0)*1000
-	)
+	LOG.info("rebuildList: items=%d ineligible=%d selected=%s",
+		#(current.list or {}), ineligible, tostring(current.selectedUid or "-"))
 end
 
--- 効果説明の決定（ShopDefs 優先）
+--──────────── 文言
 local function buildEffectText(payload)
 	local item = findKitoByEffectId(payload and (payload.effectId or payload.effect))
-	if item then
-		return pickDesc(item) or ""
-	end
-	if type(payload.effect) == "string" and payload.effect ~= "" then
-		return payload.effect
-	end
-	if type(payload.message) == "string" and payload.message ~= "" then
-		return payload.message
-	end
-	if type(payload.note) == "string" and payload.note ~= "" then
-		return payload.note
-	end
+	if item then return pickDesc(item) or "" end
+	if type(payload.effect)  == "string" and payload.effect  ~= "" then return payload.effect  end
+	if type(payload.message) == "string" and payload.message ~= "" then return payload.message end
+	if type(payload.note)    == "string" and payload.note    ~= "" then return payload.note    end
 	local tgtJp = kindToJp(current.targetKind)
 	return ("対象を選んでください（目標: %s）"):format(tgtJp)
 end
 
--- 新規 payload 表示
+--──────────── Open payload（SigIncoming 経由でのみ呼ばれる）
 local function openPayload(payload)
 	local g = ensureGui()
-	-- 念のため、PlayerGui から外れていたら復旧
 	if g.Parent ~= LP:WaitForChild("PlayerGui") then
 		g.Parent = LP.PlayerGui
 	end
 
-	-- サーバの eligibility を list にマージ（唯一の正）
 	local eligibility = payload.eligibility or {}
 	local enriched = {}
 	for _, ent in ipairs(payload.list or {}) do
@@ -605,7 +425,6 @@ local function openPayload(payload)
 	current.selectedUid  = nil
 	current.busy         = false
 
-	-- ★ 祈祷名セット（ShopDefs から）
 	do
 		local item = findKitoByEffectId(current.effectId or payload.effect)
 		if refs.kitoName then
@@ -613,18 +432,16 @@ local function openPayload(payload)
 		end
 	end
 
-	-- ★ 干支アイコン（厳格：kito.<animal> のみ）
 	do
 		local icon = nil
 		if KitoAssets then
 			local eff = tostring(current.effectId or payload.effect or "")
-			-- 追加：互換IDを正規（DOT形式）へ
 			local canon = eff
 			if okDefs and ShopDefs and type(ShopDefs.toCanonicalEffectId) == "function" then
 				local okc, res = pcall(ShopDefs.toCanonicalEffectId, eff)
 				canon = okc and (res or eff) or eff
 			end
-			icon = KitoAssets.getIcon(canon) -- 揺らぎ非対応（kito.<animal>...）
+			icon = KitoAssets.getIcon(canon)
 		end
 		if refs.headerIcon then
 			if icon and icon ~= "" then
@@ -637,7 +454,6 @@ local function openPayload(payload)
 		end
 	end
 
-	-- 効果説明テキスト（desc を優先）
 	refs.effect.Text = buildEffectText(payload)
 	relayoutByEffectHeight()
 
@@ -645,9 +461,11 @@ local function openPayload(payload)
 	setConfirmEnabled(false)
 	refs.skipBtn.Active = true
 	refs.skipBtn.AutoButtonColor = true
+
 	rebuildList()
 
-	g.Enabled = true -- ★ここで可視化
+	g.Enabled = true
+	if renderer and type(renderer.show) == "function" then pcall(function() renderer.show() end) end
 
 	LOG.info("[open] sid=%s eff=%s tgt=%s list=%d router=%s",
 		tostring(current.sessionId), tostring(current.effectId or "-"),
@@ -656,25 +474,22 @@ local function openPayload(payload)
 	)
 end
 
--- 決定送信（選択あり）
+--──────────── Send
 local function sendDecide()
 	if current.busy or not current.sessionId or not current.selectedUid then
 		LOG.debug("sendDecide: ignored | busy=%s sid=%s sel=%s",
 			tostring(current.busy), tostring(current.sessionId), tostring(current.selectedUid))
 		return
 	end
-
-	-- ★ 送信前の二重チェック（サーバ同期）
 	for _, e in ipairs(current.list or {}) do
 		if e.uid == current.selectedUid and e.eligible == false then
-			local ok, err = pcall(function()
+			pcall(function()
 				StarterGui:SetCore("SendNotification", {
 					Title="KITO",
 					Text= reasonToText(e.reason) or "対象外のカードです",
 					Duration=2,
 				})
 			end)
-			if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
 			LOG.debug("sendDecide: abort (ineligible) uid=%s", tostring(current.selectedUid))
 			return
 		end
@@ -685,19 +500,15 @@ local function sendDecide()
 	refs.skipBtn.Active = false
 	refs.skipBtn.AutoButtonColor = false
 
-	local t0 = os.clock()
 	EvDecide:FireServer({
 		sessionId  = current.sessionId,
 		uid        = current.selectedUid,
 		targetKind = current.targetKind,
 	})
-	LOG.info("[sendDecide] -> FireServer sid=%s uid=%s tgt=%s in %.2fms",
-		tostring(current.sessionId), tostring(current.selectedUid),
-		tostring(current.targetKind), (os.clock()-t0)*1000
-	)
+	LOG.info("[sendDecide] -> FireServer sid=%s uid=%s tgt=%s",
+		tostring(current.sessionId), tostring(current.selectedUid), tostring(current.targetKind))
 end
 
--- スキップ送信（何も選ばない＝変更なしで確定）
 local function sendSkip()
 	if current.busy or not current.sessionId then
 		LOG.debug("sendSkip: ignored | busy=%s sid=%s", tostring(current.busy), tostring(current.sessionId))
@@ -708,24 +519,22 @@ local function sendSkip()
 	refs.skipBtn.Active = false
 	refs.skipBtn.AutoButtonColor = false
 
-	local t0 = os.clock()
 	EvDecide:FireServer({
 		sessionId  = current.sessionId,
 		targetKind = current.targetKind,
-		noChange   = true,          -- ★ Core/Server と合意済みのフラグ
+		noChange   = true,
 	})
-	LOG.info("[sendSkip] -> FireServer sid=%s tgt=%s (noChange=true) in %.2fms",
-		tostring(current.sessionId), tostring(current.targetKind), (os.clock()-t0)*1000
-	)
+	LOG.info("[sendSkip] -> FireServer sid=%s tgt=%s (noChange=true)",
+		tostring(current.sessionId), tostring(current.targetKind))
 end
 
--- 結果受信
+--──────────── Result（SigResult 経由で閉じる）
 local function onResult(res)
 	if not ui then return end
 	current.busy = false
-	ui.Enabled = false  -- ★結果受信で確実に閉じる
+	ui.Enabled = false
+	if renderer and type(renderer.hide) == "function" then pcall(function() renderer.hide() end) end
 
-	-- ★ 重要：Router でショップ画面へ戻す（空白＝青画面対策）
 	local routed = false
 	local okShow, errShow = pcall(function()
 		if ScreenRouter and ScreenRouter.show then
@@ -741,22 +550,7 @@ local function onResult(res)
 		LOG.warn("[result] ScreenRouter not available; cannot route to 'shop'")
 	end
 
-	-- 通知（本文フォールバック付き）
 	local function _nonEmpty(s) return type(s)=="string" and s ~= "" end
-	local function _reasonToText(reason)
-		local map = {
-			session           = "セッションが無効です。もう一度お試しください。",
-			expired           = "選択の有効期限が切れました。もう一度お試しください。",
-			uid               = "対象外のカードです（同種は選べません）。",
-			state             = "状態を取得できませんでした。同期してください。",
-			run               = "ラン情報が見つかりませんでした。",
-			effects           = "効果モジュールが利用できません。",
-			["no-shopservice"]= "屋台画面を再表示できませんでした。",
-			effect            = nil, -- effect は res.message を優先（無ければ最後の既定文言へ）
-		}
-		return map[tostring(reason or "")] or nil
-	end
-
 	local title, body
 	if res.cancel then
 		title = "KITO"
@@ -770,29 +564,19 @@ local function onResult(res)
 		end
 	else
 		title = "KITO (failed)"
-		body  = _nonEmpty(res.message)
-			and res.message
-			or (_reasonToText(res.reason) or ("処理に失敗しました" ..
-				(res.reason and ("（"..tostring(res.reason).."）") or "")))
+		body  = _nonEmpty(res.message) and res.message or "処理に失敗しました"
 	end
 
-	local ok, err = pcall(function()
-		StarterGui:SetCore("SendNotification", {
-			Title    = title,
-			Text     = body,
-			Duration = 3,
-		})
+	pcall(function()
+		StarterGui:SetCore("SendNotification", { Title = title, Text = body, Duration = 3 })
 	end)
-	if not ok then LOG.warn("SetCore Notify failed: %s", tostring(err)) end
 
 	LOG.info("[result] ok=%s changed=%s uid=%s id=%s msg=%s",
 		tostring(res.ok), tostring(res.changed), tostring(res.uid),
-		tostring(res.id), tostring(res.message or "")
-	)
-	LOG.debug("[toast] title=%s text=%s reason=%s", tostring(title), tostring(body), tostring(res.reason))
+		tostring(res.id), tostring(res.message or ""))
 end
 
--- ボタン配線
+-- 配線
 local function wireButtons()
 	if not ui then return end
 	refs.confirm.MouseButton1Click:Connect(sendDecide)
@@ -800,23 +584,24 @@ local function wireButtons()
 	LOG.debug("wireButtons: connected")
 end
 
--- 初期化：GUI作成だけ先にやってボタンを配線＆Router可視対象として gui を公開
+-- 初期化
 ensureGui()
 wireButtons()
-View.gui = ui  -- Router が Enabled/Visible を管理できるように公開
+View.gui = ui
 
--- ─────────────────────────────────────────────────────────────
--- ScreenRouter にセルフ登録（1回だけ）＋ Signals を購読して Router 経由で表示
--- ─────────────────────────────────────────────────────────────
+-- Router登録 & シグナル購読（1回だけ）
 if not script:GetAttribute("booted") then
 	script:SetAttribute("booted", true)
 
-	-- Router から呼ばれる公開メソッド（コロンで self 受け取り）
 	function View:show(payload) openPayload(payload) end
-	function View:hide()        if ui then ui.Enabled = false end end
+	function View:hide()
+		if ui then ui.Enabled = false end
+		if renderer and type(renderer.hide) == "function" then pcall(function() renderer.hide() end) end
+	end
 	function View:onResult(res) onResult(res) end
+	function View:setLang(_lang) end
+	function View:setRerollCounts(_a,_b,_c) end
 
-	-- ルーターに登録
 	local ok, err = pcall(function()
 		if ScreenRouter and ScreenRouter.register then
 			ScreenRouter.register("kitoPick", View)
@@ -828,30 +613,26 @@ if not script:GetAttribute("booted") then
 		LOG.warn("ScreenRouter.register failed: %s", tostring(err))
 	end
 
-	-- Signals 購読：受信→Router 経由で表示（正道）
+	-- ★ 単一路線：Wires が発火する ClientSignals のみ購読
 	SigIncoming.Event:Connect(function(payload)
-		local t0 = os.clock()
 		if type(payload) ~= "table" then
 			LOG.warn("SigIncoming: invalid payload type=%s", typeof(payload))
 			return
 		end
 		if ScreenRouter and ScreenRouter.show then
 			ScreenRouter.show("kitoPick", payload)
-			LOG.debug("SigIncoming: via Router in %.2fms", (os.clock()-t0)*1000)
 		else
 			View:show(payload)
-			LOG.debug("SigIncoming: direct show in %.2fms", (os.clock()-t0)*1000)
 		end
+		LOG.debug("SigIncoming handled")
 	end)
 
 	SigResult.Event:Connect(function(res)
-		local t0 = os.clock()
 		if type(res) ~= "table" then
 			LOG.warn("SigResult: invalid result type=%s", typeof(res))
 			return
 		end
 		View:onResult(res)
-		LOG.debug("SigResult: handled in %.2fms", (os.clock()-t0)*1000)
 	end)
 
 	LOG.info("booted | router=%s", ScreenRouter and "on" or "off")

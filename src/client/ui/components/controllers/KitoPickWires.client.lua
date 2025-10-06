@@ -1,10 +1,10 @@
--- src/client/ui/components/controllers/KitoPickWires.client.lua
--- 目的: KitoPick の配線（本UI前提。必要なら自動決定も残置）
+-- src/client/ui/wires/KitoPickWires.client.lua
+-- 目的: KitoPick の配線（UIは ClientSignals のみ購読）
 -- メモ:
 --  - Balance.KITO_UI_ENABLED が true のときのみ動作
 --  - Balance.KITO_UI_AUTO_DECIDE=false で本UIへ委譲（12枚一覧・グレーアウト・確定ボタン）
---  - UI側は ReplicatedStorage/ClientSignals の BindableEvent を購読して実装する
---  - ★ eligibility を尊重：AUTO_DECIDE 時は「選択可能(eligibility.ok)な候補のみ」から選ぶ
+--  - UI層は ReplicatedStorage/ClientSignals の BindableEvent を購読する
+--  - eligibility を尊重：AUTO_DECIDE 時は「選択可能(eligibility.ok)な候補のみ」から選ぶ
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -36,10 +36,6 @@ local ENABLED     = (Balance.KITO_UI_ENABLED == true)
 
 -- ─────────────────────────────────────────────────────────────
 -- UI ブリッジ（クライアント内だけで使う BindableEvent を公開）
---  - UI は以下を購読すればよい:
---    RS.ClientSignals.KitoPickIncoming.Event:Connect(function(payload) ... end)
---    RS.ClientSignals.KitoPickResult.Event:Connect(function(res) ... end)
---  - UI から確定時は EvDecide:FireServer({...}) を直接呼んでOK
 -- ─────────────────────────────────────────────────────────────
 local function ensure(parent, name, className)
 	local inst = parent:FindFirstChild(name)
@@ -65,14 +61,13 @@ end
 
 -- eligible を尊重して UID を選ぶ（AUTO_DECIDE 用）
 -- 1) eligible==true の中から先頭
--- 2) すべて不可なら nil を返す（＝スキップ送信）
+-- 2) すべて不可なら nil（＝スキップ送信）
 local function chooseEligibleUid(payload)
 	if type(payload) ~= "table" or type(payload.list) ~= "table" or #payload.list == 0 then
 		return nil
 	end
 	local elig = (type(payload.eligibility) == "table") and payload.eligibility or {}
 
-	-- まず eligible==true を探す
 	for _, ent in ipairs(payload.list) do
 		local uid = ent and ent.uid
 		if uid then
@@ -82,8 +77,6 @@ local function chooseEligibleUid(payload)
 			end
 		end
 	end
-
-	-- すべて不可なら nil
 	return nil
 end
 
@@ -101,7 +94,7 @@ local function countEligible(payload)
 end
 
 -- ─────────────────────────────────────────────────────────────
--- 受信: 候補提示
+-- 受信: 候補提示 → UI へ（または AUTO_DECIDE）
 -- ─────────────────────────────────────────────────────────────
 EvStart.OnClientEvent:Connect(function(payload)
 	if not ENABLED then
@@ -123,13 +116,13 @@ EvStart.OnClientEvent:Connect(function(payload)
 	)
 	if not ok or #payload.list == 0 then return end
 
-	-- 本UIへ委譲: UI 層に payload を流す（12枚一覧・グレーアウト・確定ボタン）
 	if not AUTO_DECIDE then
+		-- 単一路線：UI は ClientSignals 経由でのみ開く
 		SigIncoming:Fire(payload)
 		return
 	end
 
-	-- ★AUTO_DECIDE: eligible==true の先頭を自動選択。1件も無ければ「スキップ」扱い。
+	-- AUTO_DECIDE: eligible==true の先頭を自動選択。1件も無ければ「スキップ」。
 	local pickUid = chooseEligibleUid(payload)
 	if not pickUid then
 		LOG.warn("[KitoPickDecide] no eligible candidate; sending skip")
@@ -137,7 +130,7 @@ EvStart.OnClientEvent:Connect(function(payload)
 			EvDecide:FireServer({
 				sessionId  = payload.sessionId,
 				targetKind = payload.targetKind or "bright",
-				noChange   = true, -- サーバ合意済みのスキップフラグ
+				noChange   = true,
 			})
 		end)
 		if not okSend then
@@ -163,7 +156,7 @@ EvStart.OnClientEvent:Connect(function(payload)
 end)
 
 -- ─────────────────────────────────────────────────────────────
--- 受信: 結果（UIへ通知）
+-- 受信: 結果 → UI へ
 -- ─────────────────────────────────────────────────────────────
 EvResult.OnClientEvent:Connect(function(res)
 	if type(res) ~= "table" then return end
