@@ -1,8 +1,5 @@
 -- StarterPlayerScripts/UI/components/ShopCells.lua
--- v0.9.I5 full-art + text-fallback
---  - KITO: アイコンが解決できたときはカード全面にフルアート表示
---  - 非KITO/アイコン未解決: 効果テキスト（ShopFormat.itemTitle）をカードに表示（faceName()にフォールバック）
---  - 価格バンドは下部固定、従来の診断ログ/安全化は維持
+-- v0.9.I5 → Phase1: 見た目値を ShopStyles 経由に（挙動は不変）
 
 local RS           = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -15,10 +12,19 @@ local ShopFormat    = require(SharedModules:WaitForChild("ShopFormat"))
 local Logger = require(SharedModules:WaitForChild("Logger"))
 local LOG    = Logger.scope("ShopCells")
 
--- Theme & Locale
+-- Theme & Locale（Theme はフォールバック）
 local Config = RS:WaitForChild("Config")
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
+
+-- Styles（UI配下: UI/styles/ShopStyles.lua）
+local Styles do
+	local ok, mod = pcall(function()
+		-- このモジュールは UI/components 配下
+		return require(script.Parent.Parent:WaitForChild("styles"):WaitForChild("ShopStyles"))
+	end)
+	Styles = ok and mod or nil
+end
 
 -- ★ ShopDefs（互換ID→正規ID）
 local okDefs, ShopDefs = pcall(function()
@@ -26,7 +32,6 @@ local okDefs, ShopDefs = pcall(function()
 end)
 
 -- ★ 干支アイコン（厳格: kito.<animal> のみ受理）
---   このファイルは ui/components にあるので、ui/lib/KitoAssets を参照する
 local KitoAssets do
 	local ok, mod = pcall(function()
 		return require(script.Parent.Parent:WaitForChild("lib"):WaitForChild("KitoAssets"))
@@ -82,18 +87,31 @@ local function _computeAffordable(mon:any, price:any): boolean
 	return m >= p
 end
 
-local function _themeColor(path:string, fallback: Color3): Color3
-	local col = fallback
-	if Theme and Theme.COLORS and typeof(Theme.COLORS[path]) == "Color3" then
-		col = Theme.COLORS[path]
+-- Styles → Theme → fallback の順に解決
+local function _styleColor(key:string, fallback: Color3): Color3
+	if Styles and Styles.colors and typeof(Styles.colors[key]) == "Color3" then
+		return Styles.colors[key]
 	end
-	return col
+	-- Theme キー互換（最低限）
+	local map = {
+		panelStroke = "PanelStroke",
+		badgeBg     = "BadgeBg",
+		badgeStroke = "BadgeStroke",
+		text        = "TextDefault",
+		cardBg      = "PanelBg",
+	}
+	local themeKey = map[key]
+	if themeKey and Theme and Theme.COLORS and typeof(Theme.COLORS[themeKey]) == "Color3" then
+		return Theme.COLORS[themeKey]
+	end
+	return fallback
 end
 
 local function addCorner(gui: Instance, px: number?)
 	local ok = pcall(function()
 		local c = Instance.new("UICorner")
-		c.CornerRadius = UDim.new(0, px or (Theme and Theme.PANEL_RADIUS) or 10)
+		local r = px or (Styles and Styles.sizes.panelCorner) or Theme.PANEL_RADIUS or 10
+		c.CornerRadius = UDim.new(0, r)
 		c.Parent = gui
 	end)
 	return ok
@@ -103,7 +121,7 @@ local function addStroke(gui: Instance, color: Color3?, thickness: number?, tran
 	local ok, stroke = pcall(function()
 		local s = Instance.new("UIStroke")
 		s.Thickness = thickness or 1
-		s.Color = color or _themeColor("PanelStroke", Color3.fromRGB(70,70,80))
+		s.Color = color or _styleColor("panelStroke", Color3.fromRGB(70,70,80))
 		s.Transparency = transparency or 0
 		s.Parent = gui
 		return s
@@ -124,7 +142,6 @@ end
 --========================
 -- KITOフルアート背景（診断付き）
 --========================
--- 成功したら true を返す（＝テキストを消してOK）
 local function _applyKitoFullArt(btn: Instance, priceBand: Instance, it:any): boolean
 	if not (btn and btn:IsA("GuiObject")) then return false end
 	if not it then return false end
@@ -166,7 +183,7 @@ local function _applyKitoFullArt(btn: Instance, priceBand: Instance, it:any): bo
 	art.BackgroundTransparency = 1
 	art.ScaleType = Enum.ScaleType.Fit
 	-- カード全面（下の価格バンド分だけ高さを差し引く）
-	local priceH = 20
+	local priceH = (Styles and Styles.sizes.priceBandH) or 20
 	if priceBand and priceBand:IsA("GuiObject") then
 		local h = tonumber(priceBand.Size.Y.Offset) or priceH
 		priceH = h
@@ -203,36 +220,36 @@ function M.create(parent: Instance, nodes, it: any, lang: string, mon: number, h
 	do
 		-- 文字サイズの上限（大きすぎ回避）
 		local max = Instance.new("UITextSizeConstraint")
-		max.MaxTextSize = 24
+		max.MaxTextSize = (Styles and Styles.fontSizes.cellTextMax) or 24
 		max.Parent = btn
 	end
 	btn.TextXAlignment = Enum.TextXAlignment.Center
 	btn.TextYAlignment = Enum.TextYAlignment.Center
 
 	btn.Font = Enum.Font.GothamBold
-	btn.TextColor3 = _themeColor("TextDefault", Color3.fromRGB(240,240,240))
-	btn.BackgroundColor3 = _themeColor("PanelBg", Color3.fromRGB(35,38,46))
+	btn.TextColor3 = _styleColor("text", Color3.fromRGB(240,240,240))
+	btn.BackgroundColor3 = _styleColor("cardBg", Color3.fromRGB(35,38,46))
 	btn.AutoButtonColor  = true
-	btn.ZIndex = 10
+	btn.ZIndex = (Styles and Styles.z.cells) or 10
 	btn.Parent = parent
-	addCorner(btn, Theme and Theme.PANEL_RADIUS or 10)
-	local stroke = addStroke(btn, _themeColor("PanelStroke", Color3.fromRGB(70,70,80)), 1, 0)
+	addCorner(btn, (Styles and Styles.sizes.panelCorner) or Theme.PANEL_RADIUS or 10)
+	local stroke = addStroke(btn, _styleColor("panelStroke", Color3.fromRGB(70,70,80)), 1, 0)
 
 	-- 価格バンド
 	local priceBand = Instance.new("TextLabel")
 	priceBand.Name = "Price"
-	priceBand.BackgroundColor3 = _themeColor("BadgeBg", Color3.fromRGB(25,28,36))
-	priceBand.Size = UDim2.new(1,0,0,20)
-	priceBand.Position = UDim2.new(0,0,1,-20)
+	priceBand.BackgroundColor3 = _styleColor("badgeBg", Color3.fromRGB(25,28,36))
+	priceBand.Size = UDim2.new(1,0,0,(Styles and Styles.sizes.priceBandH) or 20)
+	priceBand.Position = UDim2.new(0,0,1,-((Styles and Styles.sizes.priceBandH) or 20))
 	priceBand.Text = _fmtPrice(it and it.price)
-	priceBand.TextSize = 14
+	priceBand.TextSize = (Styles and Styles.fontSizes.price) or 14
 	priceBand.Font = Enum.Font.Gotham
 	priceBand.TextColor3 = Color3.fromRGB(245,245,245)
-	priceBand.ZIndex = 11
+	priceBand.ZIndex = (Styles and Styles.z.price) or 11
 	priceBand.Active = false
 	priceBand.Selectable = false
 	priceBand.Parent = btn
-	addStroke(priceBand, _themeColor("BadgeStroke", Color3.fromRGB(60,65,80)), 1, 0.2)
+	addStroke(priceBand, _styleColor("badgeStroke", Color3.fromRGB(60,65,80)), 1, 0.2)
 
 	-- 購入可否
 	local affordable = _computeAffordable(mon, it and it.price)

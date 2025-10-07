@@ -1,8 +1,9 @@
 -- StarterPlayerScripts/UI/ClientMain.client.lua
--- v0.9.6-P1-5 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
--- - ShopOpen: kitoPick前面時は画面切替せず、shopを裏でsetData/updateのみ（レース解消）
--- - Routerの安全スタブに ensure/active を追加
--- - ★ ShopOpen の配線は本ファイルのみ（他UIでの直配線は禁止）。重複接続はガード。
+-- v0.9.6-P1-8 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
+-- - ShopOpen の受信は撤去し、代わりに ShopWires.init に一任（フェーズ4：Wires 単一路線化）
+-- - ShopResult は存在しない環境もあるため FindFirstChild に変更（Infinite yield 回避）
+-- - kitoPick 前面時の裏更新などの分岐も Wires 側に委譲
+-- - Router の安全スタブ ensure/active/register は従来どおり
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -53,7 +54,8 @@ local NavClient = require(RS:WaitForChild("SharedModules"):WaitForChild("NavClie
 -- S→C
 --========================
 local HomeOpen    = Remotes:WaitForChild("HomeOpen")
-local ShopOpen    = Remotes:WaitForChild("ShopOpen")
+local ShopOpen    = Remotes:WaitForChild("ShopOpen")           -- ← Wires 側で購読
+local ShopResult  = Remotes:FindFirstChild("ShopResult")       -- ← 存在しない環境あり。WaitForChild を使わない
 local StatePush   = Remotes:WaitForChild("StatePush")
 local HandPush    = Remotes:WaitForChild("HandPush")
 local FieldPush   = Remotes:WaitForChild("FieldPush")
@@ -71,8 +73,8 @@ local Confirm        = Remotes:WaitForChild("Confirm")
 local ReqRerollAll   = Remotes:WaitForChild("ReqRerollAll")
 local ReqRerollHand  = Remotes:WaitForChild("ReqRerollHand")
 local ShopDone       = Remotes:WaitForChild("ShopDone")
-local BuyItem        = Remotes:WaitForChild("BuyItem")
-local ShopReroll     = Remotes:WaitForChild("ShopReroll")
+local BuyItem        = Remotes:WaitForChild("BuyItem")         -- ← Wires 側で送信
+local ShopReroll     = Remotes:WaitForChild("ShopReroll")      -- ← Wires 側で送信
 local ReqPick        = Remotes:WaitForChild("ReqPick")
 local ReqSyncUI      = Remotes:WaitForChild("ReqSyncUI")
 local DecideNext     = Remotes:WaitForChild("DecideNext")
@@ -113,24 +115,28 @@ do
 	mod.setDeps  = (type(mod.setDeps)  == "function") and mod.setDeps  or function(_) end
 	mod.show     = (type(mod.show)     == "function") and mod.show     or function(_) end
 	mod.call     = (type(mod.call)     == "function") and mod.call     or function() end
-	-- ★ 追加：ensure/active を安全に生やす（bg更新で使用）
+	-- ensure/active/register を安全に生やす
 	mod.ensure   = (type(mod.ensure)   == "function") and mod.ensure   or function() end
 	mod.active   = (type(mod.active)   == "function") and mod.active   or function() return nil end
-	-- ★ register を使うので、存在しない場合は安全な no-op を入れておく
 	mod.register = (type(mod.register) == "function") and mod.register or function() end
 	Router = mod
 end
 
--- ★ KitoPick を正式登録（他画面と同列）
+--========================
+-- 画面定義（shop は ShopView）
+--========================
 local Screens = {
 	home     = require(ScreensFolder:WaitForChild("HomeScreen")),
 	run      = require(ScreensFolder:WaitForChild("RunScreen")),
-	shop     = require(ScreensFolder:WaitForChild("ShopScreen")),
+	shop     = require(ScreensFolder:WaitForChild("ShopView")),
 	shrine   = require(ScreensFolder:WaitForChild("ShrineScreen")),
 	kitoPick = require(ScreensFolder:WaitForChild("KitoPickView")),
 }
 Router.init(Screens)
 
+--========================
+-- 依存性配布（Router → UI）
+--========================
 Router.setDeps({
 	playerGui = Players.LocalPlayer:WaitForChild("PlayerGui"),
 	Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
@@ -168,12 +174,51 @@ Router.setDeps({
 	},
 })
 
---========================================
--- S→C 配線（ShopOpen はここだけ）
---========================================
+--========================
+-- Wires 単一路線化：ShopWires.init
+--========================
+local componentsFolder = uiRoot:WaitForChild("components")
+local ShopWires     = require(componentsFolder:WaitForChild("controllers"):WaitForChild("ShopWires"))
+local ClientSignals = require(componentsFolder:WaitForChild("controllers"):WaitForChild("ClientSignals"))
 
--- ★ ガード：ShopOpen の重複接続を防止
-local _wired_ShopOpen = false
+-- ShopOpen/（任意）ShopResult の購読、および Buy/Reroll/Close の送信は ShopWires に集約
+ShopWires.init({
+	Router = Router,
+	Locale = Locale,
+	LocaleUtil = LocaleUtil,
+	Logger = Logger,
+	signals = ClientSignals,
+	remotes = {
+		ShopOpen   = ShopOpen,
+		ShopResult = ShopResult,   -- ← nil の可能性あり。ShopWires 側で nil チェックすること
+		BuyItem    = BuyItem,
+		ShopReroll = ShopReroll,
+		ShopDone   = ShopDone,
+		ReqSetLang = ReqSetLang,
+		StatePush  = StatePush,
+	},
+	toast = function(msg, dur)
+		pcall(function()
+			local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+			local lang = LocaleUtil.norm(gl) or "en"
+			local title = (type(Locale.t)=="function" and Locale.t(lang, "TOAST_TITLE"))
+			              or ((lang=="ja") and "通知" or "Notice")
+			game.StarterGui:SetCore("SendNotification", {
+				Title    = title,
+				Text     = msg,
+				Duration = dur or 2,
+			})
+		end)
+	end,
+})
+if not ShopResult then
+	LOG.warn("ShopResult remote not found; Wires will operate with ShopOpen only")
+end
+LOG.info("wired: ShopWires.init (ShopOpen/ShopResult by Wires)")
+
+--========================================
+-- S→C 配線（ShopOpen は撤去済み：Wires に委譲）
+--========================================
 
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
@@ -183,48 +228,6 @@ HomeOpen.OnClientEvent:Connect(function(payload)
 	Router.show("home", payload)
 	LOG.info("Router.show -> home")
 end)
-
--- ★ 以降の接続は「初回のみ」。2回目以降はWARNして無視。
-if _wired_ShopOpen then
-	LOG.warn("ShopOpen wiring duplicated; skipped")
-else
-	ShopOpen.OnClientEvent:Connect(function(payload)
-		local p = payload or {}
-		if p.lang == nil then
-			p.lang = (Locale.getGlobal and Locale.getGlobal()) or "en"
-		end
-		local nl = LocaleUtil.norm(p.lang)
-		if nl and nl ~= p.lang then p.lang = nl end
-
-		-- ★ 根本対応：kitoPickが前面のときは shop を「裏で」更新のみ行い、画面は切り替えない
-		local active = (type(Router.active)=="function" and Router.active()) or nil
-		if active == "kitoPick" then
-			local okEnsure, shopInst = pcall(function() return Router.ensure("shop") end)
-			if okEnsure and shopInst then
-				if type(shopInst.setData) == "function" then
-					local ok1, err1 = pcall(function() shopInst:setData(p) end)
-					if not ok1 then LOG.warn("ShopOpen(bg): setData failed: %s", tostring(err1)) end
-				end
-				if type(shopInst.update) == "function" then
-					local ok2, err2 = pcall(function() shopInst:update(p) end)
-					if not ok2 then LOG.warn("ShopOpen(bg): update failed: %s", tostring(err2)) end
-				end
-				LOG.info("<ShopOpen> updated in background | lang=%s (kitoPick active)", tostring(p.lang))
-				return
-			end
-			-- ensure に失敗した場合のみフォールバック遷移
-			Router.show("shop", p)
-			LOG.info("<ShopOpen> routed (fallback) | lang=%s", tostring(p.lang))
-			return
-		end
-
-		-- 通常経路：kitoPick 以外なら素直に遷移
-		Router.show("shop", p)
-		LOG.info("<ShopOpen> routed once | lang=%s", tostring(p.lang))
-	end)
-	_wired_ShopOpen = true
-	LOG.info("wired: ShopOpen(OnClientEvent)")
-end
 
 RoundReady.OnClientEvent:Connect(function()
 	local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"

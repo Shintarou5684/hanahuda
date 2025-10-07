@@ -1,116 +1,243 @@
--- StarterPlayerScripts/UI/components/controllers/ShopWires.lua
--- v0.9.3-P1-4 ShopWires：Shop画面のイベント配線・UI更新のみ（Locale-first）
--- ポリシー:
---  - リロールは「所持金>=費用」でのみ可否判定（残回数は見ない）
---  - 二重送出防止：UIを即時無効化し、nonce を付与してサーバへ送信
---  - UIの再有効化はサーバからの ShopOpen ペイロード受信時に判定して行う
---  - （重要）ShopOpen の受信は ClientMain に一本化。本モジュールはリスナーを持たない。
---  - P1-3: 共通 Logger 導入（print/warn を LOG.* へ）
---  - P1-4: ShopI18n 依存を廃止し、Locale 直参照に統一
+-- v0.10.0 Wires single-route: Remotes subscriber & sender
+--  - Only this file listens to Remotes (ShopOpen/ShopResult)
+--  - View/Renderer never fire remotes; they raise ClientSignals.* only
+--  - Also wires View buttons and deck toggle
 
-local RS = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
+local RS      = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Remotes = RS:WaitForChild("Remotes")
 
 local SharedModules = RS:WaitForChild("SharedModules")
-local ShopFormat = require(SharedModules:WaitForChild("ShopFormat"))
+local Config        = RS:WaitForChild("Config")
 
--- Logger
-local Logger = require(SharedModules:WaitForChild("Logger"))
-local LOG    = Logger.scope("ShopWires")
+local Logger     = require(SharedModules:WaitForChild("Logger"))
+local LOG        = Logger.scope("ShopWires")
+local Locale     = require(Config:WaitForChild("Locale"))
+local LocaleUtil = require(SharedModules:WaitForChild("LocaleUtil"))
 
--- Locale
-local Config = RS:WaitForChild("Config")
-local Locale = require(Config:WaitForChild("Locale"))
+local ClientSignals = require(script.Parent:WaitForChild("ClientSignals"))
 
 local M = {}
 
--- 内部: リロールボタン状態を payload から再評価して反映
-local function applyRerollButtonState(self, payload)
-  local p = payload or self._payload or {}
-  local money = tonumber(p.mon or p.totalMon or 0) or 0
-  local cost  = tonumber(p.rerollCost or 1) or 1
-  local can   = (p.canReroll ~= false) and (money >= cost)
-  if self._nodes and self._nodes.rerollBtn then
-    self._nodes.rerollBtn.Active = can
-    self._nodes.rerollBtn.AutoButtonColor = can
-  end
+-- deps: Router/toast だけDI（なければ安全スタブ）
+M._deps = {
+	Router = nil,
+	toast  = function(_) end,
+}
+
+M._wiredRemotes = false
+M._wiredSignals = false
+M._lastPayload  = nil
+M._buyBusy      = false
+M._rerollBusy   = false
+
+--=====================
+-- helpers
+--=====================
+local function _normLang(lang)
+	local l = (type(Locale.normalize)=="function" and Locale.normalize(lang)) or lang or "en"
+	if tostring(lang or ""):lower()=="jp" and l=="ja" then
+		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
+	end
+	return l
 end
 
-function M.applyInfoPlaceholder(self)
-  if not (self and self._nodes and self._nodes.infoText) then return end
-  local lang = ShopFormat.normLang(self._lang)
-  self._nodes.infoText.Text = Locale.t(lang, "SHOP_UI_INFO_PLACEHOLDER")
+local function _ensureRouter()
+	local R = M._deps.Router or {}
+	R.ensure = (type(R.ensure)=="function") and R.ensure or function() end
+	R.active = (type(R.active)=="function") and R.active or function() return nil end
+	R.show   = (type(R.show)  =="function") and R.show   or function() end
+	R.call   = (type(R.call)  =="function") and R.call   or function() end
+	return R
 end
 
-function M.wireButtons(self)
-  local nodes = self._nodes
-  if not nodes then return end
-
-  nodes.closeBtn.Activated:Connect(function()
-    if self._closing then return end
-    self._closing = true
-    LOG.info("close clicked")
-    self:hide()
-    if self.deps and self.deps.toast then
-      local lang = ShopFormat.normLang(self._lang)
-      -- SHOP_UI_* に相当キーが無いので軽い直書き（必要なら Locale に追加可）
-      local msg = (lang == "ja") and "屋台を閉じました" or "Shop closed"
-      self.deps.toast(msg, 2)
-    end
-    if self.deps and self.deps.remotes and self.deps.remotes.ShopDone then
-      self.deps.remotes.ShopDone:FireServer()
-    end
-    task.delay(0.2, function() self._closing = false end)
-  end)
-
-  -- リロール：nonce 付き送信 + 即時UI無効化（解除はサーバ応答時に行う）
-  local rerollBusyDebounce = 0.3
-  nodes.rerollBtn.Activated:Connect(function()
-    if self._rerollBusy then return end
-    if not (self.deps and self.deps.remotes and self.deps.remotes.ShopReroll) then return end
-
-    self._rerollBusy = true
-
-    -- 即時に押下不能にする（見た目はShopUIに委譲）
-    if self._nodes and self._nodes.rerollBtn then
-      self._nodes.rerollBtn.Active = false
-    end
-
-    -- nonce を付与して送信
-    local nonce = HttpService:GenerateGUID(false)
-    self._lastRerollNonce = nonce
-    LOG.info("REROLL click → FireServer | nonce=%s", nonce)
-    self.deps.remotes.ShopReroll:FireServer(nonce)
-
-    -- debounce経過後にbusyフラグだけ解除（UIの再有効化はサーバ側のShopOpen受信時に行う）
-    task.delay(rerollBusyDebounce, function()
-      self._rerollBusy = false
-      -- ここで self:_render() は呼ばない（旧payloadで再度有効化されるのを防ぐ）
-    end)
-  end)
-
-  nodes.deckBtn.Activated:Connect(function()
-    self._deckOpen = not self._deckOpen
-    LOG.debug("deck toggle -> %s", tostring(self._deckOpen))
-    self:_render()
-  end)
+local function _snapTalisman(payload)
+	local p = payload or M._lastPayload
+	return p and p.state and p.state.run and p.state.run.talisman or nil
 end
 
--- ⚠ 非推奨：ShopOpenのリスナー接続は行わない。ClientMainが単独で受ける。
--- 互換用に「payloadを渡すとUIだけ更新する」関数を返す。
-function M.attachRemotes(self, remotes, router)
-  LOG.warn("attachRemotes is deprecated; ClientMain handles <ShopOpen>. UI will only refresh.")
-  -- 互換クロージャ：外部で新payloadを受け取ったときに UI を更新するための関数
-  return function(payload)
-    -- 言語の注入（payload優先→既存→"en"）
-    if payload and payload.lang and type(payload.lang) == "string" then
-      self._lang = ShopFormat.normLang(payload.lang)
-    end
-    -- 画面表示＆描画（遷移はしない／Routerは使わない）
-    self:show(payload)
-    -- リロール可否の再評価
-    applyRerollButtonState(self, payload)
-  end
+local function _findFirstEmptySlot(payload)
+	local t = _snapTalisman(payload)
+	if type(t) ~= "table" then return nil end
+	local unlocked = tonumber(t.unlocked or 0) or 0
+	local s = t.slots or {}
+	for i=1, math.min(unlocked, 6) do
+		if s[i] == nil then return i end
+	end
+	return nil
+end
+
+local function _money(payload)
+	return tonumber((payload and (payload.mon or payload.totalMon)) or 0) or 0
+end
+
+--=====================
+-- Remotes → Signals / Router
+--=====================
+local function _onShopOpen(payload)
+	M._lastPayload = payload or {}
+	if M._lastPayload and M._lastPayload.lang then
+		M._lastPayload.lang = _normLang(M._lastPayload.lang)
+	end
+
+	-- Router制御（kitoPick前面時は裏更新）
+	local R = _ensureRouter()
+	if R.active() == "kitoPick" then
+		local ok, shopInst = pcall(function() return R.ensure("shop") end)
+		if ok and shopInst then
+			if type(shopInst.setData)=="function" then
+				pcall(function() shopInst:setData(M._lastPayload) end)
+			end
+			if type(shopInst.update)=="function" then
+				pcall(function() shopInst:update(M._lastPayload) end)
+			end
+			LOG.info("<ShopOpen> updated in background | lang=%s (kitoPick active)", tostring(M._lastPayload.lang))
+		else
+			R.show("shop", M._lastPayload)
+			LOG.info("<ShopOpen> routed (fallback) | lang=%s", tostring(M._lastPayload.lang))
+		end
+	else
+		R.show("shop", M._lastPayload)
+		LOG.info("<ShopOpen> routed | lang=%s", tostring(M._lastPayload.lang))
+	end
+
+	-- ローカルバス配布（必要なら他UIが聞ける）
+	ClientSignals.ShopIncoming:Fire(M._lastPayload)
+end
+
+local function _onShopResult(res)
+	ClientSignals.ShopResult:Fire(res)
+end
+
+--=====================
+-- Signals → Remotes（送信はここだけ）
+--=====================
+local function _sendBuy(it)
+	if M._buyBusy then return end
+	if not it then return end
+	local mon   = _money(M._lastPayload)
+	local price = tonumber(it.price or 0) or 0
+	if mon < price then
+		M._deps.toast((Locale.t and Locale.t(_normLang(M._lastPayload and M._lastPayload.lang), "SHOP_UI_NOT_ENOUGH_MONEY")) or "お金が足りません")
+		return
+	end
+	M._buyBusy = true
+
+	-- talisman は自動配置
+	if tostring(it.category) == "talisman" and it.talismanId then
+		local idx = _findFirstEmptySlot(M._lastPayload)
+		if not idx then
+			M._deps.toast(Locale.t(_normLang(M._lastPayload and M._lastPayload.lang), "SHOP_UI_NO_EMPTY_SLOT"))
+			M._buyBusy = false
+			return
+		end
+		local PlaceOnSlot = Remotes:FindFirstChild("PlaceOnSlot")
+		if PlaceOnSlot and PlaceOnSlot:IsA("RemoteEvent") then
+			PlaceOnSlot:FireServer(idx, it.talismanId)
+		else
+			LOG.warn("[ShopWires] PlaceOnSlot missing; skip")
+		end
+	else
+		local BuyItem = Remotes:FindFirstChild("BuyItem")
+		if BuyItem and BuyItem:IsA("RemoteEvent") then
+			pcall(function() BuyItem:FireServer(it.id) end)
+		else
+			LOG.warn("[ShopWires] BuyItem missing; skip id=%s", tostring(it.id))
+		end
+	end
+
+	task.delay(0.25, function() M._buyBusy = false end)
+end
+
+local function _sendReroll()
+	if M._rerollBusy then return end
+	M._rerollBusy = true
+	local re = Remotes:FindFirstChild("ShopReroll")
+	if re and re:IsA("RemoteEvent") then
+		pcall(function() re:FireServer() end)
+	else
+		LOG.warn("[ShopWires] ShopReroll missing; skip")
+	end
+	task.delay(0.25, function() M._rerollBusy = false end)
+end
+
+local function _sendClose()
+	local re = Remotes:FindFirstChild("ShopDone")
+	if re and re:IsA("RemoteEvent") then
+		pcall(function() re:FireServer() end)
+	else
+		LOG.warn("[ShopWires] ShopDone missing; skip")
+	end
+end
+
+--=====================
+-- Public: init / wireButtons / applyInfoPlaceholder
+--=====================
+function M.init(opts)
+	M._deps.Router = (opts and opts.Router) or M._deps.Router
+	M._deps.toast  = (opts and opts.toast)  or M._deps.toast
+
+	-- Remotes → Signals
+	if not M._wiredRemotes then
+		local ShopOpen = Remotes:WaitForChild("ShopOpen")
+		ShopOpen.OnClientEvent:Connect(_onShopOpen)
+		local ShopResult = Remotes:FindFirstChild("ShopResult")
+		if ShopResult and ShopResult:IsA("RemoteEvent") then
+			ShopResult.OnClientEvent:Connect(_onShopResult)
+		end
+		M._wiredRemotes = true
+		LOG.info("wired: Remotes (ShopOpen/ShopResult)")
+	end
+
+	-- Signals → Remotes（送信）
+	if not M._wiredSignals then
+		ClientSignals.BuyRequested:Connect(_sendBuy)
+		ClientSignals.RerollRequested:Connect(_sendReroll)
+		ClientSignals.CloseRequested:Connect(_sendClose)
+		M._wiredSignals = true
+		LOG.info("wired: ClientSignals (Buy/Reroll/Close)")
+	end
+end
+
+function M.wireButtons(view)
+	local n = view and view._nodes
+	if not n then return end
+	-- Reroll
+	if n.rerollBtn and n.rerollBtn.Activated then
+		n.rerollBtn.Activated:Connect(function()
+			_sendReroll()
+		end)
+		LOG.info("wireButtons: RerollBtn connected")
+	end
+	-- Deck toggle
+	if n.deckBtn and n.deckBtn.Activated then
+		n.deckBtn.Activated:Connect(function()
+			view._deckOpen = not (view._deckOpen == true)
+			if n.deckPanel and n.infoPanel then
+				n.deckPanel.Visible = view._deckOpen
+				n.infoPanel.Visible = not view._deckOpen
+			end
+		end)
+		LOG.info("wireButtons: DeckBtn connected")
+	end
+	-- Close
+	if n.closeBtn and n.closeBtn.Activated then
+		n.closeBtn.Activated:Connect(function()
+			_sendClose()
+			LOG.info("[CLOSE] → ShopDone.FireServer")
+		end)
+		LOG.info("wireButtons: CloseBtn connected")
+	else
+		LOG.warn("wireButtons: CloseBtn missing; skip")
+	end
+end
+
+function M.applyInfoPlaceholder(view)
+	local n = view and view._nodes
+	if not n or not n.infoText then return end
+	if n.infoText.Text == "" then
+		n.infoText.Text = "（アイテムにマウスを乗せるか、クリックしてください）"
+	end
 end
 
 return M
