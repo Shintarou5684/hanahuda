@@ -1,16 +1,10 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-12
---  - 公開フック：onState/onHand/onField/onTaken/onScore/onStageResult
---  - StageResult の互換受信（{close=true} / (true,data) / data 単体）
---  - Home等への遷移後にリザルト残留防止（show() 冒頭で hide / _resultShown リセット）
---  - [FIX-S1] StatePush(onState)で護符を反映 / [FIX-S2] show()でnil上書きを防止
---  - 監視用ログ（[LOG]）
---  - talisman はサーバ確定値のみ描画（推測しない）
---  - ラン放棄（あきらめる）ボタン＋確認モーダル
---  - Router.call 対応の公開メソッド群
---  - setRerollCounts(field, hand, phase) 実装（ScreenRouter.StatePush フックに対応）
---  - ★ 情報パネルを簡素化（年/月・所持金・山札のみ表示）
---  - ★ 追記：MatchHighlighter を導入（手札ホバー/タップ中に同色ハイライト）
+-- v0.9.7-P2-12R4 (Responsive pass / single-line buttons + modal ZIndex fix)
+--  - buttons が table/Instance どちらでも安全に処理
+--  - すべての TextButton を TextScaled + 1行固定（折り返し防止）
+--  - GiveUp モーダルは本文(TextLabel)のみ複数行維持、ボタンは1行固定
+--  - [FIX-Z] GiveUpConfirm の子要素に明示的な ZIndex を付与（ZIndexBehavior=Global での潜り込み対策）
+--  - ほかの挙動は現状維持
 
 local Run = {}
 Run.__index = Run
@@ -47,17 +41,67 @@ local screensDir = script.Parent
 local UIBuilder  = require(screensDir:WaitForChild("RunScreenUI"))
 local RemotesCtl = require(screensDir:WaitForChild("RunScreenRemotes"))
 
--- ★ 追加：ハイライト機能（src/client/ui/highlight/MatchHighlighter.lua）
+-- ★ 追加：ハイライト機能
 local MatchHighlighter = require(screensDir.Parent:WaitForChild("highlight"):WaitForChild("MatchHighlighter"))
+
+--==================== Responsive helpers ====================
+local function _shortSide(w, h) return math.min(math.max(1, w), math.max(1, h)) end
+-- 端末係数: 短辺480pxで1.0、小画面ほど1寄り。1000pxで0.0。
+local function deviceFactor(w, h)
+	local s = _shortSide(w, h)
+	local lo, hi = 480, 1000
+	local t = 1 - math.clamp((s - lo) / (hi - lo), 0, 1)
+	return t
+end
+local function lerp(a,b,t) return a + (b-a)*t end
+
+-- TextScaled を安全に付ける
+-- ※ TextButton は 1行固定（折り返し禁止・はみ出し時は末尾省略）
+local function _applyScaled(inst, maxSize)
+	if not (inst and typeof(inst) == "Instance" and inst:IsA("GuiObject")) then return end
+	local isLabel  = inst:IsA("TextLabel")
+	local isButton = inst:IsA("TextButton")
+	if not (isLabel or isButton) then return end
+
+	inst.RichText    = inst.RichText and inst.RichText or false
+	inst.TextScaled  = true
+	if isButton then
+		inst.TextWrapped  = false
+		inst.TextTruncate = Enum.TextTruncate.AtEnd
+		inst.LineHeight   = 1.0
+	end
+	-- Label 側は既存レイアウト尊重（Wrapped 指定があれば維持）
+
+	local lim = inst:FindFirstChildOfClass("UITextSizeConstraint")
+	if not lim then
+		lim = Instance.new("UITextSizeConstraint")
+		lim.Parent = inst
+	end
+	lim.MaxTextSize = math.max(8, math.floor(maxSize))
+	-- 小さすぎる端末向けの下限（任意）
+	if lim.MinTextSize ~= nil then lim.MinTextSize = 10 end
+end
+
+-- 配下の TextButton / TextLabel に一括適用
+local function _scaleTextsUnder(root, titleMax, bodyMax, btnMax)
+	if not (root and typeof(root) == "Instance" and root.GetDescendants) then return end
+	for _, inst in ipairs(root:GetDescendants()) do
+		if inst:IsA("TextLabel") then
+			_applyScaled(inst, bodyMax)
+		elseif inst:IsA("TextButton") then
+			_applyScaled(inst, btnMax) -- ←ボタンは1行固定
+		end
+	end
+end
 
 --==================================================
 -- Lang helpers（最小限）
 --==================================================
 
-local function normLangJa(lang: string?)
+local function normLangJa(lang)
 	local v = tostring(lang or ""):lower()
 	if v == "jp" then
-		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'") -- [LOG]
+		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
 		return "ja"
 	elseif v == "ja" or v == "en" then
 		return v
@@ -79,7 +123,7 @@ local function safeGetGlobalLang()
 				return n
 			end
 		else
-			LOG.debug("Locale.getGlobal failed (pcall)") -- [LOG]
+			LOG.debug("Locale.getGlobal failed (pcall)")
 		end
 	end
 	return nil
@@ -102,17 +146,14 @@ end
 -- 情報パネル：シンプル表示（年/月・所持金・山札）
 --==================================================
 local function simpleInfoText(st, lang)
-	-- StatePush 由来の最小セットを安全に読む
 	local year     = tonumber(st and st.year) or 0
 	local month    = tonumber(st and st.month) or 1
 	local mon      = tonumber(st and st.mon) or 0
 	local deckLeft = tonumber(st and st.deckLeft) or 0
 
 	if lang == "ja" then
-		-- 例）1000年　1月\n所持金：0文\n山札：35枚
 		return string.format("%d年　%d月\n所持金：%d文\n山札：%d枚", year, month, mon, deckLeft)
 	else
-		-- 例）Year 1000  Month 1\nCash: 0 Mon\nDeck: 35 cards
 		return string.format("Year %d  Month %d\nCash: %d Mon\nDeck: %d cards", year, month, mon, deckLeft)
 	end
 end
@@ -127,7 +168,8 @@ function Run.new(deps)
 	self._awaitingInitial = false
 	self._resultShown = false
 	self._langConn = nil
-	self._hlInit = false -- ★ 追加：ハイライト初期化フラグ
+	self._hlInit = false
+	self._respConn = nil -- ★ 追加：リサイズ監視
 
 	-- 言語初期値
 	local initialLang = safeGetGlobalLang()
@@ -139,7 +181,7 @@ function Run.new(deps)
 		end
 	end
 	self._lang = initialLang
-	LOG.info("boot | lang=%s", tostring(initialLang)) -- [LOG]
+	LOG.info("boot | lang=%s", tostring(initialLang))
 
 	-- UI 構築
 	local ui = UIBuilder.build(nil, { lang = initialLang })
@@ -152,7 +194,7 @@ function Run.new(deps)
 	self.boardRowBottom= ui.boardRowBottom
 	self.takenBox      = ui.takenBox
 	self._scoreBox     = ui.scoreBox
-	self.buttons       = ui.buttons
+	self.buttons       = ui.buttons   -- ※多くの場合「テーブル」で来る
 	self._ui_setLang   = ui.setLang
 	self._fmtScore     = ui.formatScore or function(score, mons, pts, rolesText)
 		if self._lang == "ja" then
@@ -193,7 +235,7 @@ function Run.new(deps)
 	-- 役倍率パネル
 	self._yakuPanel = YakuPanel.mount(self.gui)
 
-	-- ====== 護符ボード：中央カラムの下段に設置 ======
+	-- ====== 護符ボード（中央下段） ======
 	do
 		if ui.notice then
 			local nb = ui.notice.Parent
@@ -230,29 +272,13 @@ function Run.new(deps)
 		inst.AnchorPoint = Vector2.new(0.5, 0)
 		inst.Position    = UDim2.fromScale(0.5, 0)
 		inst.ZIndex      = 2
-		LOG.debug("talisman board mounted (center/bottom)") -- [LOG]
 	end
-	-- ====== ここまで ======
 
 	--- Studio専用 DevTools（維持）
 	if RunService:IsStudio() then
-		local r = nil
-		if self.deps then r = self.deps.remotes end
-
-		local grantRyo  = nil
-		if self.deps and (self.deps.DevGrantRyo ~= nil) then
-			grantRyo = self.deps.DevGrantRyo
-		elseif r and (r.DevGrantRyo ~= nil) then
-			grantRyo = r.DevGrantRyo
-		end
-
-		local grantRole = nil
-		if self.deps and (self.deps.DevGrantRole ~= nil) then
-			grantRole = self.deps.DevGrantRole
-		elseif r and (r.DevGrantRole ~= nil) then
-			grantRole = r.DevGrantRole
-		end
-
+		local r = self.deps and self.deps.remotes or nil
+		local grantRyo  = (self.deps and self.deps.DevGrantRyo) or (r and r.DevGrantRyo)
+		local grantRole = (self.deps and self.deps.DevGrantRole) or (r and r.DevGrantRole)
 		if grantRyo or grantRole then
 			DevTools.create(
 				self.frame,
@@ -264,7 +290,6 @@ function Run.new(deps)
 
 	-- 内部状態
 	self._selectedHandIdx = nil
-	-- ▼ リロール残（Routerの StatePush フック/初期 onState 同期に使う）
 	self._rerollFieldLeft = 0
 	self._rerollHandLeft  = 0
 
@@ -287,7 +312,6 @@ function Run.new(deps)
 			end,
 		})
 		if self._awaitingInitial then
-			LOG.debug("initial hand received → overlay hide") -- [LOG]
 			self._overlay:hide()
 			self._awaitingInitial = false
 		end
@@ -321,15 +345,79 @@ function Run.new(deps)
 			local rolesLabel = (self._lang == "en") and "Roles: " or "役："
 			self._scoreBox.Text = self._fmtScore(tot, mon, pts, rolesLabel .. rolesBody)
 		end
-		LOG.debug("score | total=%s mon=%s pts=%s roles#=%d",
-			tostring(tot), tostring(mon), tostring(pts), #roles) -- [LOG]
+		LOG.debug("score | total=%s mon=%s pts=%s roles#=%d", tostring(tot), tostring(mon), tostring(pts), #roles)
 	end
+
+	--========================
+	-- Responsive 適用
+	--========================
+	function self:_applyResponsive()
+		if not self.gui then return end
+		local vw, vh = self.gui.AbsoluteSize.X, self.gui.AbsoluteSize.Y
+		if vw <= 1 or vh <= 1 then return end
+		local f = deviceFactor(vw, vh) -- 小画面ほど 1
+
+		-- 情報系テキストの上限サイズ（大画面で少し大きく）
+		local titleMax = math.floor(lerp(26, 32, 1-f))
+		local bodyMax  = math.floor(lerp(16, 20, 1-f))
+		local btnMax   = math.floor(lerp(18, 22, 1-f))
+
+		-- buttons は table/Instance の両方に対応
+		local function applyToButtons(target)
+			if typeof(target) == "Instance" then
+				_scaleTextsUnder(target, titleMax, bodyMax, btnMax)
+			elseif type(target) == "table" then
+				for _, node in pairs(target) do
+					if typeof(node) == "Instance" then
+						_scaleTextsUnder(node, titleMax, bodyMax, btnMax)
+					end
+				end
+			end
+		end
+		applyToButtons(self.buttons)
+
+		-- 左ペインの情報/目標/スコア
+		if self.info then _applyScaled(self.info, bodyMax) end
+		if self.goalText then _applyScaled(self.goalText, bodyMax) end
+		if self._scoreBox then _applyScaled(self._scoreBox, bodyMax) end
+
+		-- 護符ボードは幅スケールを微調整（小画面で少し広め）
+		if self._taliBoard and typeof(self._taliBoard.setWidthScale) == "function" then
+			local ws = lerp(0.88, 0.94, f)
+			pcall(function() self._taliBoard:setWidthScale(ws) end)
+		end
+
+		-- 既に出ている GiveUpOverlay があれば併せて更新
+		local ov = self.frame and self.frame:FindFirstChild("GiveUpOverlay")
+		if ov and ov:IsA("Frame") then
+			ov.BackgroundTransparency = lerp(0.28, 0.46, f)
+			local p = ov:FindFirstChild("ConfirmPanel")
+			if p and p:IsA("Frame") then
+				p.Size = UDim2.fromScale(lerp(0.36, 0.86, f), lerp(0.26, 0.46, f))
+				for _, ch in ipairs(p:GetDescendants()) do
+					if ch:IsA("TextLabel") or ch:IsA("TextButton") then
+						_applyScaled(ch, (ch:IsA("TextButton") and btnMax) or bodyMax)
+					end
+				end
+			end
+		end
+	end
+
+	local function _ensureRespHook()
+		if self._respConn then self._respConn:Disconnect() end
+		if self.gui then
+			self._respConn = self.gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+				self:_applyResponsive()
+			end)
+		end
+		self:_applyResponsive()
+	end
+	self._ensureRespHook = _ensureRespHook
 
 	--========================
 	-- 状態更新
 	--========================
 	local function onState(st)
-		-- ★ 情報パネル：簡素表示に統一
 		self.info.Text = simpleInfoText(st, self._lang) or ""
 
 		if self.goalText then
@@ -345,7 +433,7 @@ function Run.new(deps)
 			})
 		end
 
-		-- [FIX-S1] 護符を即時反映
+		-- 護符：サーバ値のみ
 		if self._taliBoard
 			and typeof(st) == "table"
 			and typeof(st.run) == "table"
@@ -355,52 +443,48 @@ function Run.new(deps)
 			self._taliBoard:setData(st.run.talisman)
 			local u = tonumber(st.run.talisman.unlocked or 0) or 0
 			local cnt = #(st.run.talisman.slots or {})
-			LOG.info("state:talisman applied | unlocked=%d slots#=%d", u, cnt) -- [LOG]
-		else
-			LOG.debug("state:talisman not present (skipped)") -- [LOG]
+			LOG.info("state:talisman applied | unlocked=%d slots#=%d", u, cnt)
 		end
 
-		-- 残回数のUI即時反映（Router.StatePush フックと同挙動）
+		-- 残回数 UI
 		if typeof(st) == "table" then
 			self:setRerollCounts(st.rerollFieldLeft, st.rerollHandLeft, st.phase)
 		end
 
 		if self._awaitingInitial then
-			LOG.debug("initial state received → overlay hide") -- [LOG]
 			self._overlay:hide()
 			self._awaitingInitial = false
 		end
 		self._resultShown = false
+
+		self:_applyResponsive()
 	end
 
 	-- ステージ結果（全シグネチャ互換）
 	local function onStageResult(a, b, _c, _d, _e)
-		-- ① サーバからの明示クローズ {close=true}
 		if typeof(a) == "table" and a.close == true then
-			LOG.info("result:close (server)") -- [LOG]
+			LOG.info("result:close (server)")
 			if self._resultModal then self._resultModal:hide() end
 			self._resultShown = false
 			return
 		end
 
-		-- ② 旧＆新シグネチャ正規化： (true,data) / data単体
 		local data = nil
 		if typeof(a) == "boolean" and a == true and typeof(b) == "table" then
 			data = b
 		elseif typeof(a) == "table" then
 			data = a
 		else
-			LOG.warn("result:unknown signature (ignored)") -- [LOG]
+			LOG.warn("result:unknown signature (ignored)")
 			return
 		end
 
 		if self._resultShown then
-			LOG.debug("result:already shown (ignored)") -- [LOG]
+			LOG.debug("result:already shown (ignored)")
 			return
 		end
 		self._resultShown = true
 
-		-- 正準 ops/locks
 		local canNext, canSave
 		if typeof(data.ops) == "table" then
 			if typeof(data.ops.next) == "table" then canNext = (data.ops.next.enabled == true) end
@@ -413,14 +497,10 @@ function Run.new(deps)
 		end
 		if nextLocked == nil and canNext ~= nil then nextLocked = (canNext ~= true) end
 
-		-- 通算クリア >=3 は強制開放
 		local clears = tonumber(data.clears) or 0
-		if clears >= 3 then
-			nextLocked = false
-		end
+		if clears >= 3 then nextLocked = false end
 
-		LOG.info("result:show | nextLocked=%s clears=%d",
-			tostring(nextLocked), clears) -- [LOG]
+		LOG.info("result:show | nextLocked=%s clears=%d", tostring(nextLocked), clears)
 
 		local isFinalView = (nextLocked == true)
 		if isFinalView then
@@ -449,7 +529,7 @@ function Run.new(deps)
 	end
 
 	--========================
-	-- 追加：GiveUp 確認モーダル
+	-- GiveUp 確認モーダル（相対化）
 	--========================
 	function self:_closeGiveUpOverlay()
 		if not self.frame then return end
@@ -460,25 +540,34 @@ function Run.new(deps)
 	function self:_showGiveUpConfirm(onYes)
 		self:_closeGiveUpOverlay()
 
+		local vw, vh = (self.gui and self.gui.AbsoluteSize.X) or 800, (self.gui and self.gui.AbsoluteSize.Y) or 600
+		local f = deviceFactor(vw, vh)
+
+		-- レイヤ番号（親より必ず上）
+		local Z_OVERLAY = 1000
+		local Z_PANEL   = 1001
+		local Z_TEXT    = 1002
+		local Z_BTN     = 1003
+
 		local overlay = Instance.new("Frame")
 		overlay.Name = "GiveUpOverlay"
 		overlay.Parent = self.frame
 		overlay.Size = UDim2.fromScale(1,1)
 		overlay.BackgroundColor3 = Color3.fromRGB(0,0,0)
-		overlay.BackgroundTransparency = 0.35
-		overlay.ZIndex = 1000
+		overlay.BackgroundTransparency = lerp(0.28, 0.46, f)
+		overlay.ZIndex = Z_OVERLAY
 		overlay.Active = true
 
 		local panel = Instance.new("Frame")
 		panel.Name = "ConfirmPanel"
 		panel.Parent = overlay
-		panel.Size = UDim2.new(0, 380, 0, 180)
 		panel.AnchorPoint = Vector2.new(0.5, 0.5)
 		panel.Position = UDim2.fromScale(0.5, 0.5)
+		panel.Size = UDim2.fromScale(lerp(0.36, 0.86, f), lerp(0.26, 0.46, f))
 		panel.BackgroundColor3 =
 			(Theme and Theme.COLORS and Theme.COLORS.PanelBg) or Color3.fromRGB(245,245,245)
 		panel.BorderSizePixel = 0
-		panel.ZIndex = 1001
+		panel.ZIndex = Z_PANEL
 		do
 			local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 12); c.Parent = panel
 			local s = Instance.new("UIStroke");  s.Thickness    = 1;                s.Parent  = panel
@@ -487,76 +576,86 @@ function Run.new(deps)
 		local title = Instance.new("TextLabel")
 		title.Name = "Title"
 		title.Parent = panel
-		title.Size = UDim2.new(1, -24, 0, 32)
-		title.Position = UDim2.new(0, 12, 0, 12)
 		title.BackgroundTransparency = 1
-		title.Font = Enum.Font.SourceSansBold
-		title.TextScaled = true
-		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.Text = T(self._lang, "RUN_GIVEUP_TITLE", "このランをあきらめますか？", "Abandon this run?")
+		title.Font = Enum.Font.GothamBold
 		title.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextDefault) or Color3.fromRGB(20,20,20)
-		title.ZIndex = 1002
-		title.Text = T(self._lang, "RUN_GIVEUP_TITLE",
-			"このランをあきらめますか？",
-			"Abandon this run?")
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextScaled = true
+		title.ZIndex = Z_TEXT
+		title.Size = UDim2.fromScale(1, 0.34)
+		title.Position = UDim2.fromScale(0, 0.06)
 
 		local body = Instance.new("TextLabel")
 		body.Name = "Body"
 		body.Parent = panel
-		body.Size = UDim2.new(1, -24, 0, 68)
-		body.Position = UDim2.new(0, 12, 0, 52)
 		body.BackgroundTransparency = 1
-		body.Font = Enum.Font.SourceSans
-		body.TextScaled = true
-		body.TextWrapped = true
-		body.TextYAlignment = Enum.TextYAlignment.Top
-		body.TextXAlignment = Enum.TextXAlignment.Left
-		body.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextDefault) or Color3.fromRGB(40,40,40)
-		body.ZIndex = 1002
 		body.Text = T(self._lang, "RUN_GIVEUP_BODY",
 			"途中の記録は削除され、ホームに戻ります。次回はNEW GAMEから開始します。",
 			"Your in-run progress will be deleted. You'll return to Home and start from NEW GAME.")
+		body.Font = Enum.Font.Gotham
+		body.TextWrapped = true  -- ←本文は複数行OK
+		body.TextYAlignment = Enum.TextYAlignment.Top
+		body.TextXAlignment = Enum.TextXAlignment.Left
+		body.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextDefault) or Color3.fromRGB(40,40,40)
+		body.TextScaled = true
+		body.ZIndex = Z_TEXT
+		body.Size = UDim2.fromScale(1, 0.36)
+		body.Position = UDim2.fromScale(0, 0.40)
+
+		local btnRow = Instance.new("Frame")
+		btnRow.Name = "BtnRow"
+		btnRow.Parent = panel
+		btnRow.BackgroundTransparency = 1
+		btnRow.AnchorPoint = Vector2.new(1, 1)
+		btnRow.Size = UDim2.fromScale(0.92, 0.20)
+		btnRow.Position = UDim2.fromScale(0.96, 0.96)
+		btnRow.ZIndex = Z_TEXT
 
 		local yes = Instance.new("TextButton")
 		yes.Name = "Yes"
-		yes.Parent = panel
-		yes.Size = UDim2.new(0.5, -18, 0, 40)
-		yes.Position = UDim2.new(0, 12, 1, -52)
-		yes.AnchorPoint = Vector2.new(0,1)
+		yes.Parent = btnRow
+		yes.Size = UDim2.fromScale(0.48, 1)
+		yes.Position = UDim2.fromScale(0, 0)
 		yes.TextScaled = true
-		yes.Font = Enum.Font.SourceSansBold
-		yes.ZIndex = 1002
+		yes.Font = Enum.Font.GothamBold
 		yes.BackgroundColor3 = (Theme and Theme.COLORS and Theme.COLORS.WarnBtnBg) or Color3.fromRGB(180,50,50)
 		yes.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextOnPrimary) or Color3.fromRGB(255,255,255)
 		yes.Text = T(self._lang, "RUN_CONFIRM_YES", "はい", "YES")
+		yes.ZIndex = Z_BTN
 		do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = yes end
 
 		local no = Instance.new("TextButton")
 		no.Name = "No"
-		no.Parent = panel
-		no.Size = UDim2.new(0.5, -18, 0, 40)
-		no.Position = UDim2.new(1, -12, 1, -52)
-		no.AnchorPoint = Vector2.new(1,1)
+		no.Parent = btnRow
+		no.Size = UDim2.fromScale(0.48, 1)
+		no.Position = UDim2.fromScale(0.52, 0)
 		no.TextScaled = true
-		no.Font = Enum.Font.SourceSansBold
-		no.ZIndex = 1002
+		no.Font = Enum.Font.GothamBold
 		no.BackgroundColor3 = (Theme and Theme.COLORS and Theme.COLORS.InfoBtnBg) or Color3.fromRGB(60,60,60)
 		no.TextColor3 = (Theme and Theme.COLORS and Theme.COLORS.TextOnPrimary) or Color3.fromRGB(255,255,255)
 		no.Text = T(self._lang, "RUN_CONFIRM_NO", "いいえ", "NO")
+		no.ZIndex = Z_BTN
 		do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = no end
+
+		local btnMax = math.floor(lerp(18, 22, 1-f))
+		_applyScaled(title, math.floor(lerp(26, 32, 1-f)))
+		_applyScaled(body,  math.floor(lerp(16, 20, 1-f))) -- ←Labelなので折返し維持
+		_applyScaled(yes,   btnMax) -- ←Buttonは1行固定
+		_applyScaled(no,    btnMax)
 
 		local function close()
 			if overlay and overlay.Parent then overlay:Destroy() end
 		end
 
 		yes.MouseButton1Click:Connect(function()
-			yes.Active = false
-			no.Active  = false
+			yes.Active = false; no.Active = false
 			close()
-			if typeof(onYes) == "function" then
-				onYes()
-			end
+			if typeof(onYes) == "function" then onYes() end
 		end)
 		no.MouseButton1Click:Connect(close)
+
+		self:_applyResponsive()
 	end
 
 	-- ボタン（必要最低限）
@@ -586,23 +685,22 @@ function Run.new(deps)
 			end
 		end)
 	end
-	-- ★ 新規：あきらめる
+	-- ★ あきらめる
 	if self.buttons and self.buttons.giveUp then
 		self.buttons.giveUp.MouseButton1Click:Connect(function()
-			LOG.info("giveup:clicked -> confirm modal") -- [LOG]
+			LOG.info("giveup:clicked -> confirm modal")
 			self:_showGiveUpConfirm(function()
-				LOG.info("giveup:confirmed -> FireServer('abandon')") -- [LOG]
+				LOG.info("giveup:confirmed -> FireServer('abandon')")
 				local DecideNext = self.deps and self.deps.DecideNext
 				if DecideNext then
 					DecideNext:FireServer("abandon")
 				else
-					-- フォールバック
 					local rem = RS:FindFirstChild("Remotes")
 					local ev  = rem and rem:FindFirstChild("DecideNext")
 					if ev and ev:IsA("RemoteEvent") then
 						ev:FireServer("abandon")
 					else
-						LOG.warn("giveup: no DecideNext remote found") -- [LOG]
+						LOG.warn("giveup: no DecideNext remote found")
 					end
 				end
 			end)
@@ -633,18 +731,18 @@ function Run.new(deps)
 	if typeof(Locale.changed) == "RBXScriptSignal" then
 		self._langConn = Locale.changed:Connect(function(newLang)
 			self:setLang(newLang)
+			self:_applyResponsive()
 		end)
 	end
 
-	LOG.info("new done | lang=%s", tostring(self._lang)) -- [LOG]
+	self:_ensureRespHook()
+	LOG.info("new done | lang=%s", tostring(self._lang))
 	return self
 end
 
 --==================================================
--- リロール残のUI反映（左側カウンタラベルを優先して更新）
+-- リロール残のUI反映
 --==================================================
--- ラベル解決（ui.buttons に rerollAllCount / rerollHandCount があれば優先。
--- 無ければボタンの兄弟から「Count」っぽい TextLabel を探索）
 local function _resolveCountLabels(self)
 	if self._resolvedCounterRefs then return self._resolvedCounterRefs end
 
@@ -652,12 +750,10 @@ local function _resolveCountLabels(self)
 
 	local function pickNearbyCountLabel(btn, preferName)
 		if not (btn and btn.Parent) then return nil end
-		-- 1) 名前直指定
 		if preferName and btn.Parent:FindFirstChild(preferName) then
 			local n = btn.Parent:FindFirstChild(preferName)
 			if n:IsA("TextLabel") then return n end
 		end
-		-- 2) 同じ親内の TextLabel から “All/Hand/Count” を含むものを当てる
 		for _, ch in ipairs(btn.Parent:GetChildren()) do
 			if ch ~= btn and ch:IsA("TextLabel") then
 				local nm = string.lower(ch.Name)
@@ -670,15 +766,12 @@ local function _resolveCountLabels(self)
 	end
 
 	local b = self.buttons or {}
-	-- UIBuilder で参照が出ている場合（推奨）
 	if typeof(b.rerollAllCount) == "Instance" and b.rerollAllCount:IsA("TextLabel") then
 		refs.field = b.rerollAllCount
 	end
 	if typeof(b.rerollHandCount) == "Instance" and b.rerollHandCount:IsA("TextLabel") then
 		refs.hand = b.rerollHandCount
 	end
-
-	-- 無ければ探索
 	if not refs.field and b.rerollAll then
 		refs.field = pickNearbyCountLabel(b.rerollAll, "RerollAllCount")
 	end
@@ -690,47 +783,45 @@ local function _resolveCountLabels(self)
 	return refs
 end
 
-function Run:setRerollCounts(fieldLeft: number?, handLeft: number?, phase: string?)
+function Run:setRerollCounts(fieldLeft, handLeft, phase)
 	local f = tonumber(fieldLeft or self._rerollFieldLeft or 0) or 0
 	local h = tonumber(handLeft  or self._rerollHandLeft  or 0) or 0
 	self._rerollFieldLeft = f
 	self._rerollHandLeft  = h
 
-	-- ラベル解決
 	local refs = _resolveCountLabels(self)
 	local fieldLabel = refs.field
 	local handLabel  = refs.hand
 
-	-- カウンタラベルに反映（存在する場合）
 	if fieldLabel then
 		fieldLabel.Text = tostring(f)
 		fieldLabel.TextTransparency = (f > 0) and 0 or 0.3
-		if fieldLabel:FindFirstChildOfClass("UIStroke") then
-			fieldLabel.UIStroke.Transparency = (f > 0) and 0 or 0.3
-		end
+		local st = fieldLabel:FindFirstChildOfClass("UIStroke")
+		if st then st.Transparency = (f > 0) and 0 or 0.3 end
+		_applyScaled(fieldLabel, 20)
 	end
 	if handLabel then
 		handLabel.Text = tostring(h)
 		handLabel.TextTransparency = (h > 0) and 0 or 0.3
-		if handLabel:FindFirstChildOfClass("UIStroke") then
-			handLabel.UIStroke.Transparency = (h > 0) and 0 or 0.3
-		end
+		local st = handLabel:FindFirstChildOfClass("UIStroke")
+		if st then st.Transparency = (h > 0) and 0 or 0.3 end
+		_applyScaled(handLabel, 20)
 	end
 
-	-- ボタンの有効/無効だけ制御
 	local b = self.buttons
-	if b and b.rerollAll and b.rerollAll:IsA("TextButton") then
+	if b and b.rerollAll and typeof(b.rerollAll) == "Instance" and b.rerollAll:IsA("TextButton") then
 		b.rerollAll.AutoButtonColor = f > 0
 		b.rerollAll.Active = (f > 0)
+		_applyScaled(b.rerollAll, 22)
 	end
-	if b and b.rerollHand and b.rerollHand:IsA("TextButton") then
+	if b and b.rerollHand and typeof(b.rerollHand) == "Instance" and b.rerollHand:IsA("TextButton") then
 		b.rerollHand.AutoButtonColor = h > 0
 		b.rerollHand.Active = (h > 0)
+		_applyScaled(b.rerollHand, 22)
 	end
 
-	LOG.debug("rerollCounts:update (labels) | field=%d hand=%d", f, h) -- [LOG]
+	LOG.debug("rerollCounts:update (labels) | field=%d hand=%d", f, h)
 end
-
 
 --==================================================
 -- 言語切替
@@ -738,14 +829,14 @@ end
 function Run:setLang(lang)
 	local n = normLangJa(lang)
 	if n ~= "ja" and n ~= "en" then
-		LOG.debug("setLang ignored (invalid) | in=%s", tostring(lang)) -- [LOG]
+		LOG.debug("setLang ignored (invalid) | in=%s", tostring(lang))
 		return
 	end
 	if self._lang == n then
-		LOG.debug("setLang ignored (same) | lang=%s", n) -- [LOG]
+		LOG.debug("setLang ignored (same) | lang=%s", n)
 		return
 	end
-	LOG.info("setLang | from=%s to=%s", tostring(self._lang), tostring(n)) -- [LOG]
+	LOG.info("setLang | from=%s to=%s", tostring(self._lang), tostring(n))
 	self._lang = n
 	if type(self._ui_setLang) == "function" then
 		self._ui_setLang(n)
@@ -756,9 +847,10 @@ function Run:setLang(lang)
 	if self._taliBoard then
 		self._taliBoard:setLang(self._lang or "ja")
 	end
+	self:_applyResponsive()
 end
 
-local function extractTalismanFromPayload(payload: any)
+local function extractTalismanFromPayload(payload)
 	if typeof(payload) ~= "table" then return nil end
 	local s = payload.state
 	if typeof(s) ~= "table" then return nil end
@@ -768,99 +860,80 @@ local function extractTalismanFromPayload(payload: any)
 end
 
 function Run:show(payload)
-	-- ★ 安全網：表示直前にリザルト＆確認オーバーレイを必ず閉じる
 	if self._resultModal then self._resultModal:hide() end
 	self:_closeGiveUpOverlay()
 	self._resultShown = false
 
-	-- payload.lang を尊重（"jp" は "ja" に正規化）
 	if payload and payload.lang then
 		local n = normLangJa(payload.lang)
 		if n and n ~= self._lang then
-			LOG.debug("show:payload.lang=%s (cur=%s)", tostring(n), tostring(self._lang)) -- [LOG]
+			LOG.debug("show:payload.lang=%s (cur=%s)", tostring(n), tostring(self._lang))
 			self:setLang(n)
 		end
 	else
 		local gg = safeGetGlobalLang()
 		if gg and gg ~= self._lang then
-			LOG.debug("show:sync from global | %s -> %s", tostring(self._lang), tostring(gg)) -- [LOG]
+			LOG.debug("show:sync from global | %s -> %s", tostring(self._lang), tostring(gg))
 			self:setLang(gg)
 		end
 	end
 
-	-- 護符ボードへ初期データを反映
 	if self._taliBoard then
 		self._taliBoard:setLang(self._lang or "ja")
-		-- [FIX-S2] 初期payloadに有効なtalismanがある場合のみ反映（nilで空上書きしない）
 		local tali = extractTalismanFromPayload(payload)
 		if typeof(tali) == "table" then
 			self._taliBoard:setData(tali)
 			LOG.info("show:init talisman applied | unlocked=%s slots#=%d",
-				tostring(tali.unlocked), #(tali.slots or {})) -- [LOG]
-		else
-			LOG.debug("show:init talisman not present (keep current)") -- [LOG]
+				tostring(tali.unlocked), #(tali.slots or {}))
 		end
 	end
 
 	self.frame.Visible = true
 	if self._remotes then
 		self._remotes:disconnect()
-		LOG.debug("remotes:connect") -- [LOG]
+		LOG.debug("remotes:connect")
 		self._remotes:connect()
 	end
 
-	-- ★ 追加：ハイライト初期化（手札/場のコンテナが揃ったあと一度だけ）
 	if not self._hlInit and self.handArea and self.boardRowTop and self.boardRowBottom then
-		local ok, err = pcall(function()
+		local ok = pcall(function()
 			MatchHighlighter.init(self.handArea, self.boardRowTop, self.boardRowBottom)
 		end)
-		if ok then
-			self._hlInit = true
-			LOG.info("highlight:init ok") -- [LOG]
-		else
-			LOG.warn("highlight:init failed | %s", tostring(err)) -- [LOG]
-		end
+		self._hlInit = ok and true or false
 	end
+
+	if self._ensureRespHook then self:_ensureRespHook() end
+	self:_applyResponsive()
 end
 
 function Run:requestSync()
 	if not self.deps or not self.deps.ReqSyncUI then return end
 	self._awaitingInitial = true
 	if self._overlay then self._overlay:show() end
-	LOG.info("ReqSyncUI → FireServer") -- [LOG]
+	LOG.info("ReqSyncUI → FireServer")
 	self.deps.ReqSyncUI:FireServer()
 end
 
 function Run:hide()
 	self.frame.Visible = false
 	self:_closeGiveUpOverlay()
-	LOG.debug("remotes:disconnect (hide)") -- [LOG]
+	LOG.debug("remotes:disconnect (hide)")
 	if self._remotes then self._remotes:disconnect() end
 
-	-- ★ 追加：ハイライト解除（画面を閉じるときに確実に消す）
 	if self._hlInit then
-		local ok, err = pcall(function() MatchHighlighter.shutdown() end)
-		if ok then
-			LOG.info("highlight:shutdown ok (hide)") -- [LOG]
-		else
-			LOG.warn("highlight:shutdown failed (hide) | %s", tostring(err)) -- [LOG]
-		end
+		pcall(function() MatchHighlighter.shutdown() end)
 		self._hlInit = false
 	end
 end
 
 function Run:destroy()
-	LOG.debug("destroy:disconnect remotes & langConn, destroy gui") -- [LOG]
+	LOG.debug("destroy:disconnect remotes & langConn, destroy gui")
 	self:_closeGiveUpOverlay()
 
-	-- ★ 追加：destroy 時も念のため解除
-	if self._hlInit then
-		pcall(function() MatchHighlighter.shutdown() end)
-		self._hlInit = false
-	end
-
+	if self._hlInit then pcall(function() MatchHighlighter.shutdown() end) self._hlInit = false end
 	if self._remotes then self._remotes:disconnect() end
 	if self._langConn then self._langConn:Disconnect() end
+	if self._respConn then self._respConn:Disconnect() end
 	if self.gui then self.gui:Destroy() end
 end
 

@@ -1,202 +1,164 @@
 -- StarterPlayerScripts/UI/components/renderers/TakenRenderer.lua
--- 取り札描画（右枠拡張版）
--- 分類: 光 / タネ / 短冊 / カス（言語で Bright / Seed / Ribbon / Chaff に自動切替）
--- 各カテゴリは 1月→12月 で並び、カードは横方向に 1/3 だけ重ねて表示
--- タグは不透明のパネル色ベース＋濃色文字、タグの“直下”からカードを開始
--- v0.9.7-P1-4: Theme 完全デフォルト化（色/角丸/余白/比率のUI側フォールバック撤去）
--- v0.9.7-P1-1: 言語コード外部I/Fを "ja"/"en" に統一（受信 "jp" は警告して "ja" へ正規化）
--- v0.9.7-P2-2: 言語正規化を LocaleUtil に統合（curLang も共通化）
+-- v1.1.0 (Responsive: keep current look, size by parent)
+--  - 現在のUI（ラベルピル + 色ドット + 1/3オーバーラップのカード列）を維持
+--  - すべて親サイズから相対計算（タグH/タグW/行H/余白/ドットサイズ等）
+--  - 親の AbsoluteSize 変化で自動再レイアウト
+--  - 言語は "ja"/"en" を LocaleUtil から取得
 
-local RS      = game:GetService("ReplicatedStorage")
-local Config  = RS:WaitForChild("Config")
-local Theme   = require(Config:WaitForChild("Theme"))
-local Locale  = require(Config:WaitForChild("Locale"))
-local LocaleUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
+local RS        = game:GetService("ReplicatedStorage")
+local Config    = RS:WaitForChild("Config")
+local Theme     = require(Config:WaitForChild("Theme"))
+local LocaleUtil= require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
 
--- CardNode（カード1枚の描画モジュール）
-local UI_ROOT  = script.Parent.Parent
-local CardNode = require(UI_ROOT:WaitForChild("CardNode"))
+-- CardNode（カード1枚）
+local UI_ROOT   = script.Parent.Parent
+local CardNode  = require(UI_ROOT:WaitForChild("CardNode"))
 
 local M = {}
 
--- ===== 内部 util =====
-local function clearChildrenExceptLayouts(parent: Instance)
-	for _, ch in ipairs(parent:GetChildren()) do
-		if not ch:IsA("UIListLayout") and not ch:IsA("UIGridLayout")
-			and not ch:IsA("UITableLayout") and not ch:IsA("UIPageLayout")
-			and not ch:IsA("UIAspectRatioConstraint") and not ch:IsA("UISizeConstraint")
-			and not ch:IsA("UITextSizeConstraint")
-		then
-			ch:Destroy()
-		end
-	end
-end
+-- ========= lang / labels =========
+local CATEGORY_JA = { bright = "光",     seed = "タネ",   ribbon = "短冊",  chaff = "カス",   kasu="カス" }
+local CATEGORY_EN = { bright = "Bright", seed = "Seed",   ribbon = "Ribbon", chaff = "Chaff", kasu="Chaff" }
+local ORDER       = { "bright", "seed", "ribbon", "chaff" }
 
--- "jp" → "ja" 正規化（LocaleUtil 統合）
-local function normLangJa(v: string?): string?
-	local raw = tostring(v or ""):lower()
-	local n = LocaleUtil.norm(raw) -- "ja"/"en" or nil
-	if raw == "jp" and n == "ja" then
-		warn("[TakenRenderer] received legacy 'jp'; normalizing to 'ja'")
-	end
-	return n
-end
-
--- 現在言語（"ja"/"en"。取得不可なら "en"）…LocaleUtil へ寄せる
 local function curLang(): string
-	-- safeGlobal が取れればそれを、なければ pickInitial（内部で pick→"en" フォールバック）
 	return LocaleUtil.safeGlobal() or LocaleUtil.pickInitial() or "en"
 end
 
--- kind名 → 表示カテゴリ名（JA/EN）
-local CATEGORY_JA = { bright = "光",     seed = "タネ",   ribbon = "短冊",  chaff = "カス",   kasu = "カス" }
-local CATEGORY_EN = { bright = "Bright", seed = "Seed",   ribbon = "Ribbon", chaff = "Chaff", kasu = "Chaff" }
--- 表示順（固定）
-local CAT_ORDER_JA = { "光", "タネ", "短冊", "カス" }
-local CAT_ORDER_EN = { "Bright", "Seed", "Ribbon", "Chaff" }
-
--- 役色：Theme.colorForKind を最優先（未定義時は Theme.COLORS の安全色）
+-- ========= colors =========
 local function kindColor(kind: string): Color3
 	if Theme and Theme.colorForKind then
 		local ok, c = pcall(function() return Theme.colorForKind(kind) end)
 		if ok and typeof(c) == "Color3" then return c end
 	end
-	local C = Theme.COLORS
-	return (C and (C.BadgeStroke or C.PanelStroke or C.TextDefault)) or Color3.new(1,1,1)
-end
-
--- 63:88 の実寸横幅（高さから算出）
-local function widthFromHeight(h: number): number
-	return math.floor(h * (63/88))
-end
-
--- 0101〜1204 の前2桁（月）
-local function monthOf(code: string)
-	local m = tonumber(string.sub(tostring(code or ""), 1, 2))
-	return m or 99
-end
-
---- takenCards: { {code="0101", kind="bright", month=1, name="松に鶴"}, ... }
-function M.renderTaken(parent: Instance, takenCards: {any})
-	if not parent or not parent.Destroy then return end
-	clearChildrenExceptLayouts(parent)
-
-	local lang      = curLang()
-	local CAT_MAP   = (lang == "ja") and CATEGORY_JA or CATEGORY_EN
-	local CAT_ORDER = (lang == "ja") and CAT_ORDER_JA or CAT_ORDER_EN
-
-	-- バケット（キーは表示名で）
-	local buckets = {}
-	for _, key in ipairs(CAT_ORDER) do buckets[key] = {} end
-
-	-- 仕分け
-	for _, card in ipairs(takenCards or {}) do
-		local kind = tostring(card.kind or "chaff")
-		local catName = CAT_MAP[kind] or CAT_MAP["chaff"]
-		table.insert(buckets[catName], card)
-	end
-
-	-- 1月→12月でソート
-	for _, arr in pairs(buckets) do
-		table.sort(arr, function(a, b) return monthOf(a.code) < monthOf(b.code) end)
-	end
-
-	-- レイアウト/見た目定数（Theme から取得）
-	local S = Theme.SIZES or {}
 	local C = Theme.COLORS or {}
-	local R = Theme.RATIOS or {}
+	return C.BadgeStroke or C.SelectedStroke or C.TextDefault or Color3.fromRGB(200,200,200)
+end
 
-	-- カードは「半分サイズ」
-	local baseH    = tonumber(S.HAND_H) or 168
-	local cardH    = math.floor(baseH * 0.5)
-	local cardW    = widthFromHeight(cardH)
-	local overlap  = (R.TAKEN_OVERLAP ~= nil) and R.TAKEN_OVERLAP or 0.33
-	local stepX    = math.max(1, math.floor(cardW * (1 - overlap)))
+-- ========= utils =========
+local function clearAll(parent: Instance)
+	for _, ch in ipairs(parent:GetChildren()) do ch:Destroy() end
+end
+local function monthOf(code: string)
+	local m = tonumber(string.sub(tostring(code or ""), 1, 2)); return m or 99
+end
+local function widthFromHeight(h: number): number
+	return math.floor(h * (63/88)) -- 花札の実寸比
+end
 
-	-- 余白・寸法（Theme 寄せ）
-	local padPx       = tonumber(S.PAD) or 10
-	local sectionGap  = tonumber(S.ROW_GAP) or 12
-	local gapBetween  = math.max(4, math.floor((S.HELP_H or 22) * 0.27)) -- タグとカード行の間
-	local tagH        = tonumber(S.HELP_H) or 22
-	local tagW        = tonumber(S.TAKEN_TAG_W) or 110
-	local rowH        = cardH + 2
-	local radiusPx    = tonumber(Theme.PANEL_RADIUS) or 10
+-- responsiveデータ保持とresize接続
+local _store  = setmetatable({}, { __mode="k" }) -- parent -> takenCards
+local _conns  = setmetatable({}, { __mode="k" }) -- parent -> RBXScriptConnection
 
-	local usedHeight  = 0
-	local parentZ     = (parent:IsA("GuiObject") and parent.ZIndex) or 1
+-- ========= 本体描画（親サイズに相対） =========
+local function paint(parent: Instance, takenCards: {any})
+	clearAll(parent)
 
-	for _, catName in ipairs(CAT_ORDER) do
-		local arr = buckets[catName]
+	local W = math.max(1, parent.AbsoluteSize.X)
+	local H = math.max(1, parent.AbsoluteSize.Y)
 
-		-- セクション枠（タグ行＋カード行の2段）
+	-- ---- 相対寸法（現状の見た目に寄せてチューニング） ----
+	-- 横幅基準で安定するように多くをWから算出、必要に応じてHでクランプ
+	local padX       = math.floor(W * 0.035)                      -- 左右余白
+	local sectionGap = math.floor(H * 0.018)                      -- セクション間
+	local tagH       = math.floor(math.clamp(H * 0.055, 18, 36))  -- タグの高さ
+	local tagW       = math.floor(math.clamp(W * 0.44, 96, 180))  -- タグの幅（ピル）
+	local dotSize    = math.floor(tagH * 0.48)                    -- 色ドットの直径
+	local gapBelow   = math.floor(tagH * 0.50)                    -- タグ下のスペース
+	local rowH       = math.floor(math.clamp(W * 0.25, 48, 120))  -- カード列の高さ
+	local radiusPx   = tonumber(Theme.PANEL_RADIUS) or 10
+
+	-- カード重なり
+	local overlap = (Theme.RATIOS and Theme.RATIOS.TAKEN_OVERLAP) or 0.33
+
+	-- 言語マップ
+	local MAP = (curLang()=="ja") and CATEGORY_JA or CATEGORY_EN
+
+	-- バケット化＆1月→12月でソート
+	local buckets = { bright={}, seed={}, ribbon={}, chaff={} }
+	for _, c in ipairs(takenCards or {}) do
+		local k = tostring(c.kind or "chaff"):lower()
+		if not buckets[k] then k = "chaff" end
+		table.insert(buckets[k], c)
+	end
+	for _, arr in pairs(buckets) do
+		table.sort(arr, function(a,b) return monthOf(a.code) < monthOf(b.code) end)
+	end
+
+	-- 使用高さ（CanvasSize用）
+	local usedY   = 0
+	local C       = Theme.COLORS or {}
+	local parentZ = (parent:IsA("GuiObject") and parent.ZIndex) or 1
+
+	for _, kind in ipairs(ORDER) do
+		local arr = buckets[kind] or {}
+		local title = MAP[kind] or kind
+
+		-- セクション（タグ + 列）
+		local sectionH = tagH + gapBelow + rowH
 		local section = Instance.new("Frame")
-		section.Name = "Section_" .. catName
-		section.Parent = parent
+		section.Name = "Section_"..kind
 		section.BackgroundTransparency = 1
-		section.ClipsDescendants = false
-		section.AutomaticSize = Enum.AutomaticSize.None
-		section.Size = UDim2.new(1, -padPx*2, 0, tagH + gapBetween + rowH)
-		section.Position = UDim2.new(0, padPx, 0, usedHeight)
-		section.ZIndex = parentZ + 2    -- 木目より確実に前面
+		section.Size = UDim2.new(1, -padX*2, 0, sectionH)
+		section.Position = UDim2.new(0, padX, 0, usedY)
+		section.ZIndex = parentZ + 2
+		section.Parent = parent
 
-		-- === タグ行（不透明の PanelBg ＋ Stroke ＋ ドット） ===
+		-- タグ（不透明ピル + ストローク + 色ドット + テキスト）
 		do
 			local tag = Instance.new("Frame")
 			tag.Name = "LabelTag"
-			tag.Parent = section
 			tag.BackgroundTransparency = 0
-			tag.BackgroundColor3 = C.PanelBg
-			tag.Position = UDim2.new(0, 0, 0, 0)
+			tag.BackgroundColor3 = C.PanelBg or Color3.fromRGB(32,34,40)
 			tag.Size = UDim2.new(0, tagW, 0, tagH)
+			tag.Position = UDim2.fromOffset(0,0)
 			tag.ZIndex = section.ZIndex + 1
+			tag.Parent = section
 
 			local cr = Instance.new("UICorner"); cr.CornerRadius = UDim.new(0, radiusPx); cr.Parent = tag
-			local st = Instance.new("UIStroke")
-			st.Color = C.PanelStroke
-			st.Thickness = 1
-			st.Transparency = 0
-			st.Parent = tag
-
-			-- 種類の色ドット
-			local kindGuess = "chaff"
-			if catName == CATEGORY_JA.bright or catName == CATEGORY_EN.bright then kindGuess = "bright"
-			elseif catName == CATEGORY_JA.seed or catName == CATEGORY_EN.seed then kindGuess = "seed"
-			elseif catName == CATEGORY_JA.ribbon or catName == CATEGORY_EN.ribbon then kindGuess = "ribbon"
-			end
+			local st = Instance.new("UIStroke"); st.Color = C.PanelStroke or Color3.fromRGB(70,70,80); st.Thickness = 1; st.Parent = tag
 
 			local dot = Instance.new("Frame")
 			dot.Name = "KindDot"
-			dot.Parent = tag
-			dot.BackgroundColor3 = kindColor(kindGuess)
-			dot.Size = UDim2.new(0, 10, 0, 10)
-			dot.Position = UDim2.new(0, 8, 0.5, -5)
-			dot.ZIndex = tag.ZIndex + 1
-			local dcr = Instance.new("UICorner"); dcr.CornerRadius = UDim.new(0, 5); dcr.Parent = dot
+			dot.BackgroundColor3 = kindColor(kind)
+			dot.BorderSizePixel  = 0
+			dot.AnchorPoint = Vector2.new(0,0.5)
+			dot.Position = UDim2.fromOffset(8, tagH*0.5)
+			dot.Size     = UDim2.fromOffset(dotSize, dotSize)
+			dot.ZIndex   = tag.ZIndex + 1
+			dot.Parent   = tag
+			local dcr = Instance.new("UICorner"); dcr.CornerRadius = UDim.new(1,0); dcr.Parent = dot
 
 			local lab = Instance.new("TextLabel")
 			lab.Name = "Text"
-			lab.Parent = tag
 			lab.BackgroundTransparency = 1
-			lab.Position = UDim2.new(0, 8 + 10 + 6, 0, 0)  -- ドットの右から文字
-			lab.Size = UDim2.new(1, -(8 + 10 + 6 + 8), 1, 0)
 			lab.TextXAlignment = Enum.TextXAlignment.Left
 			lab.TextYAlignment = Enum.TextYAlignment.Center
-			lab.TextSize = 14
-			lab.Font = Enum.Font.GothamBold
+			lab.AnchorPoint = Vector2.new(0,0.5)
+			lab.Position = UDim2.fromOffset(8 + dotSize + 8, tagH*0.5)
+			lab.Size     = UDim2.new(1, -(8 + dotSize + 8 + 8), 1, 0)
+			lab.Font     = Enum.Font.GothamBold
+			lab.TextColor3 = C.TextDefault or Color3.fromRGB(235,235,238)
+			lab.TextScaled = true
+			local lim = Instance.new("UITextSizeConstraint"); lim.MaxTextSize = 18; lim.Parent = lab
+			lab.Text = string.format("%s ×%d", title, #arr)
 			lab.ZIndex = tag.ZIndex + 1
-			lab.Text = string.format("%s ×%d", catName, #arr)
-			lab.TextColor3 = C.TextDefault
+			lab.Parent = tag
 		end
 
-		-- === カード行（タグの直下から開始） ===
+		-- カード行（1/3オーバーラップ）
 		do
 			local row = Instance.new("Frame")
 			row.Name = "CardsRow"
-			row.Parent = section
 			row.BackgroundTransparency = 1
-			row.Position = UDim2.new(0, 0, 0, tagH + gapBetween)
 			row.Size = UDim2.new(1, 0, 0, rowH)
+			row.Position = UDim2.fromOffset(0, tagH + gapBelow)
 			row.ZIndex = section.ZIndex + 2
+			row.Parent = section
+
+			local cardH = rowH - 2
+			local cardW = widthFromHeight(cardH)
+			local stepX = math.max(1, math.floor(cardW * (1 - overlap)))
 
 			local x = 0
 			local z = row.ZIndex + 1
@@ -205,49 +167,58 @@ function M.renderTaken(parent: Instance, takenCards: {any})
 				if type(CardNode) == "table" and type(CardNode.create) == "function" then
 					node = CardNode.create(row, card.code, {
 						anchor = Vector2.new(0, 0),
-						pos    = UDim2.new(0, x, 0, 1),
+						pos    = UDim2.fromOffset(x, 1),
 						size   = UDim2.fromOffset(cardW, cardH),
 						zindex = z,
 					})
 				elseif type(CardNode) == "function" then
 					node = CardNode(row, card.code, {
 						anchor = Vector2.new(0, 0),
-						pos    = UDim2.new(0, x, 0, 1),
+						pos    = UDim2.fromOffset(x, 1),
 						size   = UDim2.fromOffset(cardW, cardH),
 						zindex = z,
 					})
 				elseif type(CardNode) == "table" and type(CardNode.new) == "function" then
 					node = CardNode.new(row, card.code, {
 						anchor = Vector2.new(0, 0),
-						pos    = UDim2.new(0, x, 0, 1),
+						pos    = UDim2.fromOffset(x, 1),
 						size   = UDim2.fromOffset(cardW, cardH),
 						zindex = z,
 					})
 				end
-
-				-- 取り札カードにはフッタは付けない（見た目をすっきり）
 				x += stepX
 				z += 1
 			end
 		end
 
-		usedHeight += (tagH + gapBetween + rowH) + sectionGap
+		usedY += sectionH + sectionGap
 	end
 
-	-- ScrollingFrame の CanvasSize を手動設定（Auto でなければ）
+	-- ScrollingFrame対応（横スクロール不要）
 	if parent:IsA("ScrollingFrame") then
-		if parent.AutomaticCanvasSize == Enum.AutomaticSize.None then
-			parent.CanvasSize = UDim2.new(0, 0, 0, usedHeight)
-		end
+		parent.ScrollingDirection = Enum.ScrollingDirection.Y
+		parent.CanvasSize = UDim2.fromOffset(0, usedY)
+		parent.ScrollBarThickness = (Theme.SIZES and Theme.SIZES.scrollBar) or 8
 	end
+end
 
-	-- 親が UIListLayout を持っている場合は、縦Paddingを詰める
-	local list = parent:FindFirstChildOfClass("UIListLayout")
-	if list then
-		list.Padding = UDim.new(0, sectionGap)
-		list.HorizontalAlignment = Enum.HorizontalAlignment.Left
-		list.SortOrder = Enum.SortOrder.LayoutOrder
+-- ========= 公開API =========
+function M.renderTaken(parent: Instance, takenCards: {any})
+	if not parent or not parent.Destroy then return end
+	_store[parent] = takenCards
+
+	-- 初回描画
+	paint(parent, takenCards)
+
+	-- 既存のリサイズ接続は張り替え
+	if _conns[parent] then
+		_conns[parent]:Disconnect()
+		_conns[parent] = nil
 	end
+	_conns[parent] = parent:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		local data = _store[parent]
+		if data then paint(parent, data) end
+	end)
 end
 
 return M

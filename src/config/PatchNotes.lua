@@ -22,6 +22,26 @@ Thank you for your understanding.
 
 -- 先頭が最新。新バージョンは配列の「先頭」に追加していく。
 local ENTRIES = {
+	-- ★ 0.9.7.1（外部向け）
+	{
+		ver  = "v0.9.7.1",
+		date = "2025-10-08",
+		changes = {
+			{
+				ja = "描写ロジックを分割し、表示の安定性と今後の拡張性を向上。",
+				en = "Split rendering logic to improve stability and future extensibility."
+			},
+			{
+				ja = "UIの改善と細かな調整を実施。",
+				en = "Various UI improvements and fine-tuning."
+			},
+			{
+				ja = "携帯や多様な画面サイズに対応する相対レイアウトへ移行（まだ不十分ですが、携帯でも遊べる程度まで対応）。",
+				en = "Moved to responsive, relative layouts for phones and diverse screen sizes (still a work in progress, but now reasonably playable on mobile)."
+			},
+		}
+	},
+
 	-- ★ 0.9.7.0（外部向け）
 	{
 		ver  = "v0.9.7.0",
@@ -93,7 +113,7 @@ local ENTRIES = {
 		}
 	},
 
-	-- ★ 0.9.6 を外部向けトーンで追加（0.9.5 以前は変更なし）
+	-- ★ 0.9.6.1（外部向け）
 	{
 		ver  = "v0.9.6.1",
 		date = "2025-09-19",
@@ -112,7 +132,6 @@ local ENTRIES = {
 	},
 
 	-- ここから下は既存（変更なし）
-
 	{
 		ver  = "v0.9.6",
 		date = "2025-09-17",

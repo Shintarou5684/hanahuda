@@ -1,6 +1,8 @@
--- KitoPickRenderer.lua
--- v1.3.0: 最小責務の Renderer（create / renderCard / setCardSelected / show / hide）
--- API: create(playerGui) -> { gui, show, hide, renderCard, setCardSelected }
+-- StarterPlayerScripts/UI/components/renderers/KitoPickRenderer.lua
+-- v1.4.2 (Overlay Z fix + bigger info text)
+--  - 対象外オーバーレイの ZIndex をカード基準で強制的に最前面へ
+--  - 情報行（◯月/種族 名前）の MaxTextSize は v1.4.1 同様 24px 既定
+--  - API: create(playerGui) -> { gui, show, hide, renderCard, setCardSelected }
 
 local RS     = game:GetService("ReplicatedStorage")
 local Logger = require(RS:WaitForChild("SharedModules"):WaitForChild("Logger"))
@@ -18,8 +20,9 @@ end
 
 local M = {}
 
--- ───────────────── 内部ヘルパ（見た目用の最小限）
+--───────────────────────── ユーティリティ（表示用） ─────────────────────────
 local MONTH_JP = { "1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月" }
+local CARD_AR  = 0.62 -- 花札のアスペクト（幅/高さ）の目安
 
 local function parseMonth(entry)
 	if not entry then return nil end
@@ -27,15 +30,13 @@ local function parseMonth(entry)
 	if m and m >= 1 and m <= 12 then return m end
 	local s = tostring(entry.code or entry.uid or "")
 	local two = string.match(s, "^(%d%d)")
-	if not two then return nil end
-	m = tonumber(two)
-	if m and m >= 1 and m <= 12 then return m end
+	m = tonumber(two); if m and m >= 1 and m <= 12 then return m end
 	return nil
 end
 
 local function kindToJp(k)
-	local map = { bright="光札", ribbon="短冊", seed="タネ", chaff="カス" }
-	return map[tostring(k or "")] or tostring(k or "?")
+	local map = { bright="光", ribbon="短", seed="タネ", chaff="カス", plain="カス", animal="タネ" }
+	return map[tostring(k or ""):lower()] or tostring(k or "?")
 end
 
 local function reasonToText(reason)
@@ -61,136 +62,181 @@ local function resolveImage(entry)
 	return nil
 end
 
--- ───────────────── 本体
+-- 色の既定値（Styles があれば上書き）
+local COLOR = {
+	slotBg       = Color3.fromRGB(40, 42, 54),
+	slotStroke   = Color3.fromRGB(64, 68, 80),
+	textMain     = Color3.fromRGB(232,232,240),
+	textSub      = Color3.fromRGB(210,210,220),
+	imgFallback  = Color3.fromRGB(55,57,69),
+	overlayEdge  = Color3.fromRGB(230,230,240),
+	selectStroke = Color3.fromRGB(255,210,110),
+}
+do
+	local C = Styles and Styles.colors or {}
+	COLOR.slotBg       = C.cardBg          or COLOR.slotBg
+	COLOR.slotStroke   = C.cardStroke      or COLOR.slotStroke
+	COLOR.textMain     = C.cardNameText    or COLOR.textMain
+	COLOR.textSub      = C.cardInfoText    or COLOR.textSub
+	COLOR.imgFallback  = C.cardImgFallback or COLOR.imgFallback
+	COLOR.overlayEdge  = C.ineligibleTitle or COLOR.overlayEdge
+	COLOR.selectStroke = C.selectedStroke  or COLOR.selectStroke
+end
+
+--────────────────────────────── 本体 ──────────────────────────────
 function M.create(playerGui: Instance)
 	assert(playerGui and playerGui:IsA("PlayerGui"), "create(playerGui): PlayerGui expected")
 
 	local gui = Instance.new("ScreenGui")
-	gui.Name            = "KitoPickGui"
-	gui.ResetOnSpawn    = false
-	gui.ZIndexBehavior  = Enum.ZIndexBehavior.Global
-	gui.IgnoreGuiInset  = true
-	gui.DisplayOrder    = 50
-	gui.Enabled         = false
-	gui.Parent          = playerGui
+	gui.Name           = "KitoPickGui"
+	gui.ResetOnSpawn   = false
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+	gui.IgnoreGuiInset = true
+	gui.DisplayOrder   = 50
+	gui.Enabled        = false
+	gui.Parent         = playerGui
 
 	local api = { gui = gui }
+	function api.show() gui.Enabled = true end
+	function api.hide() gui.Enabled = false end
 
-	function api.show()  gui.Enabled = true  end
-	function api.hide()  gui.Enabled = false end
-
-	-- カード生成（View から直接呼ばれる）
+	--──────────────── セル（カード）生成 ────────────────
+	-- ent: { uid, code, name, kind, month, image?/imageId?, eligible?, reason? }
 	function api.renderCard(parent: Instance, ent: table): Instance
 		assert(parent and parent:IsA("Instance"), "renderCard: invalid parent")
 		assert(type(ent) == "table", "renderCard: ent must be table")
 
 		local S = (Styles and Styles.sizes) or {}
-		local C = (Styles and Styles.colors) or {}
 		local F = (Styles and Styles.fontSizes) or {}
 		local Z = (Styles and Styles.z) or {}
 
+		-- ルート（灰スロット）
 		local card = Instance.new("TextButton")
 		card.Name                   = tostring(ent.uid or ent.code or "card")
 		card.AutoButtonColor        = true
-		card.BackgroundColor3       = C.cardBg or Color3.fromRGB(40,42,54)
+		card.BackgroundColor3       = COLOR.slotBg
 		card.BackgroundTransparency = 0.05
 		card.BorderSizePixel        = 0
-		card.Size                   = UDim2.fromOffset(S.gridCellW or 180, S.gridCellH or 160)
+		card.Size                   = UDim2.fromScale(1,1) -- Grid 側でサイズ管理
 		card.Text                   = ""
+		card.ZIndex                 = 10
 		card.Parent                 = parent
 
 		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, S.btnCorner or 10)
+		corner.CornerRadius = UDim.new(0, S.btnCorner or 12)
 		corner.Parent = card
 
 		local stroke = Instance.new("UIStroke")
 		stroke.Name = "SelStroke"
-		stroke.Thickness = 2
-		stroke.Color = C.selectedStroke or Color3.fromRGB(90,130,230)
+		stroke.Thickness = 3
+		stroke.Color = COLOR.selectStroke
 		stroke.Enabled = false
 		stroke.Parent = card
 
+		-- 画像：セル中央フィット（高さ優先・等比）
 		local img = Instance.new("ImageLabel")
 		img.Name                   = "Thumb"
-		img.Size                   = UDim2.fromOffset(S.gridCellW or 180, S.cardImgH or 112)
-		img.Position               = UDim2.new(0,0,0,0)
 		img.BackgroundTransparency = 1
 		img.BorderSizePixel        = 0
 		img.ScaleType              = Enum.ScaleType.Fit
+		img.AnchorPoint            = Vector2.new(0.5, 0.5)
+		img.Position               = UDim2.fromScale(0.5, 0.50)
+		img.Size                   = UDim2.fromScale(1, 0.82)
+		img.ZIndex                 = 12
 		img.Parent                 = card
+		local ar = Instance.new("UIAspectRatioConstraint")
+		ar.AspectRatio  = 0.62
+		ar.DominantAxis = Enum.DominantAxis.Height
+		ar.Parent = img
 
 		local src = resolveImage(ent)
 		if src then
 			img.Image = src
 		else
-			img.BackgroundTransparency = 0
-			img.BackgroundColor3 = C.cardImgFallback or Color3.fromRGB(55,57,69)
 			img.Image = ""
+			img.BackgroundTransparency = 0
+			img.BackgroundColor3 = COLOR.imgFallback
 		end
 
-		local nameLabel = Instance.new("TextLabel")
-		nameLabel.Name                   = "Name"
-		nameLabel.Text                   = tostring(ent.name or ent.code or ent.uid or "?")
-		nameLabel.Font                   = Enum.Font.Gotham
-		nameLabel.TextSize               = F.cardName or 16
-		nameLabel.TextColor3             = C.cardNameText or Color3.fromRGB(232,232,240)
-		nameLabel.BackgroundTransparency = 1
-		nameLabel.Size                   = UDim2.new(1, -10, 0, S.cardNameH or 18)
-		nameLabel.Position               = UDim2.new(0, S.cardNameLeft or 6, 0, (S.cardImgH or 112) + (S.cardNameTopGap or 4))
-		nameLabel.TextXAlignment         = Enum.TextXAlignment.Left
-		nameLabel.Parent                 = card
-
-		local m = parseMonth(ent)
-		local infoText = ((m and MONTH_JP[m]) or "?月") .. " / " .. kindToJp(ent.kind)
+		-- 左下インフォ（「◯月/種族 名前」を1行）
 		local info = Instance.new("TextLabel")
 		info.Name                   = "Info"
-		info.Text                   = infoText
-		info.Font                   = Enum.Font.Gotham
-		info.TextSize               = F.cardInfo or 14
-		info.TextColor3             = C.cardInfoText or Color3.fromRGB(210,210,220)
 		info.BackgroundTransparency = 1
-		info.Size                   = UDim2.new(1, -10, 0, S.cardInfoH or 16)
-		info.Position               = UDim2.new(0, S.cardInfoLeft or 6, 0, (S.gridCellH or 160) - (S.cardInfoH or 16) - (S.cardInfoBottomGap or 8))
 		info.TextXAlignment         = Enum.TextXAlignment.Left
-		info.Parent                 = card
+		info.TextYAlignment         = Enum.TextYAlignment.Bottom
+		info.AnchorPoint            = Vector2.new(0,1)
+		info.Position               = UDim2.fromScale(0, 1)
+		info.Size                   = UDim2.fromScale(1, 0.22)
+		info.Font                   = Enum.Font.Gotham
+		info.TextColor3             = COLOR.textMain
+		info.TextScaled             = true
+		info.TextWrapped            = false
+		info.LineHeight             = 1
+		info.TextTruncate           = Enum.TextTruncate.AtEnd
+		info.ZIndex                 = 14
+		local lim = Instance.new("UITextSizeConstraint")
+		lim.MaxTextSize = (F.cardInfoMax or F.cardInfo or 24) -- ★ 情報行の上限フォント（既定24px）
+		lim.Parent = info
+		local pad = Instance.new("UIPadding")
+		pad.PaddingLeft   = UDim.new(0, 10)
+		pad.PaddingBottom = UDim.new(0, 8)
+		pad.Parent = info
+		do
+			local m = parseMonth(ent)
+			local monthText = m and MONTH_JP[m] or "?月"
+			local kindText  = kindToJp(ent.kind)
+			local nameText  = tostring(ent.name or ent.code or ent.uid or "?")
+			info.Text = string.format("%s/%s %s", monthText, kindText, nameText)
+		end
+		info.Parent = card
 
-		-- 対象外オーバーレイ
+		-- 不可選オーバーレイ（常に最前面へ）
 		local canPick = (ent.eligible ~= false)
 		card:SetAttribute("canPick", canPick)
 		card:SetAttribute("reason", ent.reason or "")
 		if not canPick then
 			card.AutoButtonColor = false
 
+			-- ★ ZIndex をカード基準で強制的に最前面に
+			local OVERLAY_Z = (card.ZIndex or 0) + 100
+
 			local mask = Instance.new("Frame")
 			mask.Name = "IneligibleMask"
-			mask.BackgroundColor3 = C.ineligibleMask or Color3.new(0,0,0)
+			mask.BackgroundColor3 = Color3.new(0,0,0)
 			mask.BackgroundTransparency = 0.45
 			mask.BorderSizePixel = 0
 			mask.Size = UDim2.fromScale(1,1)
-			mask.ZIndex = Z.overlay or 5
+			mask.ZIndex = OVERLAY_Z
+			mask.Active = false -- 入力はボタンへ通す
 			mask.Parent = card
 
 			local tag = Instance.new("TextLabel")
 			tag.BackgroundTransparency = 1
 			tag.Size = UDim2.fromScale(1,0)
-			tag.Position = UDim2.fromScale(0,0.45)
+			tag.Position = UDim2.fromScale(0,0.44)
 			tag.Text = "対象外"
 			tag.Font = Enum.Font.GothamBold
-			tag.TextSize = F.inelMain or 18
-			tag.TextColor3 = C.ineligibleTitle or Color3.fromRGB(230,230,240)
-			tag.ZIndex = Z.overlayText or 6
+			tag.TextScaled = true
+			tag.TextColor3 = COLOR.overlayEdge
+			tag.ZIndex = OVERLAY_Z + 1
+			local tl = Instance.new("UITextSizeConstraint")
+			tl.MaxTextSize = ((Styles and Styles.fontSizes and Styles.fontSizes.inelMain) or 22)
+			tl.Parent = tag
 			tag.Parent = mask
 
 			if ent.reason and ent.reason ~= "" then
 				local sub = Instance.new("TextLabel")
 				sub.BackgroundTransparency = 1
 				sub.Size = UDim2.fromScale(1,0)
-				sub.Position = UDim2.fromScale(0,0.65)
+				sub.Position = UDim2.fromScale(0,0.62)
 				sub.Text = reasonToText(ent.reason) or tostring(ent.reason)
 				sub.Font = Enum.Font.Gotham
-				sub.TextSize = F.inelSub or 14
-				sub.TextColor3 = C.ineligibleSub or Color3.fromRGB(220,220,230)
-				sub.ZIndex = Z.overlayText or 6
+				sub.TextScaled = true
+				sub.TextColor3 = COLOR.overlayEdge
+				sub.ZIndex = OVERLAY_Z + 1
+				local sl = Instance.new("UITextSizeConstraint")
+				sl.MaxTextSize = ((Styles and Styles.fontSizes and Styles.fontSizes.inelSub) or 16)
+				sl.Parent = sub
 				sub.Parent = mask
 			end
 		end
@@ -198,14 +244,12 @@ function M.create(playerGui: Instance)
 		return card
 	end
 
+	-- 選択ハイライト（枠だけ光らせる）
 	function api.setCardSelected(btn: Instance, sel: boolean)
 		if not (btn and btn:IsA("GuiObject")) then return end
-		local C = (Styles and Styles.colors) or {}
-		btn.BackgroundColor3 = sel and (C.selectedBg or Color3.fromRGB(70,110,210))
-		                        or (C.cardBg     or Color3.fromRGB(40,42,54))
 		local stroke = btn:FindFirstChild("SelStroke")
 		if stroke and stroke:IsA("UIStroke") then
-			stroke.Enabled = sel
+			stroke.Enabled = sel and true or false
 		end
 	end
 

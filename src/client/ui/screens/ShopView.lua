@@ -1,10 +1,9 @@
 -- StarterPlayerScripts/UI/screens/ShopView.lua
--- v0.9.9-P3-06 Styles一本化：Theme直参照削除（色/寸法）
---  - モーダル/ヘッダ/ボタン等の色・角丸・線色：Styles に一本化（Theme直参照を撤去）
---  - addCorner/addStroke の既定は最小定数のみ（Themeに依存しない）
---  - セルクリック＝即購入は ClientSignals.BuyRequested:Fire(it) に統一（Remotes直叩きなし）
---  - フッターは CloseBtn（「ショップを終えて次の月に進む」）
---  - 背景画像のみ Theme.IMAGES.SHOP_BG / Theme.TRANSPARENCY.shopBg を使用（画像はThemeの責務）
+-- v0.9.9-P3-07 header buttons: CloseBtn moved next to Reroll (same size)
+--  - CloseBtn をフッターからヘッダー右端に移動（Reroll の右隣、同サイズ）
+--  - ヘッダー右側にボタンバー（UIListLayout, Right寄せ, 等間隔）
+--  - 既存の nodes.closeBtn / wires は互換維持
+--  - Styles 一本化方針は維持（色・角丸・寸法は Styles 参照）
 
 local Shop = {}
 Shop.__index = Shop
@@ -281,33 +280,68 @@ function Shop:_ensureGui()
 	title.ZIndex = 3
 	title.Parent = header
 
+	--=== ヘッダー右側：ボタンバー（Right寄せ） ===
+	local btnW   = (Styles and Styles.sizes and Styles.sizes.rerollBtnW) or 140
+	local btnH   = (Styles and Styles.sizes and Styles.sizes.rerollBtnH) or 32
+	local gapPx  = (Styles and Styles.sizes and Styles.sizes.headerBtnGap) or 10
+	local barW   = btnW*3 + gapPx*2
+
+	local btnBar = Instance.new("Frame")
+	btnBar.Name = "BtnBar"
+	btnBar.BackgroundTransparency = 1
+	btnBar.AnchorPoint = Vector2.new(1,0.5)
+	btnBar.Position = UDim2.new(1,-10,0.5,0)
+	btnBar.Size = UDim2.fromOffset(barW, btnH)
+	btnBar.ZIndex = 3
+	btnBar.Parent = header
+
+	local barList = Instance.new("UIListLayout")
+	barList.FillDirection = Enum.FillDirection.Horizontal
+	barList.HorizontalAlignment = Enum.HorizontalAlignment.Right
+	barList.VerticalAlignment = Enum.VerticalAlignment.Center
+	barList.Padding = UDim.new(0, gapPx)
+	barList.SortOrder = Enum.SortOrder.LayoutOrder
+	barList.Parent = btnBar
+
 	local deckBtn = Instance.new("TextButton")
 	deckBtn.Name = "DeckBtn"
-	deckBtn.Size = UDim2.new(0,(Styles and Styles.sizes and Styles.sizes.deckBtnW) or 140,0,(Styles and Styles.sizes and Styles.sizes.deckBtnH) or 32)
-	deckBtn.Position = UDim2.new(1,-300,0.5,-16)
+	deckBtn.Size = UDim2.fromOffset(btnW, btnH)
 	deckBtn.Text = "デッキを見る"
+	deckBtn.LayoutOrder = 1
 	deckBtn.ZIndex = 3
-	deckBtn.Parent = header
+	deckBtn.Parent = btnBar
 	addCorner(deckBtn, _styleSize("btnCorner", 8))
 	addStroke(deckBtn, "panelStroke", 1)
 
 	local rerollBtn = Instance.new("TextButton")
 	rerollBtn.Name = "RerollBtn"
-	rerollBtn.Size = UDim2.new(0,(Styles and Styles.sizes and Styles.sizes.rerollBtnW) or 140,0,(Styles and Styles.sizes and Styles.sizes.rerollBtnH) or 32)
-	rerollBtn.Position = UDim2.new(1,-150,0.5,-16)
+	rerollBtn.Size = UDim2.fromOffset(btnW, btnH)
 	rerollBtn.Text = "リロール"
+	rerollBtn.LayoutOrder = 2
 	rerollBtn.ZIndex = 3
-	rerollBtn.Parent = header
+	rerollBtn.Parent = btnBar
 	rerollBtn.BackgroundColor3 = _styleColor("warnBtnBg", Color3.fromRGB(180,80,40))
-	rerollBtn.TextColor3 = _styleColor("warnBtnText", Color3.fromRGB(255,240,230))
+	rerollBtn.TextColor3       = _styleColor("warnBtnText", Color3.fromRGB(255,240,230))
 	addCorner(rerollBtn, _styleSize("btnCorner", 8))
+
+	-- ★ CloseBtn（次のステージへ）…Reroll の右隣（同サイズ）
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Name = "CloseBtn"
+	closeBtn.Size = UDim2.fromOffset(btnW, btnH)
+	closeBtn.Text = "ショップを終えて次の月に進む"
+	closeBtn.LayoutOrder = 3
+	closeBtn.ZIndex = 3
+	closeBtn.Parent = btnBar
+	closeBtn.BackgroundColor3 = _styleColor("primaryBtnBg", Color3.fromRGB(190,50,50))
+	closeBtn.TextColor3       = _styleColor("primaryBtnText", Color3.fromRGB(255,245,240))
+	addCorner(closeBtn, _styleSize("btnCorner", 8))
 
 	-- body（上下2段）
 	local body = Instance.new("Frame")
 	body.Name = "Body"
 	body.BackgroundTransparency = 1
 	local headerH = (Styles and Styles.sizes and Styles.sizes.headerH) or 48
-	local footerH = (Styles and Styles.sizes and Styles.sizes.footerH) or 64
+	local footerH = 0 -- フッター廃止
 	local bodyPad = (Styles and Styles.sizes and Styles.sizes.bodyPad) or 10
 	body.Size = UDim2.new(1,-(bodyPad*2),1,-(headerH+footerH))
 	body.Position = UDim2.new(0,bodyPad,0,headerH)
@@ -430,23 +464,6 @@ function Shop:_ensureGui()
 	taliArea.Name = "TalismanArea"; taliArea.BackgroundTransparency = 1
 	taliArea.Size = UDim2.fromScale(1,1); taliArea.Parent = bottom
 
-	-- footer（CloseBtn）
-	local footer = Instance.new("Frame")
-	footer.Name = "Footer"; footer.BackgroundTransparency = 1
-	footer.Size = UDim2.new(1,0,0,(Styles and Styles.sizes and Styles.sizes.footerH) or 64)
-	footer.Position = UDim2.new(0,0,1,-((Styles and Styles.sizes and Styles.sizes.footerH) or 64))
-	footer.ZIndex = 1; footer.Parent = modal
-
-	local closeBtn = Instance.new("TextButton")
-	closeBtn.Name = "CloseBtn"
-	closeBtn.Size = UDim2.new(0,(Styles and Styles.sizes and Styles.sizes.closeBtnW) or 260,0,(Styles and Styles.sizes and Styles.sizes.closeBtnH) or 44)
-	closeBtn.Position = UDim2.new(0.5,-((Styles and Styles.sizes and Styles.sizes.closeBtnW) or 260)/2,0.5,-((Styles and Styles.sizes and Styles.sizes.closeBtnH) or 44)/2)
-	closeBtn.Text = "ショップを終えて次の月に進む"
-	closeBtn.ZIndex = 2; closeBtn.Parent = footer
-	closeBtn.BackgroundColor3 = _styleColor("primaryBtnBg", Color3.fromRGB(190,50,50))
-	closeBtn.TextColor3 = _styleColor("primaryBtnText", Color3.fromRGB(255,245,240))
-	addCorner(closeBtn, _styleSize("btnCorner", 8))
-
 	-- 護符ボード
 	self._taliBoard = TalismanBoard.new(taliArea, {
 		title      = taliTitleText(self._lang or "ja"),
@@ -461,7 +478,7 @@ function Shop:_ensureGui()
 		summary = summary,
 		deckPanel = deckPanel, deckTitle = deckTitle, deckText = deckText,
 		infoPanel = infoPanel, infoTitle = infoTitle, infoText = infoText,
-		closeBtn = closeBtn,
+		closeBtn = closeBtn, -- ★ header 内に移設
 		taliArea = taliArea,
 	}
 	g.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -704,7 +721,7 @@ function Shop:setData(payload: Payload)
 		nodes.title.Text     = Locale.t(lang, "SHOP_UI_TITLE")
 		nodes.infoTitle.Text = Locale.t(lang, "SHOP_UI_INFO_TITLE")
 		if nodes.closeBtn then
-			nodes.closeBtn.Text = Locale.t(lang, "SHOP_UI_CLOSE_BTN")
+			nodes.closeBtn.Text = Locale.t(lang, "SHOP_UI_CLOSE_BTN") -- 翻訳キーそのまま利用
 		end
 		if nodes.rerollBtn then
 			local cost = tonumber(payload.rerollCost or 1) or 1
