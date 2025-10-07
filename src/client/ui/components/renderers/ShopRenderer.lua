@@ -1,12 +1,11 @@
 -- StarterPlayerScripts/UI/components/renderers/ShopRenderer.lua
--- v0.9.SIMPLE-16
---  - requireModuleCI を安定化（探索親の取り違えを解消）
---  - GetAttribute チェックは typeof で安全に（既存修正を維持）
---  - Case-insensitive な UI ルート＆子検索
---  - KitoAssets 遅延ロード + 1回限定再試行
---  - Styles も CI で解決
---  - Locale: 護符ボードタイトルは *_TITLE を使用
---  - フェーズ3互換: setCellSelected を公開（選択ハイライト）
+-- v0.9.SIMPLE-17
+--  - 未使用APIを削除：render(self) / TalismanBoard ロード系を撤去（View 側が管理）
+--  - 旧版の暫定ログを削減（KITO 正規化/貼付の詳細ログを debug か無出力へ）
+--  - Remotes 直叩きとなる導線を完全排除（handlers 経由のみ）→ Wires 単一路線化に準拠
+--  - CI（Case-Insensitive）探索ユーティリティは維持
+--  - Styles / KitoAssets は遅延ロード & 1回限定再試行のまま安定化
+--  - 公開API：renderCell / setCellSelected のみ
 
 local RS = game:GetService("ReplicatedStorage")
 
@@ -68,7 +67,7 @@ local function requireModuleCI(root: Instance?, path: {string}, waitSeconds: num
 end
 
 --========================
--- Styles（UI/components/renderers → UI/styles/ShopStyles を CI 解決）
+-- Styles（UI/styles/ShopStyles を CI 解決）
 --========================
 local Styles do
 	local ok, mod = pcall(function()
@@ -90,26 +89,10 @@ local function _getKitoAssets()
 	local mod = requireModuleCI(uiRoot, {"lib","KitoAssets"}, 0.5)
 	if mod then
 		KitoAssets = mod
-		local lib  = findChildCI(uiRoot, "lib")
-		local ms   = lib and findChildCI(lib, "KitoAssets")
-		LOG.info("[KitoAssets] late-bound OK | module=%s", tostring(ms and ms:GetFullName() or "?"))
 		return mod
 	end
 	return nil
 end
-
---========================
--- TalismanBoard ローダ（CI 解決）
---========================
-local function requireTalismanBoard()
-	local uiRoot = findAncestorCI(script, "UI")
-	if not uiRoot then return nil end
-	return requireModuleCI(uiRoot, {"components","TalismanBoard"}, 0.5)
-end
-
-local function _id(it) return tostring(it and it.id or "?") end
-
-local M = {}
 
 --========================
 -- 内部ユーティリティ
@@ -165,6 +148,7 @@ local function _styleColor(key:string, fallback: Color3): Color3
 		badgeStroke = "BadgeStroke",
 		text        = "TextDefault",
 		cardBg      = "PanelBg",
+		selectedStroke = "SelectedStroke",
 	}
 	local themeKey = map[key]
 	if themeKey and Theme and Theme.COLORS and typeof(Theme.COLORS[themeKey]) == "Color3" then
@@ -174,13 +158,12 @@ local function _styleColor(key:string, fallback: Color3): Color3
 end
 
 local function addCorner(gui: Instance, px: number?)
-	local ok = pcall(function()
+	pcall(function()
 		local c = Instance.new("UICorner")
 		local r = px or (Styles and Styles.sizes and Styles.sizes.panelCorner) or Theme.PANEL_RADIUS or 10
 		c.CornerRadius = UDim.new(0, r)
 		c.Parent = gui
 	end)
-	return ok
 end
 
 local function addStroke(gui: Instance, color: Color3?, thickness: number?, transparency: number?)
@@ -200,13 +183,11 @@ end
 --========================
 local function _applyKitoFullArt(btn: Instance, priceBand: Instance, it:any): boolean
 	if not (btn and btn:IsA("GuiObject")) then return false end
-	if not it then return false end
-	if tostring(it.category) ~= "kito" then return false end
+	if not it or tostring(it.category) ~= "kito" then return false end
 
-	-- KitoAssets を遅延解決
+	-- KitoAssets を遅延解決（未準備時は軽い再試行）
 	local KA = _getKitoAssets()
 	if not KA then
-		-- 初回未解決なら軽く再試行（複製タイミング差分吸収）
 		local alreadyRetried = (typeof(btn.GetAttribute) == "function") and (btn:GetAttribute("kitoArtRetry") == true)
 		if not alreadyRetried then
 			if typeof(btn.SetAttribute) == "function" then
@@ -220,28 +201,30 @@ local function _applyKitoFullArt(btn: Instance, priceBand: Instance, it:any): bo
 				end
 			end)
 		end
-		LOG.warn("[kito][skip] id=%s reason=KitoAssets-not-ready", tostring(it.id or "?"))
+		-- 過剰ログを避ける
+		LOG.debug("[kito] assets not ready; will retry once")
 		return false
 	end
 
-	-- effect ID 正規化
-	local effectRaw = tostring(it.effect or "")
-	local effectCanon = effectRaw
+	-- effect ID 正規化（ShopDefs があれば使用）
+	local effectCanon = tostring(it.effect or "")
 	local okDefs, ShopDefs = pcall(function()
 		return require(SharedModules:WaitForChild("ShopDefs"))
 	end)
 	if okDefs and ShopDefs and type(ShopDefs.toCanonicalEffectId) == "function" then
-		local ok, canon = pcall(ShopDefs.toCanonicalEffectId, effectRaw)
+		local ok, canon = pcall(ShopDefs.toCanonicalEffectId, effectCanon)
 		if ok and canon and canon ~= "" then effectCanon = canon end
 	end
-	LOG.info("[kito][canon] id=%s raw=%s -> canon=%s", tostring(it.id or "?"), effectRaw, effectCanon)
 
 	-- アイコン解決
 	local icon
 	local okGet, res = pcall(function() return KA.getIcon(effectCanon) end)
-	if okGet then icon = res else LOG.warn("[kito][icon-error] id=%s err=%s", tostring(it.id or "?"), tostring(res)) end
+	if okGet then
+		icon = res
+	end
 	if not icon or icon == "" then
-		LOG.warn("[kito][icon-miss] id=%s canon=%s (no icon)", tostring(it.id or "?"), effectCanon)
+		-- ここは実害があるので warn を維持
+		LOG.warn("[kito] icon not found for effect=%s", tostring(effectCanon))
 		return false
 	end
 
@@ -264,9 +247,12 @@ local function _applyKitoFullArt(btn: Instance, priceBand: Instance, it:any): bo
 	art.ZIndex = (btn.ZIndex or 0) + 1
 	art.Parent = btn
 
-	LOG.info("[kito][full-art] id=%s icon=%s", tostring(it.id or "?"), tostring(icon))
+	-- 詳細ログは控えめに
+	LOG.debug("[kito] full-art applied")
 	return true
 end
+
+local M = {}
 
 --========================
 -- 公開：セル生成（唯一の入口）
@@ -328,6 +314,7 @@ function M.renderCell(parent: Instance, nodes, it: any, lang: string, mon: numbe
 	local affordable = _computeAffordable(mon, it and it.price)
 	if not affordable then
 		local insuff = Locale.t(lang, "SHOP_UI_INSUFFICIENT_SUFFIX")
+		priceBand.Text = _fmtPrice(it and it.price) + insuff -- Lua で + は文字連結不可 → 修正
 		priceBand.Text = _fmtPrice(it and it.price) .. insuff
 		priceBand.BackgroundTransparency = 0.15
 		btn.AutoButtonColor = true
@@ -379,10 +366,11 @@ function M.renderCell(parent: Instance, nodes, it: any, lang: string, mon: numbe
 	btn.MouseEnter:Connect(showDesc)
 	if btn.SelectionGained then btn.SelectionGained:Connect(showDesc) end
 
-	-- 購入（フェーズ2互換：セル直押しで購入）
+	-- 購入（handlers 経由・Remotes は叩かない）
 	local function doBuy()
-		if not (handlers and typeof(handlers.onBuy)=="function") then return end
-		pcall(function() handlers.onBuy(it) end)
+		if handlers and typeof(handlers.onBuy)=="function" then
+			pcall(function() handlers.onBuy(it) end)
+		end
 	end
 	btn.Activated:Connect(doBuy)
 
@@ -390,180 +378,7 @@ function M.renderCell(parent: Instance, nodes, it: any, lang: string, mon: numbe
 end
 
 --========================
--- 既存の render(self) を最小変更で維持
---========================
-local function isTalismanItem(it: any): boolean
-	return typeof(it) == "table" and (it.category == "talisman") and (it.talismanId ~= nil)
-end
-
-function M.render(self)
-	local nodes = self._nodes
-	if not nodes then return end
-
-	--=== Payload 正規化 ===
-	local p          = self._payload or {}
-	local items      = p.items or p.stock or {}
-	local lang       = ShopFormat.normLang(p.lang) or "en"
-	local mon        = tonumber(p.mon or p.totalMon or 0) or 0
-	local rerollCost = tonumber(p.rerollCost or 1) or 1
-
-	-- KitoAssets の事前ウォームアップ（非致命）
-	_getKitoAssets()
-
-	--=== 護符ボード（初回マウント） ===
-	if nodes.taliArea and not self._taliBoard then
-		local TB = requireTalismanBoard()
-		if TB then
-			local title = Locale.t(lang, "SHOP_UI_TALISMAN_BOARD_TITLE")
-			local ok, board = pcall(function()
-				return TB.new(nodes.taliArea, { title = title, widthScale = 0.9, padScale = 0.01 })
-			end)
-			if ok and board then
-				self._taliBoard = board
-				local inst = self._taliBoard.getInstance and self._taliBoard:getInstance()
-				if inst then
-					inst.AnchorPoint = Vector2.new(0.5, 0)
-					inst.Position    = UDim2.fromScale(0.5, 0)
-					inst.ZIndex      = 2
-				end
-				LOG.info("mount TalismanBoard | lang=%s title=%s", tostring(lang), tostring(title))
-			else
-				LOG.warn("TalismanBoard.new failed: %s", tostring(board))
-			end
-		else
-			LOG.warn("TalismanBoard module not found; skip mount")
-		end
-	end
-
-	--=== 一時 SoldOut フィルタ ===
-	local vis, hiddenList = {}, {}
-	for _, it in ipairs(items) do
-		if typeof(it) == "table" and tostring(it.category) == "kito" then
-			LOG.info("[kito][in] id=%s effect(raw)=%s name=%s",
-				tostring(it.id or "?"), tostring(it.effect or "<nil>"), tostring(it.name or ""))
-		end
-		local id = it and it.id
-		local hidden = false
-		if typeof(self.isItemHidden) == "function" then
-			local ok, h = pcall(function() return self:isItemHidden(id) end)
-			hidden = ok and (h == true)
-			if not ok then LOG.warn("isItemHidden failed for id=%s", tostring(id)) end
-		end
-		if not hidden then table.insert(vis, it) else table.insert(hiddenList, tostring(id)) end
-	end
-
-	local canReroll = (p.canReroll ~= false) and (mon >= rerollCost)
-	LOG.info("render snapshot | items=%d vis=%d hidden=%d mon=%d cost=%d canReroll=%s lang=%s",
-		#items, #vis, #hiddenList, mon, rerollCost, tostring(canReroll), lang)
-	if #items > 0 and #vis == 0 then
-		local maxDump = math.min(10, #hiddenList)
-		LOG.info("render dump (all hidden) | ids=%s...", table.concat(hiddenList, ", ", 1, maxDump))
-	end
-
-	--=== タイトル・ボタン ===
-	if nodes.title   then nodes.title.Text   = Locale.t(lang, "SHOP_UI_TITLE") end
-	if nodes.deckBtn then
-		nodes.deckBtn.Text = self._deckOpen and Locale.t(lang, "SHOP_UI_HIDE_DECK") or Locale.t(lang, "SHOP_UI_VIEW_DECK")
-	end
-	if nodes.rerollBtn then
-		nodes.rerollBtn.Text = Locale.t(lang, "SHOP_UI_REROLL_FMT"):format(rerollCost)
-		nodes.rerollBtn.Active = canReroll
-		nodes.rerollBtn.AutoButtonColor = canReroll
-		nodes.rerollBtn.TextTransparency = 0
-		nodes.rerollBtn.BackgroundTransparency = 0
-	end
-	if nodes.infoTitle then nodes.infoTitle.Text = Locale.t(lang, "SHOP_UI_INFO_TITLE") end
-	if nodes.closeBtn  then nodes.closeBtn.Text  = Locale.t(lang, "SHOP_UI_CLOSE_BTN") end
-
-	--=== 右パネル ===
-	do
-		local deckPanel = nodes.deckPanel
-		local infoPanel = nodes.infoPanel
-		local deckTitle = nodes.deckTitle
-		local deckText  = nodes.deckText
-
-		if deckPanel and infoPanel then
-			deckPanel.Visible = self._deckOpen == true
-			infoPanel.Visible = not (self._deckOpen == true)
-		end
-
-		if deckPanel and deckTitle and deckText then
-			local n, lst = ShopFormat.deckListFromSnapshot(p.currentDeck)
-			deckTitle.Text = Locale.t(lang, "SHOP_UI_DECK_TITLE_FMT"):format(n)
-			deckText.Text  = (n > 0) and lst or Locale.t(lang, "SHOP_UI_DECK_EMPTY")
-		end
-	end
-
-	--=== 左グリッド再構築 ===
-	local scroll = nodes.scroll
-	if not scroll then return end
-	for _, ch in ipairs(scroll:GetChildren()) do
-		if ch:IsA("GuiObject") and ch ~= nodes.grid then ch:Destroy() end
-	end
-
-	-- BUY ハンドラ
-	local function onBuy(it: any)
-		if self._buyBusy then return end
-		if isTalismanItem(it) then
-			LOG.info("BUY click (auto place) | id=%s name=%s taliId=%s", tostring(it.id or "?"), tostring(it.name or "?"), tostring(it.talismanId))
-			if typeof(self.autoPlace) == "function" then
-				local ok = pcall(function() self:autoPlace(it.talismanId, it) end)
-				if not ok then LOG.warn("autoPlace failed for talismanId=%s", tostring(it.talismanId)) end
-			else
-				LOG.warn("autoPlace is not available on host; skip BUY for talisman")
-			end
-			return
-		end
-		local remotes = self.deps and self.deps.remotes
-		local BuyItem = remotes and remotes.BuyItem
-		if not BuyItem then
-			LOG.warn("remotes.BuyItem is missing; cannot buy id=%s", tostring(it and it.id))
-			return
-		end
-		self._buyBusy = true
-		LOG.info("BUY click | id=%s name=%s", tostring(it.id or "?"), tostring(it.name or "?"))
-		pcall(function() BuyItem:FireServer(it.id) end)
-		task.delay(0.25, function() self._buyBusy = false end)
-	end
-
-	-- セル配置（先頭3件だけ INFO）
-	for i, it in ipairs(vis) do
-		M.renderCell(scroll, nodes, it, lang, mon, { onBuy = onBuy })
-		if i <= 3 then
-			LOG.info("cell create #%d | id=%s cat=%s price=%s",
-				i, _id(it), tostring(it and it.category or "?"), tostring(it and it.price or "?"))
-		end
-	end
-
-	-- CanvasSize
-	task.defer(function()
-		local gridObj = nodes.grid
-		if not (gridObj and gridObj:IsA("UIGridLayout")) then return end
-		local frameW = scroll.AbsoluteSize.X
-		local cellW  = (gridObj.CellSize.X.Offset or 0) + (gridObj.CellPadding.X.Offset or 0)
-		if cellW <= 0 then return end
-		local perRow = math.max(1, math.floor(frameW / cellW))
-		local rows   = math.ceil(#vis / perRow)
-		local cellH  = (gridObj.CellSize.Y.Offset or 0) + (gridObj.CellPadding.Y.Offset or 0)
-		local needed = rows * cellH + 8
-		scroll.CanvasSize = UDim2.new(0, 0, 0, needed)
-	end)
-
-	--=== サマリ ===
-	local s = {}
-	if p.seasonSum ~= nil or p.target ~= nil or p.rewardMon ~= nil then
-		table.insert(s,
-			Locale.t(lang, "SHOP_UI_SUMMARY_CLEARED_FMT")
-				:format(tonumber(p.seasonSum or 0) or 0, tonumber(p.target or 0) or 0, tonumber(p.rewardMon or 0) or 0, tonumber(p.totalMon or mon or 0) or 0)
-		)
-	end
-	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_ITEMS_FMT"):format(#vis))
-	table.insert(s, Locale.t(lang, "SHOP_UI_SUMMARY_MONEY_FMT"):format(mon))
-	if nodes.summary then nodes.summary.Text = table.concat(s, "\n") end
-end
-
---========================
--- 追加公開：選択トグル（フェーズ3向け）
+-- 公開：選択トグル
 --========================
 function M.setCellSelected(btn: Instance, selected: boolean)
 	if not (btn and btn:IsA("GuiObject")) then return end

@@ -1,9 +1,10 @@
 -- StarterPlayerScripts/UI/ClientMain.client.lua
--- v0.9.6-P1-8 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
+-- v0.9.6-P1-9 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
 -- - ShopOpen の受信は撤去し、代わりに ShopWires.init に一任（フェーズ4：Wires 単一路線化）
 -- - ShopResult は存在しない環境もあるため FindFirstChild に変更（Infinite yield 回避）
 -- - kitoPick 前面時の裏更新などの分岐も Wires 側に委譲
 -- - Router の安全スタブ ensure/active/register は従来どおり
+-- - Router.setDeps から BuyItem / ShopReroll / ShopDone を除去（Wires 専任）
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -55,7 +56,7 @@ local NavClient = require(RS:WaitForChild("SharedModules"):WaitForChild("NavClie
 --========================
 local HomeOpen    = Remotes:WaitForChild("HomeOpen")
 local ShopOpen    = Remotes:WaitForChild("ShopOpen")           -- ← Wires 側で購読
-local ShopResult  = Remotes:FindFirstChild("ShopResult")       -- ← 存在しない環境あり。WaitForChild を使わない
+local ShopResult  = Remotes:FindFirstChild("ShopResult")       -- ← nil の可能性あり。WaitForChild を使わない
 local StatePush   = Remotes:WaitForChild("StatePush")
 local HandPush    = Remotes:WaitForChild("HandPush")
 local FieldPush   = Remotes:WaitForChild("FieldPush")
@@ -72,9 +73,9 @@ local ReqContinueRun = Remotes:WaitForChild("ReqContinueRun")
 local Confirm        = Remotes:WaitForChild("Confirm")
 local ReqRerollAll   = Remotes:WaitForChild("ReqRerollAll")
 local ReqRerollHand  = Remotes:WaitForChild("ReqRerollHand")
-local ShopDone       = Remotes:WaitForChild("ShopDone")
-local BuyItem        = Remotes:WaitForChild("BuyItem")         -- ← Wires 側で送信
-local ShopReroll     = Remotes:WaitForChild("ShopReroll")      -- ← Wires 側で送信
+local ShopDone       = Remotes:WaitForChild("ShopDone")        -- ← 送信自体は Wires 側で実行
+local BuyItem        = Remotes:WaitForChild("BuyItem")         -- ← 送信は Wires 側
+local ShopReroll     = Remotes:WaitForChild("ShopReroll")      -- ← 送信は Wires 側
 local ReqPick        = Remotes:WaitForChild("ReqPick")
 local ReqSyncUI      = Remotes:WaitForChild("ReqSyncUI")
 local DecideNext     = Remotes:WaitForChild("DecideNext")
@@ -136,11 +137,11 @@ Router.init(Screens)
 
 --========================
 -- 依存性配布（Router → UI）
+--  ※ BuyItem / ShopReroll / ShopDone は UI に配布しない（Wires 専任）
 --========================
 Router.setDeps({
 	playerGui = Players.LocalPlayer:WaitForChild("PlayerGui"),
 	Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
-	ShopDone=ShopDone, BuyItem=BuyItem, ShopReroll=ShopReroll,
 	ReqStartNewRun=ReqStartNewRun, ReqContinueRun=ReqContinueRun, ReqSyncUI=ReqSyncUI,
 	DecideNext=DecideNext, ReqSetLang=ReqSetLang,
 	HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
@@ -164,9 +165,9 @@ Router.setDeps({
 		end)
 	end,
 
+	-- ★ remotes 配布からは除外：BuyItem / ShopReroll / ShopDone
 	remotes = {
 		Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
-		ShopDone=ShopDone, BuyItem=BuyItem, ShopReroll=ShopReroll,
 		ReqStartNewRun=ReqStartNewRun, ReqContinueRun=ReqContinueRun, ReqSyncUI=ReqSyncUI,
 		HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 		StageResult=StageResult, DecideNext=DecideNext, ReqSetLang=ReqSetLang,
@@ -219,7 +220,6 @@ LOG.info("wired: ShopWires.init (ShopOpen/ShopResult by Wires)")
 --========================================
 -- S→C 配線（ShopOpen は撤去済み：Wires に委譲）
 --========================================
-
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
 		local nl = LocaleUtil.norm(payload.lang) or payload.lang
