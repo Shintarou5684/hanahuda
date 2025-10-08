@@ -1,10 +1,9 @@
 -- StarterPlayerScripts/UI/ClientMain.client.lua
--- v0.9.6-P1-9 Router＋Remote結線（NavClient注入／Logger導入／vararg不使用）
--- - ShopOpen の受信は撤去し、代わりに ShopWires.init に一任（フェーズ4：Wires 単一路線化）
--- - ShopResult は存在しない環境もあるため FindFirstChild に変更（Infinite yield 回避）
--- - kitoPick 前面時の裏更新などの分岐も Wires 側に委譲
--- - Router の安全スタブ ensure/active/register は従来どおり
--- - Router.setDeps から BuyItem / ShopReroll / ShopDone を除去（Wires 専任）
+-- v0.10.0-A Route-centralized (ClientMain listens ShopOpen/ShopResult; Wires = send-only)
+-- - ShopOpen/ShopResult の受信を ClientMain に集約（kitoPick 前面時は「裏更新のみ」）
+-- - ShopWires は Buy/Reroll/Close など送信専任（Remote 直叩きは UI/Renderer で禁止）
+-- - Router の ensure/active/show/call は安全スタブで維持
+-- - Router.setDeps から BuyItem / ShopReroll / ShopDone は除外
 
 local Players = game:GetService("Players")
 local RS      = game:GetService("ReplicatedStorage")
@@ -45,6 +44,9 @@ if not okLocale or type(Locale) ~= "table" then
 end
 
 local LocaleUtil = require(RS:WaitForChild("SharedModules"):WaitForChild("LocaleUtil"))
+local function _normLang(lang)
+	return (type(LocaleUtil.norm)=="function" and LocaleUtil.norm(lang)) or lang or "en"
+end
 
 --========================
 -- NavClient
@@ -55,8 +57,8 @@ local NavClient = require(RS:WaitForChild("SharedModules"):WaitForChild("NavClie
 -- S→C
 --========================
 local HomeOpen    = Remotes:WaitForChild("HomeOpen")
-local ShopOpen    = Remotes:WaitForChild("ShopOpen")           -- ← Wires 側で購読
-local ShopResult  = Remotes:FindFirstChild("ShopResult")       -- ← nil の可能性あり。WaitForChild を使わない
+local ShopOpen    = Remotes:WaitForChild("ShopOpen")           -- ★ ClientMain が購読
+local ShopResult  = Remotes:FindFirstChild("ShopResult")       -- 任意（nil可）
 local StatePush   = Remotes:WaitForChild("StatePush")
 local HandPush    = Remotes:WaitForChild("HandPush")
 local FieldPush   = Remotes:WaitForChild("FieldPush")
@@ -73,15 +75,15 @@ local ReqContinueRun = Remotes:WaitForChild("ReqContinueRun")
 local Confirm        = Remotes:WaitForChild("Confirm")
 local ReqRerollAll   = Remotes:WaitForChild("ReqRerollAll")
 local ReqRerollHand  = Remotes:WaitForChild("ReqRerollHand")
-local ShopDone       = Remotes:WaitForChild("ShopDone")        -- ← 送信自体は Wires 側で実行
-local BuyItem        = Remotes:WaitForChild("BuyItem")         -- ← 送信は Wires 側
-local ShopReroll     = Remotes:WaitForChild("ShopReroll")      -- ← 送信は Wires 側
+local ShopDone       = Remotes:WaitForChild("ShopDone")        -- 送信は Wires 側
+local BuyItem        = Remotes:WaitForChild("BuyItem")         -- 送信は Wires 側
+local ShopReroll     = Remotes:WaitForChild("ShopReroll")      -- 送信は Wires 側
 local ReqPick        = Remotes:WaitForChild("ReqPick")
 local ReqSyncUI      = Remotes:WaitForChild("ReqSyncUI")
 local DecideNext     = Remotes:WaitForChild("DecideNext")
 local ReqSetLang     = Remotes:WaitForChild("ReqSetLang")
 
--- DEV
+-- DEV（任意）
 local DevGrantRyo  = Remotes:FindFirstChild("DevGrantRyo")
 local DevGrantRole = Remotes:FindFirstChild("DevGrantRole")
 
@@ -116,7 +118,6 @@ do
 	mod.setDeps  = (type(mod.setDeps)  == "function") and mod.setDeps  or function(_) end
 	mod.show     = (type(mod.show)     == "function") and mod.show     or function(_) end
 	mod.call     = (type(mod.call)     == "function") and mod.call     or function() end
-	-- ensure/active/register を安全に生やす
 	mod.ensure   = (type(mod.ensure)   == "function") and mod.ensure   or function() end
 	mod.active   = (type(mod.active)   == "function") and mod.active   or function() return nil end
 	mod.register = (type(mod.register) == "function") and mod.register or function() end
@@ -124,7 +125,7 @@ do
 end
 
 --========================
--- 画面定義（shop は ShopView）
+-- 画面定義
 --========================
 local Screens = {
 	home     = require(ScreensFolder:WaitForChild("HomeScreen")),
@@ -136,8 +137,8 @@ local Screens = {
 Router.init(Screens)
 
 --========================
--- 依存性配布（Router → UI）
---  ※ BuyItem / ShopReroll / ShopDone は UI に配布しない（Wires 専任）
+-- Router → UI 依存注入
+--  ※ BuyItem / ShopReroll / ShopDone は配布しない（Wires専任）
 --========================
 Router.setDeps({
 	playerGui = Players.LocalPlayer:WaitForChild("PlayerGui"),
@@ -146,15 +147,12 @@ Router.setDeps({
 	DecideNext=DecideNext, ReqSetLang=ReqSetLang,
 	HandPush=HandPush, FieldPush=FieldPush, TakenPush=TakenPush, ScorePush=ScorePush, StatePush=StatePush,
 	StageResult=StageResult,
-
-	-- UI層へ Nav を配布
 	Nav = Nav,
 
-	-- トースト
 	toast = function(msg, dur)
 		pcall(function()
 			local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
-			local lang = LocaleUtil.norm(gl) or "en"
+			local lang = _normLang(gl)
 			local title = (type(Locale.t)=="function" and Locale.t(lang, "TOAST_TITLE"))
 			              or ((lang=="ja") and "通知" or "Notice")
 			game.StarterGui:SetCore("SendNotification", {
@@ -165,7 +163,6 @@ Router.setDeps({
 		end)
 	end,
 
-	-- ★ remotes 配布からは除外：BuyItem / ShopReroll / ShopDone
 	remotes = {
 		Confirm=Confirm, ReqPick=ReqPick, ReqRerollAll=ReqRerollAll, ReqRerollHand=ReqRerollHand,
 		ReqStartNewRun=ReqStartNewRun, ReqContinueRun=ReqContinueRun, ReqSyncUI=ReqSyncUI,
@@ -176,22 +173,19 @@ Router.setDeps({
 })
 
 --========================
--- Wires 単一路線化：ShopWires.init
+-- Wires（送信専任）
 --========================
 local componentsFolder = uiRoot:WaitForChild("components")
 local ShopWires     = require(componentsFolder:WaitForChild("controllers"):WaitForChild("ShopWires"))
 local ClientSignals = require(componentsFolder:WaitForChild("controllers"):WaitForChild("ClientSignals"))
 
--- ShopOpen/（任意）ShopResult の購読、および Buy/Reroll/Close の送信は ShopWires に集約
 ShopWires.init({
 	Router = Router,
 	Locale = Locale,
 	LocaleUtil = LocaleUtil,
 	Logger = Logger,
-	signals = ClientSignals,
+	signals = ClientSignals, -- Buy/Reroll/Close は Signals → Wires → Remote
 	remotes = {
-		ShopOpen   = ShopOpen,
-		ShopResult = ShopResult,   -- ← nil の可能性あり。ShopWires 側で nil チェックすること
 		BuyItem    = BuyItem,
 		ShopReroll = ShopReroll,
 		ShopDone   = ShopDone,
@@ -201,7 +195,7 @@ ShopWires.init({
 	toast = function(msg, dur)
 		pcall(function()
 			local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
-			local lang = LocaleUtil.norm(gl) or "en"
+			local lang = _normLang(gl)
 			local title = (type(Locale.t)=="function" and Locale.t(lang, "TOAST_TITLE"))
 			              or ((lang=="ja") and "通知" or "Notice")
 			game.StarterGui:SetCore("SendNotification", {
@@ -211,18 +205,17 @@ ShopWires.init({
 			})
 		end)
 	end,
+	-- ※ ShopWires 側の「ShopOpen/ShopResult購読」は無効化しておくこと（送信専任）
 })
-if not ShopResult then
-	LOG.warn("ShopResult remote not found; Wires will operate with ShopOpen only")
-end
-LOG.info("wired: ShopWires.init (ShopOpen/ShopResult by Wires)")
+
+LOG.info("wired: ShopWires.init (send-only)")
 
 --========================================
--- S→C 配線（ShopOpen は撤去済み：Wires に委譲）
+-- S→C 配線（ClientMain が ShopOpen/ShopResult を受信）
 --========================================
 HomeOpen.OnClientEvent:Connect(function(payload)
 	if payload and payload.lang and type(Locale.setGlobal)=="function" then
-		local nl = LocaleUtil.norm(payload.lang) or payload.lang
+		local nl = _normLang(payload.lang)
 		Locale.setGlobal(nl)
 	end
 	Router.show("home", payload)
@@ -231,7 +224,7 @@ end)
 
 RoundReady.OnClientEvent:Connect(function()
 	local gl   = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
-	local lang = LocaleUtil.norm(gl) or "en"
+	local lang = _normLang(gl)
 	Router.show("run")
 	if Router and type(Router.call)=="function" then
 		Router.call("run", "setLang", lang)
@@ -240,9 +233,58 @@ RoundReady.OnClientEvent:Connect(function()
 	LOG.info("RoundReady → run | lang=%s", lang)
 end)
 
+-- ★ ShopOpen：kitoPick 前面時は「背景更新のみ」、それ以外は遷移
+ShopOpen.OnClientEvent:Connect(function(payload)
+	payload = payload or {}
+
+	-- 言語補完：未指定ならグローバル→既定へ、指定ありなら正規化＋グローバル反映
+	if payload.lang == nil then
+		local g = (type(Locale.getGlobal)=="function" and Locale.getGlobal()) or "en"
+		payload.lang = _normLang(g)
+	else
+		local nl = _normLang(payload.lang)
+		payload.lang = nl
+		if type(Locale.setGlobal)=="function" then Locale.setGlobal(nl) end
+	end
+
+	local active = (Router and type(Router.active)=="function") and Router.active() or nil
+	if active == "kitoPick" then
+		local ok, shopInst = pcall(function() return Router.ensure("shop") end)
+		if ok and shopInst then
+			if type(shopInst.setData)=="function" then pcall(function() shopInst:setData(payload) end) end
+			if type(shopInst.update)=="function" then pcall(function() shopInst:update(payload) end) end
+			LOG.info("<ShopOpen> background update (kitoPick active) | lang=%s", tostring(payload.lang))
+		else
+			Router.show("shop", payload)
+			LOG.info("<ShopOpen> routed (fallback) | lang=%s", tostring(payload.lang))
+		end
+	else
+		Router.show("shop", payload)
+		LOG.info("<ShopOpen> routed | lang=%s", tostring(payload.lang))
+	end
+
+	-- ローカルバス（他UIが必要なら購読可能）
+	if ClientSignals and ClientSignals.ShopIncoming and typeof(ClientSignals.ShopIncoming.Fire)=="function" then
+		ClientSignals.ShopIncoming:Fire(payload)
+	end
+end)
+
+-- 任意：ShopResult をローカルバスへ中継（存在する環境のみ）
+if ShopResult and ShopResult.OnClientEvent then
+	ShopResult.OnClientEvent:Connect(function(res)
+		if ClientSignals and ClientSignals.ShopResult and typeof(ClientSignals.ShopResult.Fire)=="function" then
+			ClientSignals.ShopResult:Fire(res)
+		end
+		LOG.info("<ShopResult> relayed to ClientSignals")
+	end)
+else
+	LOG.warn("ShopResult remote not found; proceeding without it")
+end
+
+-- そのほかの Push 群
 StatePush.OnClientEvent:Connect(function(st)
 	if st and st.lang and type(Locale.setGlobal)=="function" then
-		local l = LocaleUtil.norm(st.lang)
+		local l = _normLang(st.lang)
 		if l then Locale.setGlobal(l) end
 	end
 	if Router and type(Router.call)=="function" then

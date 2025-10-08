@@ -1,7 +1,9 @@
--- v0.10.0 Wires single-route: Remotes subscriber & sender
---  - Only this file listens to Remotes (ShopOpen/ShopResult)
---  - View/Renderer never fire remotes; they raise ClientSignals.* only
---  - Also wires View buttons and deck toggle
+-- v0.10.0-A  Wires send-only (A: ClientMain centralizes remote listeners)
+--  - This file NO LONGER listens to Remotes.
+--  - ShopOpen / ShopResult reception is centralized in ClientMain.
+--  - Payloads arrive via ClientSignals.ShopIncoming (fired by ClientMain).
+--  - View/Renderer never call remotes directly; they raise ClientSignals.* only.
+--  - This module sends Buy/Reroll/Close to server and wires view buttons.
 
 local RS      = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -15,17 +17,22 @@ local LOG        = Logger.scope("ShopWires")
 local Locale     = require(Config:WaitForChild("Locale"))
 local LocaleUtil = require(SharedModules:WaitForChild("LocaleUtil"))
 
+-- ClientSignals (Events bus shared across UI)
 local ClientSignals = require(script.Parent:WaitForChild("ClientSignals"))
 
 local M = {}
 
--- deps: Router/toast だけDI（なければ安全スタブ）
+--=====================
+-- DI deps (Router/toast)
+--=====================
 M._deps = {
-	Router = nil,
+	Router = nil,  -- expects ensure/show/call/active
 	toast  = function(_) end,
 }
 
-M._wiredRemotes = false
+--=====================
+-- State
+--=====================
 M._wiredSignals = false
 M._lastPayload  = nil
 M._buyBusy      = false
@@ -35,24 +42,30 @@ M._rerollBusy   = false
 -- helpers
 --=====================
 local function _normLang(lang)
-	local l = (type(Locale.normalize)=="function" and Locale.normalize(lang)) or lang or "en"
-	if tostring(lang or ""):lower()=="jp" and l=="ja" then
-		LOG.warn("[Locale] received legacy 'jp'; normalize to 'ja'")
-	end
-	return l
+	return (type(LocaleUtil.norm)=="function" and LocaleUtil.norm(lang)) or lang or "en"
 end
 
-local function _ensureRouter()
-	local R = M._deps.Router or {}
-	R.ensure = (type(R.ensure)=="function") and R.ensure or function() end
-	R.active = (type(R.active)=="function") and R.active or function() return nil end
-	R.show   = (type(R.show)  =="function") and R.show   or function() end
-	R.call   = (type(R.call)  =="function") and R.call   or function() end
-	return R
+local function _snapFromView()
+	-- Try to peek current ShopView instance payload as a fallback
+	local R = M._deps.Router
+	if not (R and type(R.ensure)=="function") then return nil end
+	local ok, inst = pcall(function() return R.ensure("shop") end)
+	if not ok or type(inst) ~= "table" then return nil end
+	return inst._payload  -- ShopView keeps latest payload here
+end
+
+local function _currentPayload()
+	-- Prefer the latest from ClientSignals.ShopIncoming; fallback to ShopView._payload
+	return M._lastPayload or _snapFromView()
+end
+
+local function _money(payload)
+	local p = payload or _currentPayload() or {}
+	return tonumber((p.mon or p.totalMon) or 0) or 0
 end
 
 local function _snapTalisman(payload)
-	local p = payload or M._lastPayload
+	local p = payload or _currentPayload()
 	return p and p.state and p.state.run and p.state.run.talisman or nil
 end
 
@@ -67,73 +80,36 @@ local function _findFirstEmptySlot(payload)
 	return nil
 end
 
-local function _money(payload)
-	return tonumber((payload and (payload.mon or payload.totalMon)) or 0) or 0
-end
-
---=====================
--- Remotes → Signals / Router
---=====================
-local function _onShopOpen(payload)
-	M._lastPayload = payload or {}
-	if M._lastPayload and M._lastPayload.lang then
-		M._lastPayload.lang = _normLang(M._lastPayload.lang)
-	end
-
-	-- Router制御（kitoPick前面時は裏更新）
-	local R = _ensureRouter()
-	if R.active() == "kitoPick" then
-		local ok, shopInst = pcall(function() return R.ensure("shop") end)
-		if ok and shopInst then
-			if type(shopInst.setData)=="function" then
-				pcall(function() shopInst:setData(M._lastPayload) end)
-			end
-			if type(shopInst.update)=="function" then
-				pcall(function() shopInst:update(M._lastPayload) end)
-			end
-			LOG.info("<ShopOpen> updated in background | lang=%s (kitoPick active)", tostring(M._lastPayload.lang))
-		else
-			R.show("shop", M._lastPayload)
-			LOG.info("<ShopOpen> routed (fallback) | lang=%s", tostring(M._lastPayload.lang))
-		end
-	else
-		R.show("shop", M._lastPayload)
-		LOG.info("<ShopOpen> routed | lang=%s", tostring(M._lastPayload.lang))
-	end
-
-	-- ローカルバス配布（必要なら他UIが聞ける）
-	ClientSignals.ShopIncoming:Fire(M._lastPayload)
-end
-
-local function _onShopResult(res)
-	ClientSignals.ShopResult:Fire(res)
-end
-
 --=====================
 -- Signals → Remotes（送信はここだけ）
 --=====================
 local function _sendBuy(it)
-	if M._buyBusy then return end
-	if not it then return end
-	local mon   = _money(M._lastPayload)
+	if M._buyBusy or not it then return end
+
+	local mon   = _money(nil)
 	local price = tonumber(it.price or 0) or 0
 	if mon < price then
-		M._deps.toast((Locale.t and Locale.t(_normLang(M._lastPayload and M._lastPayload.lang), "SHOP_UI_NOT_ENOUGH_MONEY")) or "お金が足りません")
+		local lang = _normLang((M._lastPayload and M._lastPayload.lang) or "ja")
+		local msg  = (type(Locale.t)=="function" and Locale.t(lang, "SHOP_UI_NOT_ENOUGH_MONEY")) or "お金が足りません"
+		M._deps.toast(msg)
 		return
 	end
+
 	M._buyBusy = true
 
-	-- talisman は自動配置
+	-- talisman は護符スロットに自動配置
 	if tostring(it.category) == "talisman" and it.talismanId then
-		local idx = _findFirstEmptySlot(M._lastPayload)
+		local idx = _findFirstEmptySlot(nil)
 		if not idx then
-			M._deps.toast(Locale.t(_normLang(M._lastPayload and M._lastPayload.lang), "SHOP_UI_NO_EMPTY_SLOT"))
+			local lang = _normLang((M._lastPayload and M._lastPayload.lang) or "ja")
+			local msg  = (type(Locale.t)=="function" and Locale.t(lang, "SHOP_UI_NO_EMPTY_SLOT")) or "空きスロットがありません"
+			M._deps.toast(msg)
 			M._buyBusy = false
 			return
 		end
 		local PlaceOnSlot = Remotes:FindFirstChild("PlaceOnSlot")
 		if PlaceOnSlot and PlaceOnSlot:IsA("RemoteEvent") then
-			PlaceOnSlot:FireServer(idx, it.talismanId)
+			pcall(function() PlaceOnSlot:FireServer(idx, it.talismanId) end)
 		else
 			LOG.warn("[ShopWires] PlaceOnSlot missing; skip")
 		end
@@ -177,26 +153,36 @@ function M.init(opts)
 	M._deps.Router = (opts and opts.Router) or M._deps.Router
 	M._deps.toast  = (opts and opts.toast)  or M._deps.toast
 
-	-- Remotes → Signals
-	if not M._wiredRemotes then
-		local ShopOpen = Remotes:WaitForChild("ShopOpen")
-		ShopOpen.OnClientEvent:Connect(_onShopOpen)
-		local ShopResult = Remotes:FindFirstChild("ShopResult")
-		if ShopResult and ShopResult:IsA("RemoteEvent") then
-			ShopResult.OnClientEvent:Connect(_onShopResult)
-		end
-		M._wiredRemotes = true
-		LOG.info("wired: Remotes (ShopOpen/ShopResult)")
+	if M._wiredSignals then return end
+
+	-- ▼ ClientMain が発火するローカルバス（受信）を購読
+	if ClientSignals and ClientSignals.ShopIncoming and typeof(ClientSignals.ShopIncoming.Connect)=="function" then
+		ClientSignals.ShopIncoming:Connect(function(payload)
+			if type(payload) == "table" then
+				if payload.lang then payload.lang = _normLang(payload.lang) end
+				M._lastPayload = payload
+				LOG.info("ShopIncoming: payload updated (lang=%s)", tostring(payload.lang))
+			end
+		end)
+	else
+		LOG.warn("ClientSignals.ShopIncoming not available; relying on ShopView payload only")
 	end
 
-	-- Signals → Remotes（送信）
-	if not M._wiredSignals then
+	-- ▲（任意）ShopResult は View 側で使う想定。必要ならここで購読してもよいが、受信は ClientMain に集約済み。
+
+	-- Signals → Remotes（送信専任）
+	if ClientSignals and ClientSignals.BuyRequested then
 		ClientSignals.BuyRequested:Connect(_sendBuy)
-		ClientSignals.RerollRequested:Connect(_sendReroll)
-		ClientSignals.CloseRequested:Connect(_sendClose)
-		M._wiredSignals = true
-		LOG.info("wired: ClientSignals (Buy/Reroll/Close)")
 	end
+	if ClientSignals and ClientSignals.RerollRequested then
+		ClientSignals.RerollRequested:Connect(_sendReroll)
+	end
+	if ClientSignals and ClientSignals.CloseRequested then
+		ClientSignals.CloseRequested:Connect(_sendClose)
+	end
+
+	M._wiredSignals = true
+	LOG.info("wired: ClientSignals (send-only: Buy/Reroll/Close) | recv via ShopIncoming")
 end
 
 function M.wireButtons(view)
