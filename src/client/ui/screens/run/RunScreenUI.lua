@@ -22,7 +22,7 @@ local LOG    = Logger.scope("RunScreenUI")
 local Theme  = require(Config:WaitForChild("Theme"))
 local Locale = require(Config:WaitForChild("Locale"))
 
-local lib    = script.Parent.Parent:WaitForChild("lib")
+local lib    = script.Parent.Parent.Parent:WaitForChild("lib")
 local UiUtil = require(lib:WaitForChild("UiUtil"))
 
 local M = {}

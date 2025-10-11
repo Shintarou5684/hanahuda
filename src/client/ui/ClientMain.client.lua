@@ -129,7 +129,8 @@ end
 --========================
 local Screens = {
 	home     = require(ScreensFolder:WaitForChild("HomeScreen")),
-	run      = require(ScreensFolder:WaitForChild("RunScreen")),
+	-- ▼ RunScreen はサブフォルダ run/ に移動
+	run      = require(ScreensFolder:WaitForChild("run"):WaitForChild("RunScreen")),
 	shop     = require(ScreensFolder:WaitForChild("ShopView")),
 	shrine   = require(ScreensFolder:WaitForChild("ShrineScreen")),
 	kitoPick = require(ScreensFolder:WaitForChild("KitoPickView")),
