@@ -1,6 +1,9 @@
 -- ReplicatedStorage/SharedModules/RerollService.lua
--- 場/手のリロールを分離（SSOT：rerollFieldLeft / rerollHandLeft が唯一の真実）
--- 旧フィールド（rerollsLeft / handsLeft）には一切読まない・書かない
+-- v0.10.1 Field-only reroll fix
+--  - 場リロール(ReqRerollAll)は「手札を維持し、場だけ引き直し」に変更
+--  - 手札リロール(ReqRerollHand)は従来どおり手札のみ
+--  - SSOT: s.rerollFieldLeft / s.rerollHandLeft を唯一の真実として扱う
+--  - 旧フィールド（rerollsLeft / handsLeft）には一切触れない
 
 local RS = game:GetService("ReplicatedStorage")
 local CardEngine = require(RS.SharedModules.CardEngine)
@@ -68,22 +71,20 @@ end
 --========================
 -- 実処理
 --========================
-local function doRerollAll(s)
-	-- 盤面（hand/board/dump を山に戻し）から手札5/場8を再配り
-	local newDeck = rebuildDeckWith({ deck = s.deck, hand = s.hand, board = s.board, dump = s.dump })
-	s.hand, s.board, s.dump = {}, {}, {}
+-- ★ 場のみリロール（手札はそのまま）
+local function doRerollField(s)
+	-- 場(board)だけを山に戻して引き直す（dump は触らない）
+	local newDeck = rebuildDeckWith({ deck = s.deck, board = s.board })
+	s.board = {}
 	shuffleDeck(newDeck)
-	for i = 1, 5 do
-		if #newDeck > 0 then table.insert(s.hand,  table.remove(newDeck)) end
-	end
 	for i = 1, 8 do
 		if #newDeck > 0 then table.insert(s.board, table.remove(newDeck)) end
 	end
 	s.deck = newDeck
 end
 
+-- 手札のみリロール（場はそのまま）
 local function doRerollHand(s)
-	-- 手札のみを山に戻して引き直す（場はそのまま）
 	local newDeck = rebuildDeckWith({ deck = s.deck, hand = s.hand })
 	s.hand = {}
 	shuffleDeck(newDeck)
@@ -97,12 +98,12 @@ end
 -- バインド
 --========================
 function Reroll.bind(Remotes, sweepFourOnBoardFn) -- sweep は PickService の同等処理を使うなら渡さなくてもOK
-	-- 場（全体）リロール
+	-- 場リロール（互換のため Remote 名は ReqRerollAll のまま使用）
 	Remotes.ReqRerollAll.OnServerEvent:Connect(function(plr)
 		local s = StateHub.get(plr); if not s or s.phase ~= "play" then return end
 		ensureRerollCounters(s)
 		if not decAndSync(s, "rerollFieldLeft") then return end
-		doRerollAll(s)
+		doRerollField(s)
 		if sweepFourOnBoardFn then sweepFourOnBoardFn(s) end
 		StateHub.set(plr, s); StateHub.pushState(plr)
 	end)

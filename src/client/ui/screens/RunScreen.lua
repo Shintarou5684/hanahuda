@@ -1,10 +1,8 @@
 -- StarterPlayerScripts/UI/screens/RunScreen.lua
--- v0.9.7-P2-12R4 (Responsive pass / single-line buttons + modal ZIndex fix)
---  - buttons が table/Instance どちらでも安全に処理
---  - すべての TextButton を TextScaled + 1行固定（折り返し防止）
---  - GiveUp モーダルは本文(TextLabel)のみ複数行維持、ボタンは1行固定
---  - [FIX-Z] GiveUpConfirm の子要素に明示的な ZIndex を付与（ZIndexBehavior=Global での潜り込み対策）
---  - ほかの挙動は現状維持
+-- v0.9.7-P2-12R5 (Confirm 未達=GiveUp 連携 / Responsive pass 維持)
+--  - Confirmボタン：目標未達なら GiveUp と同じ確認モーダル→abandon を送る
+--  - 状態保持を追加（_state / _scoreTotal）し、onState/onScore で更新
+--  - その他の挙動・UIは現状維持
 
 local Run = {}
 Run.__index = Run
@@ -170,6 +168,10 @@ function Run.new(deps)
 	self._langConn = nil
 	self._hlInit = false
 	self._respConn = nil -- ★ 追加：リサイズ監視
+
+	-- ★ 追加：Confirm 判定用に保持
+	self._state = nil
+	self._scoreTotal = 0
 
 	-- 言語初期値
 	local initialLang = safeGetGlobalLang()
@@ -340,6 +342,10 @@ function Run.new(deps)
 		local mon = tonumber(detail.mon) or 0
 		local pts = tonumber(detail.pts) or 0
 		local tot = tonumber(total) or 0
+
+		-- ★ 追加：Confirm 判定用に保持
+		self._scoreTotal = tot
+
 		if self._scoreBox then
 			local rolesBody  = Format.rolesToLines(roles, self._lang)
 			local rolesLabel = (self._lang == "en") and "Roles: " or "役："
@@ -419,6 +425,9 @@ function Run.new(deps)
 	--========================
 	local function onState(st)
 		self.info.Text = simpleInfoText(st, self._lang) or ""
+
+		-- ★ 追加：Confirm 判定用に保持
+		self._state = st
 
 		if self.goalText then
 			local g = (typeof(st) == "table") and tonumber(st.goal) or nil
@@ -666,8 +675,36 @@ function Run.new(deps)
 	end
 	if self.buttons and self.buttons.confirm then
 		self.buttons.confirm.MouseButton1Click:Connect(function()
-			if self.deps and self.deps.Confirm then
-				self.deps.Confirm:FireServer()
+			-- ★ 変更：目標未達なら GiveUp と同じ確認フローへ
+			local goal = 0
+			local st = self._state
+			if typeof(st) == "table" then
+				goal = tonumber(st.goal or st.target or 0) or 0
+			end
+			local total = tonumber(self._scoreTotal or 0) or 0
+
+			if total >= goal then
+				-- 達成：従来通り Confirm → サーバに確定
+				if self.deps and self.deps.Confirm then
+					self.deps.Confirm:FireServer()
+				end
+			else
+				-- 未達：GiveUpと同じ確認モーダル→abandon
+				self:_showGiveUpConfirm(function()
+					LOG.info("confirm:below goal -> treat as giveup (abandon)")
+					local DecideNext = self.deps and self.deps.DecideNext
+					if DecideNext then
+						DecideNext:FireServer("abandon")
+					else
+						local rem = RS:FindFirstChild("Remotes")
+						local ev  = rem and rem:FindFirstChild("DecideNext")
+						if ev and ev:IsA("RemoteEvent") then
+							ev:FireServer("abandon")
+						else
+							LOG.warn("confirm->giveup: no DecideNext remote found")
+						end
+					end
+				end)
 			end
 		end)
 	end
