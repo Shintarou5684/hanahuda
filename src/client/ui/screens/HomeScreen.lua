@@ -1,10 +1,7 @@
 -- StarterPlayerScripts/UI/screens/HomeScreen.lua
--- v0.9.5-P0-6/10 (landscape only, 1-column menu, relative widths)
---  - 横画面専用（縦想定は撤去）
---  - メニューは常に中央1列 / 幅は相対 + Max 640px（広画面で横に伸びすぎない）
---  - タイトル群を上段に凝縮（JP大/EN小）・余白最適化
---  - BETAバッジは常に1行表示（折返し禁止）
---  - 言語切替（EN/JA）/「同期中…」/START有効化の既存ロジックは維持
+-- v0.9.5-P0-6/12 (status row removed)
+--  - タイトル下のステータス行（Year / Cash / Clears）を完全に非表示
+--  - 他の挙動は現状維持（横画面/中央1列/言語切替/同期表示など）
 
 local Home = {}
 Home.__index = Home
@@ -23,7 +20,7 @@ local MENU_MAX_W = 640
 -- スマホ〜小型画面での最低幅(px)
 local MENU_MIN_W = 280
 -- 相対ベースの標準幅（画面幅に対する割合）
-local MENU_W_SCALE = 0.36  -- 以前より細身に（0.46 → 0.36 目安）
+local MENU_W_SCALE = 0.36
 
 -- BETA/言語チップの右端安全余白（px）
 local RIGHT_SAFE_PAD = 20
@@ -64,14 +61,6 @@ local function notify(title: string, text: string, duration: number?)
 			Duration = duration or 2,
 		})
 	end)
-end
-
-local function syncingLabel(lang: string, dict)
-	if lang == "ja" then
-		return Dget(dict, "BTN_SYNCING", "同期中…")
-	else
-		return Dget(dict, "BTN_SYNCING", "Syncing…")
-	end
 end
 
 --========================
@@ -155,8 +144,8 @@ function Home.new(deps)
 	titleGroup.Parent                 = ui
 
 	local tLayout = Instance.new("UIListLayout")
-	tLayout.FillDirection     = Enum.FillDirection.Vertical
-	tLayout.Padding           = UDim.new(0, 6) -- 近めに
+	tLayout.FillDirection       = Enum.FillDirection.Vertical
+	tLayout.Padding             = UDim.new(0, 6)
 	tLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	tLayout.VerticalAlignment   = Enum.VerticalAlignment.Top
 	tLayout.SortOrder           = Enum.SortOrder.LayoutOrder
@@ -186,9 +175,10 @@ function Home.new(deps)
 	self.titleEN.ZIndex                 = 2
 	self.titleEN.Parent                 = titleGroup
 
+	-- ▼ ステータス行は互換のため生成のみ。高さ0・不可視・空文字で完全に非表示
 	self.statusLabel = Instance.new("TextLabel")
 	self.statusLabel.Name                   = "Status"
-	self.statusLabel.Size                   = UDim2.new(1,0,0,26)
+	self.statusLabel.Size                   = UDim2.new(1,0,0,0) -- 高さ0
 	self.statusLabel.BackgroundTransparency = 1
 	self.statusLabel.Font                   = Enum.Font.Gotham
 	self.statusLabel.TextSize               = 20
@@ -197,20 +187,21 @@ function Home.new(deps)
 	self.statusLabel.TextStrokeTransparency = 0.6
 	self.statusLabel.TextXAlignment         = Enum.TextXAlignment.Center
 	self.statusLabel.ZIndex                 = 2
+	self.statusLabel.Visible                = false
+	self.statusLabel.Text                   = ""
 	self.statusLabel.Parent                 = titleGroup
 
 	--================ メニュー（中央1列） =================
 	local menu = Instance.new("Frame")
 	menu.Name                   = "Menu"
 	menu.AnchorPoint            = Vector2.new(0.5, 0)
-	menu.Position               = UDim2.fromScale(0.5, 0.32) -- タイトルと被らない位置
-	menu.Size                   = UDim2.new(MENU_W_SCALE, 0, 0, 10) -- 幅=相対、縦は自動
+	menu.Position               = UDim2.fromScale(0.5, 0.32)
+	menu.Size                   = UDim2.new(MENU_W_SCALE, 0, 0, 10)
 	menu.AutomaticSize          = Enum.AutomaticSize.Y
 	menu.BackgroundTransparency = 1
 	menu.ZIndex                 = 2
 	menu.Parent                 = ui
 
-	-- 幅の上限/下限で横に伸びすぎない・細すぎない
 	local menuSizeLimit = Instance.new("UISizeConstraint")
 	menuSizeLimit.MaxSize = Vector2.new(MENU_MAX_W, math.huge)
 	menuSizeLimit.MinSize = Vector2.new(MENU_MIN_W, 0)
@@ -225,8 +216,7 @@ function Home.new(deps)
 
 	local function makeBtn(text: string)
 		local b = Instance.new("TextButton")
-		-- 高さは相対 + 上限/下限で制御（端末差吸収）
-		b.Size                   = UDim2.new(1, 0, 0.085, 0) -- 親(menu)に対して相対高さ
+		b.Size                   = UDim2.new(1, 0, 0.085, 0)
 		local bh = Instance.new("UISizeConstraint")
 		bh.MinSize = Vector2.new(0, 44)
 		bh.MaxSize = Vector2.new(10000, 64)
@@ -240,7 +230,6 @@ function Home.new(deps)
 		b.TextColor3             = Color3.fromRGB(235,235,235)
 		b.Font                   = Enum.Font.GothamMedium
 		b.TextScaled             = true
-		-- 文字が大きすぎないように上限
 		local ts = Instance.new("UITextSizeConstraint"); ts.MaxTextSize = 24; ts.Parent = b
 		b.ZIndex                 = 2
 		b.Parent                 = menu
@@ -257,7 +246,7 @@ function Home.new(deps)
 	self.btnSettings  = makeBtn("")
 	self.btnPatch     = makeBtn("")
 
-	--================ BETA バッジ（右下・1行固定） =================
+	--================ BETA バッジ（右下） =================
 	local beta = Instance.new("TextLabel")
 	beta.Name                   = "BetaBadge"
 	beta.AnchorPoint            = Vector2.new(1,1)
@@ -269,7 +258,7 @@ function Home.new(deps)
 	beta.TextColor3             = Color3.fromRGB(255,255,255)
 	beta.ZIndex                 = 3
 	beta.RichText               = false
-	beta.TextWrapped            = false -- ← 折返し禁止で二列化防止
+	beta.TextWrapped            = false
 	beta.LineHeight             = 1.0
 	beta.AutomaticSize          = Enum.AutomaticSize.XY
 	beta.Parent                 = ui
@@ -282,7 +271,7 @@ function Home.new(deps)
 	betaPad.Parent        = beta
 	self.betaLabel = beta
 
-	--================ 言語スイッチ（右上・1行固定） =================
+	--================ 言語スイッチ（右上） =================
 	local langBox = Instance.new("Frame")
 	langBox.Name                   = "LangBox"
 	langBox.AnchorPoint            = Vector2.new(1,0)
@@ -387,7 +376,8 @@ function Home:_refreshStartButton()
 		end
 		setInteractable(self.btnStart, true)
 	else
-		self.btnStart.Text = syncingLabel(self.lang, self.Dict)
+		self.btnStart.Text = (self.lang == "ja") and Dget(self.Dict, "BTN_SYNCING", "同期中…")
+			or Dget(self.Dict, "BTN_SYNCING", "Syncing…")
 		setInteractable(self.btnStart, false)
 	end
 end
@@ -425,8 +415,11 @@ function Home:applyLocaleTexts()
 	local L = self._L
 	if self.titleJP     then self.titleJP.Text     = L("MAIN_TITLE") end
 	if self.titleEN     then self.titleEN.Text     = L("SUBTITLE") end
+	-- ▼ ステータスは出さない
 	if self.statusLabel then
-		self.statusLabel.Text = string.format(L("STATUS_FMT"), L("UNSET_YEAR"), 0, 0)
+		self.statusLabel.Text    = ""
+		self.statusLabel.Visible = false
+		self.statusLabel.Size    = UDim2.new(1,0,0,0)
 	end
 	if self.btnShrine    then self.btnShrine.Text    = L("BTN_SHRINE")   end
 	if self.btnItems     then self.btnItems.Text     = L("BTN_ITEMS")    end
@@ -445,14 +438,12 @@ function Home:show(payload)
 	end
 
 	self.hasSave = (payload and payload.hasSave == true) or false
-	local bank    = (payload and tonumber(payload.bank))   or 0
-	local year    = (payload and tonumber(payload.year))   or 0
-	local clears  = (payload and tonumber(payload.clears)) or 0
 
-	local L = self._L
-	local yearTxt = (year > 0) and tostring(year) or L("UNSET_YEAR")
+	-- ▼ ステータスは出さない
 	if self.statusLabel then
-		self.statusLabel.Text = string.format(L("STATUS_FMT"), yearTxt, bank, clears)
+		self.statusLabel.Text    = ""
+		self.statusLabel.Visible = false
+		self.statusLabel.Size    = UDim2.new(1,0,0,0)
 	end
 
 	self.chipEN.BackgroundTransparency = (self.lang == "en") and 0 or 0.1

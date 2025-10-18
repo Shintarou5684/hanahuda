@@ -23,10 +23,10 @@ K.ROLE_MON = {
 
 -- 1枚あたりの点（pts）
 K.CARD_PTS = {
-	bright = 5,
-	seed   = 2,
-	ribbon = 2,
-	chaff  = 1,
+	bright = 3,
+	seed   = 1,
+	ribbon = 1,
+	chaff  = 0.5,
 }
 
 -- 祭事（festivalId → { mon_per_lv, pts_per_lv }）

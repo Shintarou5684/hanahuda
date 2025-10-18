@@ -1,5 +1,7 @@
 -- StarterPlayerScripts/UI/screens/RunScreenUI.lua
 -- UIビルダーは親付けしない契約（親付けは ScreenRouter の責務）
+-- v0.9.7-P1-8:
+--   - Robloxメニューとの被り回避のため、左列の最上部に「1ブロック(=44px)」の余白を追加（TopSpacer）
 -- v0.9.7-P1-7:
 --   - リロールボタン文言を固定化
 --       ja: 「場札入替」 / 「手札入替」
@@ -236,8 +238,7 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 	local TUTORIAL_H = R.TUTORIAL_H
 	local HAND_H     = R.HAND_H
 	local ROW_GAP    = 0.035
-	local COL_GAP    = R.COL_GAP
-
+	local COL_GAP    = R.COl_GAP or R.COL_GAP -- small guard
 	local ROOM_BG_IMAGE  = IMAGES.ROOM_BG
 	local FIELD_BG_IMAGE = IMAGES.FIELD_BG
 	local TAKEN_BG_IMAGE = IMAGES.TAKEN_BG
@@ -325,6 +326,15 @@ function M.build(_parentGuiIgnored: Instance?, opts)
 
 	-- Left：情報パネル
 	makeList(left, Enum.FillDirection.Vertical, 8, Enum.HorizontalAlignment.Left, Enum.VerticalAlignment.Top)
+
+	-- ★ Robloxメニューとの重なり回避のための上部スペーサー（ボタン1個分=44px）
+	local topSpacer = Instance.new("Frame")
+	topSpacer.Name = "TopSpacer"
+	topSpacer.Parent = left
+	topSpacer.Size = UDim2.new(1, 0, 0, 44)
+	topSpacer.BackgroundTransparency = 1
+	topSpacer.LayoutOrder = 0
+	topSpacer.ZIndex = 1
 
 	local infoPanel = makePanel(left, "InfoPanel", Vector2.new(1, 0.14), 1, COLOR_PANEL_BG, COLOR_PANEL_STROKE)
 	local info = UiUtil.makeLabel(infoPanel, "Info", "--", UDim2.new(1,-12,1,-12), UDim2.new(0,6,0,6), nil, COLOR_TEXT)
