@@ -35,6 +35,34 @@ end
 -- ▲▲ ステージ（12か月一直線）設定 ここまで ▲▲
 ----------------------------------------------------------------
 
+
+----------------------------------------------------------------
+-- ▼ ショップ文・新報酬ロジック用ノブ
+--   「基本報酬 + ⌊(ステージ中の値)/分母⌋ + 残リロール加算 + 追加ボーナス」
+--   * 分母はお守り/カード効果で小さくできる（下限でクランプ）
+----------------------------------------------------------------
+Balance.SHOP_RYO_BASE           = 5   -- 基本報酬：常に +5 文
+Balance.SHOP_RYO_DIVISOR_BASE   = 20  -- ステージ加算の分母の基準値（例：⌊stageValue / 20⌋）
+Balance.SHOP_RYO_DIVISOR_MIN    = 5   -- 分母の下限（効果で下げても最低 5）
+Balance.SHOP_RYO_REROLL_BOARD   = 1   -- 残り「場リロール」1回あたり +1 文
+Balance.SHOP_RYO_REROLL_HAND    = 1   -- 残り「手札リロール」1回あたり +1 文
+
+-- 分母の決定ロジック（お守りやカード効果で DOWN 可能、ただし下限まで）
+-- state.effects.ryoDivisorDown を「分母を何だけ下げるか」の加算値として想定
+function Balance.getShopRyoDivisor(state)
+	local d = tonumber(Balance.SHOP_RYO_DIVISOR_BASE) or 20
+	local down = 0
+	if state and state.effects and tonumber(state.effects.ryoDivisorDown) then
+		down = tonumber(state.effects.ryoDivisorDown)
+	end
+	d = d - down
+	local minD = tonumber(Balance.SHOP_RYO_DIVISOR_MIN) or 5
+	if d < minD then d = minD end
+	return d
+end
+----------------------------------------------------------------
+
+
 ----------------------------------------------------------------
 -- ▼ リロール回数（Run：場/手の分離）
 --   「場のリロール（全体リロール）」と「手札のリロール」の初期回数。
@@ -46,6 +74,7 @@ Balance.REROLL_HAND_INIT  = 3  -- 手札（Hand）のリロール初期回数（
 -- ※将来、文コストや上限強化を導入する場合は、ここに REROLL_*_COST や
 --   REROLL_*_MAX などのノブを追加してサーバ側ロジックで参照してください。
 ----------------------------------------------------------------
+
 
 ----------------------------------------------------------------
 -- ▼ 将来用ノブ（いまは挙動を変えない“空の変数”）
@@ -71,6 +100,7 @@ Balance.ACHIEVE_REROLL_BONUS = Balance.ACHIEVE_REROLL_BONUS or {
 	-- ["ach_koikoi_master"]  = { field = 0, hand = 1 },
 }
 ----------------------------------------------------------------
+
 
 -- ▼ プールの基本設定
 Balance.KITO_POOL_SIZE      = 12  -- サンプル提示枚数（UIなし時も内部で使用）

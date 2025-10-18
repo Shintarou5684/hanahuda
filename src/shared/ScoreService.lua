@@ -1,6 +1,8 @@
 -- ReplicatedStorage/SharedModules/ScoreService.lua
 -- Confirm（勝負）時の獲得計算と、到達時の遷移制御（12か月一直線版）
--- 1–8月 達成→屋台 / 9–11月 達成→2択（こいこい/ホーム） / 12月 達成→ワンボタンfinal
+-- 1–8月：リザルト表示（内訳明示）→OK→屋台
+-- 9–11月：2択（こいこい/ホーム）
+-- 12月   ：ワンボタンfinal
 -- 未達はゲームオーバー（ランリセット）
 
 local RS         = game:GetService("ReplicatedStorage")
@@ -17,7 +19,7 @@ end
 local Scoring  = reqShared("Scoring")
 local StateHub = reqShared("StateHub")
 
--- Balance（次月ゴールの表示用）
+-- Balance（次月ゴールの表示用 / ショップ文ノブ参照）
 local Balance do
 	local ok, mod = pcall(function()
 		return require(RS:WaitForChild("Config"):WaitForChild("Balance"))
@@ -64,13 +66,48 @@ local openShopFn = nil
 -- RoundService 参照（deps から注入。無ければフォールバック require）
 local RoundRef = nil
 
--- 文（mon）リワード計算（従来ロジック維持）
-local function calcMonReward(sum, target, season)
-	-- 目標値は現在使用しないが将来の調整余地として残す
-	local _ = target
-	local factor = 0.20 + ((season or 1) - 1) * 0.05
-	return math.max(1, math.floor((sum or 0) * factor))
+--========================================================================
+-- ★ 新：ショップ文リワード計算（内訳＋合計を返す）
+--   仕様：基本報酬 + ceil(Mon/分母) + 残リロール加算（場/手） + 追加ボーナス
+--   * Mon は「今月の役Mon」（例: 10Mon×7Pts の 10）を使用
+--   * 分母は Balance.getShopRyoDivisor(state)（下限クランプあり）
+--   * 追加ボーナスは state.effects.shopRyoBonus を想定（無ければ0）
+--========================================================================
+local function calcShopRyoReward(state, stageMon)
+	-- ステージの Mon（例: 10Mon）を因数として使用
+	local mon = math.max(0, tonumber(stageMon or 0))
+
+	local base    = (Balance and Balance.SHOP_RYO_BASE) or 5
+	local divisor = (Balance and Balance.getShopRyoDivisor and Balance.getShopRyoDivisor(state))
+	               or (Balance and Balance.SHOP_RYO_DIVISOR_BASE) or 20
+
+	-- 0 のときだけ 0、それ以外は切り上げで 1 以上
+	local addFromStage = (mon <= 0) and 0 or math.ceil(mon / divisor)
+
+	local rerBoard = math.max(0, tonumber(state.rerollFieldLeft or state.rerollBoardLeft or 0))
+	local rerHand  = math.max(0, tonumber(state.rerollHandLeft  or 0))
+	local addRerB  = rerBoard * ((Balance and Balance.SHOP_RYO_REROLL_BOARD) or 1)
+	local addRerH  = rerHand  * ((Balance and Balance.SHOP_RYO_REROLL_HAND)  or 1)
+
+	local addBonus = 0
+	if state and state.effects and tonumber(state.effects.shopRyoBonus) then
+		addBonus = tonumber(state.effects.shopRyoBonus)
+	end
+
+	local total = base + addFromStage + addRerB + addRerH + addBonus
+	if total < 0 then total = 0 end
+
+	return {
+		-- 表表示用の素材
+		base          = base,      baseMult = 1,     baseEarn = base,
+		stageMon      = mon,       divisor  = divisor, addFromStage = addFromStage,
+		rerollBoard   = rerBoard,  addRerB  = addRerB,
+		rerollHand    = rerHand,   addRerH  = addRerH,
+		addBonus      = addBonus,
+		total         = total,
+	}
 end
+--========================================================================
 
 function Score.bind(Remotes, deps)
 	openShopFn = nil
@@ -99,7 +136,7 @@ function Score.bind(Remotes, deps)
 		-- 採点
 		local takenCards = s.taken or {}
 		local total, roles, detail = Scoring.evaluate(takenCards, s)
-		local roleMon = (detail and detail.mon) or 0
+		local roleMon = (detail and detail.mon) or 0   -- ← 例: 10Mon×7Pts の 10
 
 		-- 役チェイン（役が1つでもあれば伸ばす）
 		local roleCount = 0
@@ -142,16 +179,53 @@ function Score.bind(Remotes, deps)
 		-- 達成時分岐（1–12月）
 		--========================
 
-		-- 1) 1〜8月：屋台へ（文を付与）
+		-- 1) 1〜8月：リザルト表示（内訳明示）→ OK で屋台へ
 		if curMonth < 9 then
-			s.phase = "shop"
-			local rewardMon = calcMonReward(s.seasonSum or 0, tgt, season)
-			s.mon = (s.mon or 0) + rewardMon
-			if openShopFn then
-				openShopFn(plr, s, { reward = rewardMon, notice = "達成！", target = tgt })
-			else
-				StateHub.pushState(plr)
+			s.phase = "result"
+
+			-- 新式で内訳＋合計を計算（Mon=roleMon を使用）
+			local rw = calcShopRyoReward(s, roleMon)
+
+			-- 文を確定反映（OK後にショップへ行っても数字は変わらない）
+			s.mon = (s.mon or 0) + rw.total
+
+			-- 表示/次遷移用に保存
+			s.lastShopReward = rw
+			s.lastScore = { total = total or 0, roles = roles, detail = detail }
+
+			StateHub.pushState(plr)
+
+			if Remotes.StageResult then
+				local nextM   = math.min(12, curMonth + 1)
+				local nextG   = (Balance and Balance.getGoalForMonth) and Balance.getGoalForMonth(nextM) or nil
+				local payload = {
+					kind        = "shop",             -- ★UI：屋台前リザルト
+					titleText   = ("月%d クリア！"):format(curMonth),
+					descText    = "獲得文の内訳を確認してください",
+					buttonText  = "屋台へ",
+					rewardMon   = rw.total,           -- 合計文
+					breakdown   = {                   -- 表示用：そのまま描画
+						base         = rw.base,
+						baseMult     = rw.baseMult,
+						baseEarn     = rw.baseEarn,
+						stageMon     = rw.stageMon,
+						divisor      = rw.divisor,
+						addFromStage = rw.addFromStage,
+						rerollBoard  = rw.rerollBoard,
+						addRerB      = rw.addRerB,
+						rerollHand   = rw.rerollHand,
+						addRerH      = rw.addRerH,
+						addBonus     = rw.addBonus,
+					},
+					nextMonth   = nextM,
+					nextGoal    = nextG,
+					lang        = s.lang,
+				}
+				-- 互換のため true,payload で送る（旧ハンドラも安全）
+				Remotes.StageResult:FireClient(plr, true, payload)
 			end
+
+			-- 以降の遷移は C→S: Remotes.DecideNext("shop")（NavServer / Round 側で屋台オープン）
 			return
 		end
 
@@ -180,7 +254,6 @@ function Score.bind(Remotes, deps)
 					message     = ("クリアおめでとう！ +%d両"):format(rewardBank),
 					lang        = s.lang,
 				}
-				-- 互換のため true,payload で送る（旧ハンドラも安全）
 				Remotes.StageResult:FireClient(plr, true, payload)
 			end
 			return
@@ -218,7 +291,7 @@ function Score.bind(Remotes, deps)
 				}
 				Remotes.StageResult:FireClient(plr, true, payload)
 			end
-			-- 以降の遷移は C→S: Remotes.DecideNext("home"|"koikoi")（NavServer が唯一線）
+			-- 以降の遷移は C→S: Remotes.DecideNext("home"|"koikoi")
 			return
 		end
 	end)

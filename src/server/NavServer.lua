@@ -4,6 +4,7 @@
 --  - 月12の result 中は、どの操作（koikoi/home/その他）でも HOME 一択に強制
 --  - サーバ側で StageResult を明示クローズし、HomeOpen を即発火
 --  - 12月クリア時の +2 両はスコア側で加算済みのため、ここでは追加しない（重複防止）
+--  - ★ "shop" 分岐を追加（1〜8月 用：内訳OK→屋台）
 
 local RS  = game:GetService("ReplicatedStorage")
 
@@ -200,6 +201,36 @@ function NavServer:handle(plr: Player, op: string)
 		else
 			if StateHub and StateHub.pushState then StateHub.pushState(plr) end
 			LOG.info("→ SHOP(push only) | user=%s month=%s", plr.Name, tostring(s.run and s.run.month))
+		end
+		return
+
+	-- =========================
+	-- ★ 追加：1〜8月 用の内訳OK→屋台
+	-- =========================
+	elseif op0 == "shop" then
+		LOG.info("handle: SHOP | user=%s month=%s phase=%s", tostring(plr and plr.Name or "?"), tostring(s.run and s.run.month), tostring(s.phase))
+
+		-- クライアントの結果モーダルを閉じる
+		pcall(function()
+			Remotes.StageResult:FireClient(plr, { close = true })
+		end)
+
+		-- 屋台を開く。ScoreService 側で s.lastShopReward.total を積んでいる想定。
+		s.phase = "shop"
+		local opts = {
+			reason = "after_clear_month_shop",
+		}
+		if s.lastShopReward and tonumber(s.lastShopReward.total) then
+			opts.reward = tonumber(s.lastShopReward.total)
+			opts.notice = "達成！"
+		end
+
+		if ShopService and typeof(ShopService.open) == "function" then
+			ShopService.open(plr, s, opts)
+			LOG.info("→ SHOP(open) | user=%s reward=%s", plr.Name, tostring(opts.reward or "n/a"))
+		else
+			if StateHub and StateHub.pushState then StateHub.pushState(plr) end
+			LOG.info("→ SHOP(push only) | user=%s", plr.Name)
 		end
 		return
 	end
